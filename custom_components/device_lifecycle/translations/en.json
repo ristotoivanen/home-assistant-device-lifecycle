@@ -1,0 +1,79 @@
+{
+  "title": "Device Lifecycle",
+  "config": {
+    "abort": {
+      "already_configured": "Device Lifecycle is already configured. Add new purchases from the existing integration."
+    }
+  },
+  "config_subentries": {
+    "purchase": {
+      "title": "Purchase",
+      "step": {
+        "user": {
+          "title": "Add purchase",
+          "description": "Select all physical devices belonging to the same purchase and enter the shared data only once.",
+          "data": {
+            "device_ids": "Devices in purchase",
+            "purchase_name": "Purchase name",
+            "purchase_date": "Purchase date",
+            "installed_date": "Installed date",
+            "warranty_type": "Warranty",
+            "warranty_until": "Manual warranty end date",
+            "seller": "Seller",
+            "purchase_price": "Total purchase price",
+            "receipt_reference": "Receipt or order reference",
+            "notes": "Notes"
+          },
+          "data_description": {
+            "device_ids": "Select one or more physical Home Assistant devices. A device can belong to only one purchase.",
+            "purchase_name": "For example Hue starter kit 8/2026.",
+            "warranty_type": "1 and 2 year warranties are calculated automatically from the purchase date. Use Manual only for another end date.",
+            "warranty_until": "Used only when Warranty = Manual.",
+            "purchase_price": "Total purchase price, not per-device price."
+          }
+        },
+        "reconfigure": {
+          "title": "Edit purchase",
+          "description": "Edit purchase data or the devices included in it. A removed device loses only this purchase's Lifecycle sensor.",
+          "data": {
+            "device_ids": "Devices in purchase",
+            "purchase_name": "Purchase name",
+            "purchase_date": "Purchase date",
+            "installed_date": "Installed date",
+            "warranty_type": "Warranty",
+            "warranty_until": "Manual warranty end date",
+            "seller": "Seller",
+            "purchase_price": "Total purchase price",
+            "receipt_reference": "Receipt or order reference",
+            "notes": "Notes"
+          },
+          "data_description": {
+            "device_ids": "Add or remove physical devices belonging to this purchase.",
+            "warranty_type": "1 and 2 year warranties are calculated automatically from the purchase date. Manual uses the date below.",
+            "warranty_until": "Used only when Warranty = Manual.",
+            "purchase_price": "Total purchase price, not per-device price."
+          }
+        }
+      },
+      "error": {
+        "no_devices": "Select at least one device.",
+        "device_missing": "One of the selected devices no longer exists in Home Assistant.",
+        "already_tracked": "One or more selected devices already belongs to another lifecycle purchase.",
+        "purchase_date_required_for_warranty": "A 1 or 2 year warranty requires a purchase date.",
+        "manual_warranty_date_required": "Enter a manual warranty end date.",
+        "invalid_purchase_date": "The purchase date could not be parsed.",
+        "invalid_warranty_type": "The warranty type is invalid."
+      }
+    }
+  },
+  "selector": {
+    "warranty_type": {
+      "options": {
+        "none": "Not specified",
+        "1_year": "1 year",
+        "2_years": "2 years",
+        "manual": "Manual"
+      }
+    }
+  }
+}

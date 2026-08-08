@@ -1,0 +1,79 @@
+{
+  "title": "Laitteen elinkaari",
+  "config": {
+    "abort": {
+      "already_configured": "Laitteen elinkaari on jo lisätty. Lisää uudet ostokset olemassa olevan integraation sisältä."
+    }
+  },
+  "config_subentries": {
+    "purchase": {
+      "title": "Ostos",
+      "step": {
+        "user": {
+          "title": "Lisää ostos",
+          "description": "Valitse kaikki samaan ostokseen kuuluvat fyysiset laitteet ja syötä yhteiset tiedot vain kerran.",
+          "data": {
+            "device_ids": "Ostokseen kuuluvat laitteet",
+            "purchase_name": "Ostoksen nimi",
+            "purchase_date": "Ostopäivä",
+            "installed_date": "Käyttöönottopäivä",
+            "warranty_type": "Takuu",
+            "warranty_until": "Manuaalinen takuun päättymispäivä",
+            "seller": "Myyjä",
+            "purchase_price": "Ostoksen kokonaishinta",
+            "receipt_reference": "Kuitti- tai tilausviite",
+            "notes": "Huomautukset"
+          },
+          "data_description": {
+            "device_ids": "Valitse yksi tai useampi fyysinen Home Assistant -laite. Sama laite voi kuulua vain yhteen ostokseen.",
+            "purchase_name": "Esimerkiksi Hue-aloituspakkaus 8/2026.",
+            "warranty_type": "1 v ja 2 v lasketaan automaattisesti ostopäivästä. Valitse Manuaalinen vain, jos haluat antaa muun päättymispäivän.",
+            "warranty_until": "Käytetään vain, kun Takuu = Manuaalinen. Muissa vaihtoehdoissa integraatio laskee päivämäärän automaattisesti.",
+            "purchase_price": "Koko ostoksen hinta, ei yhden laitteen kappalehinta."
+          }
+        },
+        "reconfigure": {
+          "title": "Muokkaa ostosta",
+          "description": "Muokkaa ostoksen tietoja tai siihen kuuluvia laitteita. Poistettu laite menettää vain tämän ostoksen Elinkaari-sensorin.",
+          "data": {
+            "device_ids": "Ostokseen kuuluvat laitteet",
+            "purchase_name": "Ostoksen nimi",
+            "purchase_date": "Ostopäivä",
+            "installed_date": "Käyttöönottopäivä",
+            "warranty_type": "Takuu",
+            "warranty_until": "Manuaalinen takuun päättymispäivä",
+            "seller": "Myyjä",
+            "purchase_price": "Ostoksen kokonaishinta",
+            "receipt_reference": "Kuitti- tai tilausviite",
+            "notes": "Huomautukset"
+          },
+          "data_description": {
+            "device_ids": "Voit lisätä tai poistaa tähän ostokseen kuuluvia fyysisiä laitteita.",
+            "warranty_type": "1 v ja 2 v lasketaan automaattisesti ostopäivästä. Manuaalinen käyttää alla olevaa päivämäärää.",
+            "warranty_until": "Käytetään vain, kun Takuu = Manuaalinen.",
+            "purchase_price": "Koko ostoksen hinta, ei yhden laitteen kappalehinta."
+          }
+        }
+      },
+      "error": {
+        "no_devices": "Valitse vähintään yksi laite.",
+        "device_missing": "Yhtä valituista laitteista ei enää löydy Home Assistantista.",
+        "already_tracked": "Yksi tai useampi valituista laitteista kuuluu jo toiseen elinkaariseurannan ostokseen.",
+        "purchase_date_required_for_warranty": "1 tai 2 vuoden takuu tarvitsee ostopäivän, jotta päättymispäivä voidaan laskea.",
+        "manual_warranty_date_required": "Anna manuaalinen takuun päättymispäivä.",
+        "invalid_purchase_date": "Ostopäivää ei voitu tulkita.",
+        "invalid_warranty_type": "Takuun tyyppi ei ole kelvollinen."
+      }
+    }
+  },
+  "selector": {
+    "warranty_type": {
+      "options": {
+        "none": "Ei määritetty",
+        "1_year": "1 vuosi",
+        "2_years": "2 vuotta",
+        "manual": "Manuaalinen"
+      }
+    }
+  }
+}
