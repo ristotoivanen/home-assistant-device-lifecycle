@@ -1,14 +1,14 @@
 {
   "domain": "device_lifecycle",
   "name": "Laitteen elinkaari",
-  "version": "0.3.5",
-  "config_flow": true,
-  "integration_type": "hub",
-  "iot_class": "calculated",
   "codeowners": [
     "@ristotoivanen"
   ],
-  "single_config_entry": true,
+  "config_flow": true,
   "documentation": "https://github.com/ristotoivanen/home-assistant-device-lifecycle",
-  "issue_tracker": "https://github.com/ristotoivanen/home-assistant-device-lifecycle/issues"
+  "integration_type": "hub",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/ristotoivanen/home-assistant-device-lifecycle/issues",
+  "single_config_entry": true,
+  "version": "0.3.5"
 }

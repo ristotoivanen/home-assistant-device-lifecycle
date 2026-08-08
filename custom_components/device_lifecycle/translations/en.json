@@ -3,11 +3,16 @@
   "config": {
     "abort": {
       "already_configured": "Device Lifecycle is already configured. Add new purchases from the existing integration."
-    }
+    },
+    "step": {}
   },
   "config_subentries": {
     "purchase": {
-      "title": "Purchase",
+      "entry_type": "Purchase",
+      "initiate_flow": {
+        "reconfigure": "Edit purchase",
+        "user": "Add purchase"
+      },
       "step": {
         "user": {
           "title": "Add purchase",

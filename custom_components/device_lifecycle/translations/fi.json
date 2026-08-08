@@ -3,11 +3,16 @@
   "config": {
     "abort": {
       "already_configured": "Laitteen elinkaari on jo lisätty. Lisää uudet ostokset olemassa olevan integraation sisältä."
-    }
+    },
+    "step": {}
   },
   "config_subentries": {
     "purchase": {
-      "title": "Ostos",
+      "entry_type": "Ostos",
+      "initiate_flow": {
+        "reconfigure": "Muokkaa ostosta",
+        "user": "Lisää ostos"
+      },
       "step": {
         "user": {
           "title": "Lisää ostos",
