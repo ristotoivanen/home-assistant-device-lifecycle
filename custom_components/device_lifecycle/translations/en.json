@@ -2,7 +2,7 @@
   "title": "Device Lifecycle",
   "config": {
     "abort": {
-      "already_configured": "Device Lifecycle is already configured. Add new purchases from the existing integration."
+      "already_configured": "Device Lifecycle is already configured. Add new purchases or runtime tracking from the existing integration."
     },
     "step": {}
   },
@@ -69,9 +69,63 @@
         "invalid_purchase_date": "The purchase date could not be parsed.",
         "invalid_warranty_type": "The warranty type is invalid."
       }
+    },
+    "runtime": {
+      "entry_type": "Runtime tracking",
+      "initiate_flow": {
+        "reconfigure": "Edit runtime tracking",
+        "user": "Add runtime tracking"
+      },
+      "step": {
+        "user": {
+          "title": "Add runtime tracking",
+          "description": "Create an optional cumulative runtime sensor for one physical device.",
+          "data": {
+            "device_id": "Tracked device",
+            "runtime_mode": "Tracking method",
+            "source_entity_id": "Source entity",
+            "power_threshold": "Power threshold"
+          },
+          "data_description": {
+            "device_id": "The runtime sensor is linked to this physical Home Assistant device.",
+            "runtime_mode": "On-state counts time while the source entity state is on. Power mode counts time while the numeric source value is above the threshold.",
+            "source_entity_id": "For example a light or switch entity for On-state mode, or a power sensor for Power mode.",
+            "power_threshold": "Used only in Power mode. Runtime counts while the source value is above this limit."
+          }
+        },
+        "reconfigure": {
+          "title": "Edit runtime tracking",
+          "description": "Change how runtime is detected. The tracked physical device cannot be changed; delete this tracking entry and create a new one to change the device.",
+          "data": {
+            "runtime_mode": "Tracking method",
+            "source_entity_id": "Source entity",
+            "power_threshold": "Power threshold"
+          },
+          "data_description": {
+            "runtime_mode": "On-state counts time while the source entity state is on. Power mode counts time while the numeric source value is above the threshold.",
+            "source_entity_id": "For example a light or switch entity for On-state mode, or a power sensor for Power mode.",
+            "power_threshold": "Used only in Power mode. Runtime counts while the source value is above this limit."
+          }
+        }
+      },
+      "error": {
+        "device_missing": "The selected physical device no longer exists in Home Assistant.",
+        "runtime_already_tracked": "This device already has runtime tracking.",
+        "source_missing": "The selected source entity is not currently available in Home Assistant.",
+        "source_required": "Select a source entity.",
+        "power_threshold_required": "Enter a power threshold for Power mode.",
+        "invalid_power_threshold": "The power threshold must be zero or greater.",
+        "invalid_runtime_mode": "The runtime tracking method is invalid."
+      }
     }
   },
   "selector": {
+    "runtime_mode": {
+      "options": {
+        "on_state": "Entity state is on",
+        "power": "Power above threshold"
+      }
+    },
     "warranty_type": {
       "options": {
         "none": "Not specified",

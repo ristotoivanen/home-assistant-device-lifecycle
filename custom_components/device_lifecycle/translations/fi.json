@@ -2,7 +2,7 @@
   "title": "Laitteen elinkaari",
   "config": {
     "abort": {
-      "already_configured": "Laitteen elinkaari on jo lisätty. Lisää uudet ostokset olemassa olevan integraation sisältä."
+      "already_configured": "Laitteen elinkaari on jo lisätty. Lisää uudet ostokset tai käyttötuntiseurannat olemassa olevan integraation sisältä."
     },
     "step": {}
   },
@@ -69,9 +69,63 @@
         "invalid_purchase_date": "Ostopäivää ei voitu tulkita.",
         "invalid_warranty_type": "Takuun tyyppi ei ole kelvollinen."
       }
+    },
+    "runtime": {
+      "entry_type": "Käyttötuntiseuranta",
+      "initiate_flow": {
+        "reconfigure": "Muokkaa käyttötuntiseurantaa",
+        "user": "Lisää käyttötuntiseuranta"
+      },
+      "step": {
+        "user": {
+          "title": "Lisää käyttötuntiseuranta",
+          "description": "Luo yhdelle fyysiselle laitteelle valinnainen kumulatiivinen Käyttötunnit-sensori.",
+          "data": {
+            "device_id": "Seurattava laite",
+            "runtime_mode": "Seurantatapa",
+            "source_entity_id": "Lähde-entiteetti",
+            "power_threshold": "Tehoraja"
+          },
+          "data_description": {
+            "device_id": "Käyttötunnit-sensori liitetään tähän fyysiseen Home Assistant -laitteeseen.",
+            "runtime_mode": "Tila päällä laskee aikaa, kun lähde-entiteetin tila on on. Tehoraja laskee aikaa, kun numeerinen lähdearvo ylittää asetetun rajan.",
+            "source_entity_id": "Esimerkiksi valo- tai kytkinentiteetti Tila päällä -tilassa tai tehosensori Tehoraja-tilassa.",
+            "power_threshold": "Käytetään vain Tehoraja-tilassa. Käyntiaikaa kertyy, kun lähteen arvo ylittää tämän rajan."
+          }
+        },
+        "reconfigure": {
+          "title": "Muokkaa käyttötuntiseurantaa",
+          "description": "Muuta käyttötuntien tunnistustapaa. Seurattavaa fyysistä laitetta ei voi vaihtaa; poista seuranta ja luo uusi, jos haluat vaihtaa laitteen.",
+          "data": {
+            "runtime_mode": "Seurantatapa",
+            "source_entity_id": "Lähde-entiteetti",
+            "power_threshold": "Tehoraja"
+          },
+          "data_description": {
+            "runtime_mode": "Tila päällä laskee aikaa, kun lähde-entiteetin tila on on. Tehoraja laskee aikaa, kun numeerinen lähdearvo ylittää asetetun rajan.",
+            "source_entity_id": "Esimerkiksi valo- tai kytkinentiteetti Tila päällä -tilassa tai tehosensori Tehoraja-tilassa.",
+            "power_threshold": "Käytetään vain Tehoraja-tilassa. Käyntiaikaa kertyy, kun lähteen arvo ylittää tämän rajan."
+          }
+        }
+      },
+      "error": {
+        "device_missing": "Valittua fyysistä laitetta ei enää löydy Home Assistantista.",
+        "runtime_already_tracked": "Tällä laitteella on jo käyttötuntiseuranta.",
+        "source_missing": "Valittua lähde-entiteettiä ei tällä hetkellä löydy Home Assistantista.",
+        "source_required": "Valitse lähde-entiteetti.",
+        "power_threshold_required": "Anna Tehoraja-tilalle tehoraja.",
+        "invalid_power_threshold": "Tehorajan pitää olla vähintään nolla.",
+        "invalid_runtime_mode": "Käyttötuntiseurannan tapa ei ole kelvollinen."
+      }
     }
   },
   "selector": {
+    "runtime_mode": {
+      "options": {
+        "on_state": "Entiteetin tila on päällä",
+        "power": "Teho yli rajan"
+      }
+    },
     "warranty_type": {
       "options": {
         "none": "Ei määritetty",
