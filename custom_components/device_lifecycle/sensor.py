@@ -81,14 +81,50 @@ def _warranty_type(data: dict[str, Any]) -> str:
     return WARRANTY_NONE
 
 
-def _warranty_type_label(value: str) -> str:
-    """Return a human-readable Finnish warranty type for attributes."""
-    return {
-        WARRANTY_NONE: "Ei määritetty",
-        WARRANTY_ONE_YEAR: "1 vuosi",
-        WARRANTY_TWO_YEARS: "2 vuotta",
-        WARRANTY_MANUAL: "Manuaalinen",
-    }.get(value, value)
+def _is_finnish(language: str) -> bool:
+    """Return whether the Home Assistant system language is Finnish."""
+    return language.lower().startswith("fi")
+
+
+def _warranty_type_label(value: str, language: str) -> str:
+    """Return a human-readable warranty type for attributes."""
+    if _is_finnish(language):
+        labels = {
+            WARRANTY_NONE: "Ei määritetty",
+            WARRANTY_ONE_YEAR: "1 vuosi",
+            WARRANTY_TWO_YEARS: "2 vuotta",
+            WARRANTY_MANUAL: "Manuaalinen",
+        }
+    else:
+        labels = {
+            WARRANTY_NONE: "Not specified",
+            WARRANTY_ONE_YEAR: "1 year",
+            WARRANTY_TWO_YEARS: "2 years",
+            WARRANTY_MANUAL: "Manual",
+        }
+    return labels.get(value, value)
+
+
+def _format_warranty_date(value: date, language: str) -> str:
+    """Format a warranty date for the configured Home Assistant language."""
+    if _is_finnish(language):
+        return f"{value.day}.{value.month}.{value.year}"
+
+    month = (
+        "Jan",
+        "Feb",
+        "Mar",
+        "Apr",
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct",
+        "Nov",
+        "Dec",
+    )[value.month - 1]
+    return f"{value.day} {month} {value.year}"
 
 
 async def async_setup_entry(
@@ -219,7 +255,7 @@ class DeviceLifecycleSensor(SensorEntity):
     """Lifecycle information linked to an existing physical HA device."""
 
     _attr_has_entity_name = True
-    _attr_name = "Elinkaari"
+    _attr_translation_key = "lifecycle"
     _attr_should_poll = False
 
     def __init__(
@@ -250,23 +286,33 @@ class DeviceLifecycleSensor(SensorEntity):
 
     @property
     def native_value(self) -> str:
-        """Return a compact, human-readable warranty summary."""
+        """Return a compact warranty summary in the HA system language."""
+        language = self.hass.config.language
         warranty_until = _parse_date(self._data.get(CONF_WARRANTY_UNTIL))
+
         if warranty_until is None:
-            return "Takuu ei määritetty"
+            return (
+                "Takuu ei määritetty"
+                if _is_finnish(language)
+                else "Warranty not specified"
+            )
 
         today = dt_util.now().date()
         days = (warranty_until - today).days
-        formatted = (
-            f"{warranty_until.day}."
-            f"{warranty_until.month}."
-            f"{warranty_until.year}"
-        )
+        formatted = _format_warranty_date(warranty_until, language)
+
+        if _is_finnish(language):
+            if days >= 0:
+                return f"Voimassa · {days} pv · {formatted}"
+            return f"Päättynyt · {abs(days)} pv sitten · {formatted}"
 
         if days >= 0:
-            return f"Voimassa · {days} pv · {formatted}"
+            unit = "day" if days == 1 else "days"
+            return f"Active · {days} {unit} · {formatted}"
 
-        return f"Päättynyt · {abs(days)} pv sitten · {formatted}"
+        elapsed = abs(days)
+        unit = "day" if elapsed == 1 else "days"
+        return f"Expired · {elapsed} {unit} ago · {formatted}"
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -282,7 +328,10 @@ class DeviceLifecycleSensor(SensorEntity):
 
         attrs: dict[str, Any] = {
             "ostos": self._purchase_title,
-            "takuun_tyyppi": _warranty_type_label(_warranty_type(data)),
+            "takuun_tyyppi": _warranty_type_label(
+                _warranty_type(data),
+                self.hass.config.language,
+            ),
             "takuu_tila": (
                 "voimassa"
                 if warranty_active
@@ -354,7 +403,7 @@ class DeviceRuntimeHoursSensor(RestoreSensor):
     """Cumulative runtime hours for one physical Home Assistant device."""
 
     _attr_has_entity_name = True
-    _attr_name = "Käyttötunnit"
+    _attr_translation_key = "runtime_hours"
     _attr_icon = "mdi:timer-outline"
     _attr_native_unit_of_measurement = UnitOfTime.HOURS
     _attr_should_poll = False

@@ -79,32 +79,48 @@
       "step": {
         "user": {
           "title": "Lisää käyttötuntiseuranta",
-          "description": "Luo yhdelle fyysiselle laitteelle valinnainen kumulatiivinen Käyttötunnit-sensori.",
+          "description": "Valitse ensin fyysinen laite ja tapa, jolla laitteen käyntiaika tunnistetaan.",
           "data": {
             "device_id": "Seurattava laite",
-            "runtime_mode": "Seurantatapa",
+            "runtime_mode": "Seurantatapa"
+          },
+          "data_description": {
+            "device_id": "Käyttötunnit-sensori liitetään tähän fyysiseen Home Assistant -laitteeseen.",
+            "runtime_mode": "Valitse tunnistetaanko käynti entiteetin päällä-tilasta vai mitatusta tehosta."
+          }
+        },
+        "runtime_source": {
+          "title": "Määritä käyntiajan lähde",
+          "description": "Valitse käynnin tunnistamiseen käytettävä lähde-entiteetti. Tehoraja näytetään vain, kun valittuna on Teho yli rajan.",
+          "data": {
             "source_entity_id": "Lähde-entiteetti",
             "power_threshold": "Tehoraja"
           },
           "data_description": {
-            "device_id": "Käyttötunnit-sensori liitetään tähän fyysiseen Home Assistant -laitteeseen.",
-            "runtime_mode": "Tila päällä laskee aikaa, kun lähde-entiteetin tila on on. Tehoraja laskee aikaa, kun numeerinen lähdearvo ylittää asetetun rajan.",
-            "source_entity_id": "Esimerkiksi valo- tai kytkinentiteetti Tila päällä -tilassa tai tehosensori Tehoraja-tilassa.",
-            "power_threshold": "Käytetään vain Tehoraja-tilassa. Käyntiaikaa kertyy, kun lähteen arvo ylittää tämän rajan."
+            "source_entity_id": "Tila päällä -seurannassa valitse esimerkiksi valo tai kytkin. Tehoseurannassa valitse numeerinen tehosensori.",
+            "power_threshold": "Käyntiaikaa kertyy, kun lähteen arvo ylittää tämän wattirajan."
           }
         },
         "reconfigure": {
           "title": "Muokkaa käyttötuntiseurantaa",
-          "description": "Muuta käyttötuntien tunnistustapaa. Seurattavaa fyysistä laitetta ei voi vaihtaa; poista seuranta ja luo uusi, jos haluat vaihtaa laitteen.",
+          "description": "Valitse käyntiajan tunnistustapa. Seurattava fyysinen laite ei muutu.",
           "data": {
-            "runtime_mode": "Seurantatapa",
+            "runtime_mode": "Seurantatapa"
+          },
+          "data_description": {
+            "runtime_mode": "Valitse tunnistetaanko käynti entiteetin päällä-tilasta vai mitatusta tehosta."
+          }
+        },
+        "reconfigure_source": {
+          "title": "Määritä käyntiajan lähde",
+          "description": "Muuta lähde-entiteettiä. Tehoraja näytetään vain, kun valittuna on Teho yli rajan.",
+          "data": {
             "source_entity_id": "Lähde-entiteetti",
             "power_threshold": "Tehoraja"
           },
           "data_description": {
-            "runtime_mode": "Tila päällä laskee aikaa, kun lähde-entiteetin tila on on. Tehoraja laskee aikaa, kun numeerinen lähdearvo ylittää asetetun rajan.",
-            "source_entity_id": "Esimerkiksi valo- tai kytkinentiteetti Tila päällä -tilassa tai tehosensori Tehoraja-tilassa.",
-            "power_threshold": "Käytetään vain Tehoraja-tilassa. Käyntiaikaa kertyy, kun lähteen arvo ylittää tämän rajan."
+            "source_entity_id": "Tila päällä -seurannassa valitse esimerkiksi valo tai kytkin. Tehoseurannassa valitse numeerinen tehosensori.",
+            "power_threshold": "Käyntiaikaa kertyy, kun lähteen arvo ylittää tämän wattirajan."
           }
         }
       },
@@ -132,6 +148,16 @@
         "1_year": "1 vuosi",
         "2_years": "2 vuotta",
         "manual": "Manuaalinen"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "lifecycle": {
+        "name": "Elinkaari"
+      },
+      "runtime_hours": {
+        "name": "Käyttötunnit"
       }
     }
   }

@@ -152,23 +152,23 @@ def _purchase_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
     return vol.Schema(fields)
 
 
-def _runtime_schema(
+def _runtime_start_schema(
     defaults: dict[str, Any] | None = None,
     *,
     include_device: bool,
 ) -> vol.Schema:
-    """Build the add/edit runtime tracking form."""
+    """Build the first runtime step: target device and tracking method."""
     defaults = dict(defaults or {})
-
     fields: dict[Any, Any] = {}
 
     if include_device:
-        fields[
-            vol.Required(
+        device_key = vol.Required(CONF_DEVICE_ID)
+        if defaults.get(CONF_DEVICE_ID):
+            device_key = vol.Required(
                 CONF_DEVICE_ID,
-                default=defaults.get(CONF_DEVICE_ID),
+                default=defaults[CONF_DEVICE_ID],
             )
-        ] = selector.DeviceSelector()
+        fields[device_key] = selector.DeviceSelector()
 
     fields[
         vol.Required(
@@ -183,30 +183,43 @@ def _runtime_schema(
         )
     )
 
-    fields[
-        vol.Required(
-            CONF_SOURCE_ENTITY_ID,
-            default=defaults.get(CONF_SOURCE_ENTITY_ID),
-        )
-    ] = selector.EntitySelector()
+    return vol.Schema(fields)
 
-    fields[
-        vol.Optional(
-            CONF_POWER_THRESHOLD,
-            default=defaults.get(
+
+def _runtime_source_schema(
+    runtime_mode: str,
+    defaults: dict[str, Any] | None = None,
+) -> vol.Schema:
+    """Build the second runtime step with only relevant source settings."""
+    defaults = dict(defaults or {})
+    fields: dict[Any, Any] = {}
+
+    source_key = vol.Required(CONF_SOURCE_ENTITY_ID)
+    if defaults.get(CONF_SOURCE_ENTITY_ID):
+        source_key = vol.Required(
+            CONF_SOURCE_ENTITY_ID,
+            default=defaults[CONF_SOURCE_ENTITY_ID],
+        )
+    fields[source_key] = selector.EntitySelector()
+
+    if runtime_mode == RUNTIME_MODE_POWER:
+        fields[
+            vol.Required(
                 CONF_POWER_THRESHOLD,
-                DEFAULT_POWER_THRESHOLD,
-            ),
+                default=defaults.get(
+                    CONF_POWER_THRESHOLD,
+                    DEFAULT_POWER_THRESHOLD,
+                ),
+            )
+        ] = selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0,
+                max=1000000,
+                step=0.1,
+                unit_of_measurement="W",
+                mode=selector.NumberSelectorMode.BOX,
+            )
         )
-    ] = selector.NumberSelector(
-        selector.NumberSelectorConfig(
-            min=0,
-            max=1000000,
-            step=0.1,
-            unit_of_measurement="W",
-            mode=selector.NumberSelectorMode.BOX,
-        )
-    )
 
     return vol.Schema(fields)
 
@@ -390,7 +403,11 @@ class DeviceLifecycleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._abort_if_unique_id_configured()
 
         return self.async_create_entry(
-            title="Laitteen elinkaari",
+            title=(
+                "Laitteen elinkaari"
+                if self.hass.config.language.lower().startswith("fi")
+                else "Device Lifecycle"
+            ),
             data={},
         )
 
@@ -513,41 +530,104 @@ class PurchaseSubentryFlow(ConfigSubentryFlow):
 class RuntimeSubentryFlow(ConfigSubentryFlow):
     """Add and edit per-device runtime tracking."""
 
+    def _set_runtime_context(
+        self,
+        *,
+        device_id: str,
+        runtime_mode: str,
+        defaults: dict[str, Any] | None = None,
+    ) -> None:
+        """Store selections between the two runtime form steps."""
+        self._runtime_context = {
+            CONF_DEVICE_ID: device_id,
+            CONF_RUNTIME_MODE: runtime_mode,
+            "defaults": dict(defaults or {}),
+        }
+
+    def _get_runtime_context(self) -> dict[str, Any]:
+        """Return selections stored between runtime form steps."""
+        return getattr(self, "_runtime_context", {})
+
     async def async_step_user(
         self,
         user_input: dict[str, Any] | None = None,
     ) -> SubentryFlowResult:
-        """Add runtime tracking for one physical device."""
+        """Choose the device and runtime detection method."""
         entry = self._get_entry()
         errors: dict[str, str] = {}
 
         if user_input is not None:
             device_id = str(user_input.get(CONF_DEVICE_ID) or "")
+            runtime_mode = str(
+                user_input.get(CONF_RUNTIME_MODE, RUNTIME_MODE_ON)
+            )
             registry = dr.async_get(self.hass)
 
             if not device_id or registry.async_get(device_id) is None:
                 errors["base"] = "device_missing"
             elif device_id in _used_runtime_device_ids(entry):
                 errors["base"] = "runtime_already_tracked"
+            elif runtime_mode not in RUNTIME_MODES:
+                errors["base"] = "invalid_runtime_mode"
             else:
-                source_entity_id = str(
-                    user_input.get(CONF_SOURCE_ENTITY_ID) or ""
+                self._set_runtime_context(
+                    device_id=device_id,
+                    runtime_mode=runtime_mode,
                 )
-                if self.hass.states.get(source_entity_id) is None:
-                    errors["base"] = "source_missing"
-                else:
-                    clean, error = _prepare_runtime_data(user_input)
-                    if error:
-                        errors["base"] = error
-                    elif clean is not None:
-                        return self.async_create_entry(
-                            title=_runtime_title(registry, device_id),
-                            data=clean,
-                        )
+                return await self.async_step_runtime_source()
 
         return self.async_show_form(
             step_id="user",
-            data_schema=_runtime_schema(user_input, include_device=True),
+            data_schema=_runtime_start_schema(
+                user_input,
+                include_device=True,
+            ),
+            errors=errors,
+        )
+
+    async def async_step_runtime_source(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> SubentryFlowResult:
+        """Choose the runtime source and the optional power threshold."""
+        context = self._get_runtime_context()
+        if not context:
+            return await self.async_step_user()
+
+        entry = self._get_entry()
+        device_id = str(context[CONF_DEVICE_ID])
+        runtime_mode = str(context[CONF_RUNTIME_MODE])
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            source_entity_id = str(
+                user_input.get(CONF_SOURCE_ENTITY_ID) or ""
+            )
+
+            if self.hass.states.get(source_entity_id) is None:
+                errors["base"] = "source_missing"
+            else:
+                combined = {
+                    CONF_DEVICE_ID: device_id,
+                    CONF_RUNTIME_MODE: runtime_mode,
+                    **user_input,
+                }
+                clean, error = _prepare_runtime_data(combined)
+                if error:
+                    errors["base"] = error
+                elif clean is not None:
+                    registry = dr.async_get(self.hass)
+                    return self.async_create_entry(
+                        title=_runtime_title(registry, device_id),
+                        data=clean,
+                    )
+
+        return self.async_show_form(
+            step_id="runtime_source",
+            data_schema=_runtime_source_schema(
+                runtime_mode,
+                user_input,
+            ),
             errors=errors,
         )
 
@@ -555,21 +635,70 @@ class RuntimeSubentryFlow(ConfigSubentryFlow):
         self,
         user_input: dict[str, Any] | None = None,
     ) -> SubentryFlowResult:
-        """Edit runtime tracking without changing the target physical device."""
-        entry = self._get_entry()
+        """Choose the runtime detection method for an existing tracker."""
         subentry = self._get_reconfigure_subentry()
         device_id = str(subentry.data.get(CONF_DEVICE_ID) or "")
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            runtime_mode = str(
+                user_input.get(CONF_RUNTIME_MODE, RUNTIME_MODE_ON)
+            )
+            if runtime_mode not in RUNTIME_MODES:
+                errors["base"] = "invalid_runtime_mode"
+            else:
+                self._set_runtime_context(
+                    device_id=device_id,
+                    runtime_mode=runtime_mode,
+                    defaults=dict(subentry.data),
+                )
+                return await self.async_step_reconfigure_source()
+
+        defaults = (
+            user_input
+            if user_input is not None
+            else dict(subentry.data)
+        )
+
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=_runtime_start_schema(
+                defaults,
+                include_device=False,
+            ),
+            errors=errors,
+        )
+
+    async def async_step_reconfigure_source(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> SubentryFlowResult:
+        """Edit the source settings for an existing runtime tracker."""
+        context = self._get_runtime_context()
+        if not context:
+            return await self.async_step_reconfigure()
+
+        entry = self._get_entry()
+        subentry = self._get_reconfigure_subentry()
+        device_id = str(context[CONF_DEVICE_ID])
+        runtime_mode = str(context[CONF_RUNTIME_MODE])
+        saved_defaults = dict(context.get("defaults", {}))
         errors: dict[str, str] = {}
 
         if user_input is not None:
             source_entity_id = str(
                 user_input.get(CONF_SOURCE_ENTITY_ID) or ""
             )
+
             if self.hass.states.get(source_entity_id) is None:
                 errors["base"] = "source_missing"
             else:
+                combined = {
+                    CONF_RUNTIME_MODE: runtime_mode,
+                    **user_input,
+                }
                 clean, error = _prepare_runtime_data(
-                    user_input,
+                    combined,
                     device_id=device_id,
                 )
                 if error:
@@ -586,11 +715,14 @@ class RuntimeSubentryFlow(ConfigSubentryFlow):
         defaults = (
             user_input
             if user_input is not None
-            else dict(subentry.data)
+            else saved_defaults
         )
 
         return self.async_show_form(
-            step_id="reconfigure",
-            data_schema=_runtime_schema(defaults, include_device=False),
+            step_id="reconfigure_source",
+            data_schema=_runtime_source_schema(
+                runtime_mode,
+                defaults,
+            ),
             errors=errors,
         )

@@ -4,6 +4,8 @@ Home Assistant custom integration for tracking device purchases, warranty inform
 
 The integration UI is localized. In Finnish Home Assistant it is shown as **Laitteen elinkaari**.
 
+Lifecycle status text follows the Home Assistant system language. English and Finnish are currently included.
+
 ## Features
 
 - One Home Assistant integration with multiple purchase subentries
@@ -23,13 +25,13 @@ The integration UI is localized. In Finnish Home Assistant it is shown as **Lait
 Example lifecycle sensor state:
 
 ```text
-Voimassa · 164 pv · 19.1.2027
+Active · 164 days · 19 Jan 2027
 ```
 
 Example runtime sensor:
 
 ```text
-Käyttötunnit: 1284.53 h
+Runtime hours: 1284.53 h
 ```
 
 ## Requirements
@@ -105,7 +107,9 @@ Available tracking methods:
 - **Entity state is on**: counts time while the selected source entity state is `on`. This is suitable for lights, switches and similar entities.
 - **Power above threshold**: counts time while a numeric source entity is above the configured watt threshold. This is suitable for devices whose actual operation is best detected from measured power.
 
-The integration creates a cumulative **Käyttötunnit** sensor on the selected physical device.
+Runtime setup uses two short steps. First select the target device and tracking method, then select the source entity. The power threshold field is shown only for **Power above threshold** mode.
+
+The integration creates a cumulative **Runtime hours** sensor on the selected physical device. The entity name is localized as **Käyttötunnit** in Finnish.
 
 Runtime totals are restored after Home Assistant restarts. While a device is continuously active, the runtime sensor is refreshed every five minutes to avoid unnecessary recorder writes. Source state transitions are processed immediately.
 

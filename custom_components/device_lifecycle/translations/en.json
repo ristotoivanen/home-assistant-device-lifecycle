@@ -79,32 +79,48 @@
       "step": {
         "user": {
           "title": "Add runtime tracking",
-          "description": "Create an optional cumulative runtime sensor for one physical device.",
+          "description": "First choose the physical device and how running time should be detected.",
           "data": {
             "device_id": "Tracked device",
-            "runtime_mode": "Tracking method",
+            "runtime_mode": "Tracking method"
+          },
+          "data_description": {
+            "device_id": "The Runtime hours sensor is linked to this physical Home Assistant device.",
+            "runtime_mode": "Choose whether runtime is detected from an entity being on or from measured power."
+          }
+        },
+        "runtime_source": {
+          "title": "Configure runtime source",
+          "description": "Select the source entity used to detect operation. Power threshold is shown only when Power above threshold is selected.",
+          "data": {
             "source_entity_id": "Source entity",
             "power_threshold": "Power threshold"
           },
           "data_description": {
-            "device_id": "The runtime sensor is linked to this physical Home Assistant device.",
-            "runtime_mode": "On-state counts time while the source entity state is on. Power mode counts time while the numeric source value is above the threshold.",
-            "source_entity_id": "For example a light or switch entity for On-state mode, or a power sensor for Power mode.",
-            "power_threshold": "Used only in Power mode. Runtime counts while the source value is above this limit."
+            "source_entity_id": "For on-state tracking, select a light, switch or similar entity. For power tracking, select a numeric power sensor.",
+            "power_threshold": "Runtime accumulates while the source value is above this watt limit."
           }
         },
         "reconfigure": {
           "title": "Edit runtime tracking",
-          "description": "Change how runtime is detected. The tracked physical device cannot be changed; delete this tracking entry and create a new one to change the device.",
+          "description": "Choose how runtime is detected. The tracked physical device is unchanged.",
           "data": {
-            "runtime_mode": "Tracking method",
+            "runtime_mode": "Tracking method"
+          },
+          "data_description": {
+            "runtime_mode": "Choose whether runtime is detected from an entity being on or from measured power."
+          }
+        },
+        "reconfigure_source": {
+          "title": "Configure runtime source",
+          "description": "Change the source entity. Power threshold is shown only when Power above threshold is selected.",
+          "data": {
             "source_entity_id": "Source entity",
             "power_threshold": "Power threshold"
           },
           "data_description": {
-            "runtime_mode": "On-state counts time while the source entity state is on. Power mode counts time while the numeric source value is above the threshold.",
-            "source_entity_id": "For example a light or switch entity for On-state mode, or a power sensor for Power mode.",
-            "power_threshold": "Used only in Power mode. Runtime counts while the source value is above this limit."
+            "source_entity_id": "For on-state tracking, select a light, switch or similar entity. For power tracking, select a numeric power sensor.",
+            "power_threshold": "Runtime accumulates while the source value is above this watt limit."
           }
         }
       },
@@ -132,6 +148,16 @@
         "1_year": "1 year",
         "2_years": "2 years",
         "manual": "Manual"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "lifecycle": {
+        "name": "Lifecycle"
+      },
+      "runtime_hours": {
+        "name": "Runtime hours"
       }
     }
   }
