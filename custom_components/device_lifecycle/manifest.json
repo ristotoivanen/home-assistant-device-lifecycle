@@ -1,6 +1,6 @@
 {
   "domain": "device_lifecycle",
-  "name": "Laitteen elinkaari",
+  "name": "Device Lifecycle",
   "codeowners": [
     "@ristotoivanen"
   ],
@@ -10,5 +10,5 @@
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/ristotoivanen/home-assistant-device-lifecycle/issues",
   "single_config_entry": true,
-  "version": "0.4.0"
+  "version": "0.4.1"
 }

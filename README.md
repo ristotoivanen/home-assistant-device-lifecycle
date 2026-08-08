@@ -1,6 +1,8 @@
-# Laitteen elinkaari
+# Device Lifecycle
 
 Home Assistant custom integration for tracking device purchases, warranty information, lifecycle metadata and optional per-device runtime hours.
+
+The integration UI is localized. In Finnish Home Assistant it is shown as **Laitteen elinkaari**.
 
 ## Features
 
@@ -45,9 +47,9 @@ Until this repository is included as a HACS default repository, add it as a cust
 3. Add:
    `https://github.com/ristotoivanen/home-assistant-device-lifecycle`
 4. Select category **Integration**.
-5. Install **Laitteen elinkaari**.
+5. Install **Device Lifecycle**.
 6. Restart Home Assistant.
-7. Go to **Settings > Devices & services > Add integration** and search for **Laitteen elinkaari**.
+7. Go to **Settings > Devices & services > Add integration** and search for **Device Lifecycle** or **Laitteen elinkaari** when using the Finnish UI.
 
 ## Manual installation
 
