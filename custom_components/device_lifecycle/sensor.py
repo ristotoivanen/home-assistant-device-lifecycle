@@ -39,21 +39,13 @@ from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_conversion import PowerConverter
 
 from .const import (
+    CONF_ASSET_UUID,
     CONF_DEVICE_ID,
     CONF_DEVICE_IDS,
-    CONF_INSTALLED_DATE,
-    CONF_NOTES,
     CONF_POWER_HYSTERESIS,
     CONF_POWER_THRESHOLD,
-    CONF_PURCHASE_DATE,
-    CONF_PURCHASE_NAME,
-    CONF_PURCHASE_PRICE,
-    CONF_RECEIPT_REFERENCE,
     CONF_RUNTIME_MODE,
-    CONF_SELLER,
     CONF_SOURCE_ENTITY_ID,
-    CONF_WARRANTY_TYPE,
-    CONF_WARRANTY_UNTIL,
     DEFAULT_POWER_HYSTERESIS,
     DOMAIN,
     RUNTIME_MODE_ON,
@@ -65,6 +57,9 @@ from .const import (
     WARRANTY_ONE_YEAR,
     WARRANTY_TWO_YEARS,
 )
+from .migration import lifecycle_unique_id, runtime_unique_id
+from .models import AssetData, PurchaseData
+from .storage import AssetStoreManager
 
 RUNTIME_REFRESH_INTERVAL = timedelta(minutes=5)
 
@@ -74,16 +69,6 @@ def _parse_date(value: str | None) -> date | None:
     if not value:
         return None
     return dt_util.parse_date(value)
-
-
-def _warranty_type(data: dict[str, Any]) -> str:
-    """Return explicit warranty type or infer old pre-0.3.4 data."""
-    value = data.get(CONF_WARRANTY_TYPE)
-    if value:
-        return str(value)
-    if data.get(CONF_WARRANTY_UNTIL):
-        return WARRANTY_MANUAL
-    return WARRANTY_NONE
 
 
 def _is_finnish(language: str) -> bool:
@@ -157,9 +142,10 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up lifecycle and runtime sensors from config subentries."""
+    """Set up lifecycle and runtime sensors from normalized Asset Core data."""
     device_registry = dr.async_get(hass)
     entity_registry = er.async_get(hass)
+    manager: AssetStoreManager = entry.runtime_data
 
     valid_subentry_ids = {
         subentry.subentry_id
@@ -169,7 +155,7 @@ async def async_setup_entry(
     }
 
     # If an entire subentry was deleted, remove only entities that belonged to
-    # that deleted Device Lifecycle subentry.
+    # that deleted Device Lifecycle subentry. Asset Core data itself is retained.
     for registry_entry in er.async_entries_for_config_entry(
         entity_registry,
         entry.entry_id,
@@ -183,26 +169,31 @@ async def async_setup_entry(
 
     for subentry in entry.subentries.values():
         if subentry.subentry_type == SUBENTRY_TYPE_PURCHASE:
+            purchase = manager.purchase_for_subentry(subentry.subentry_id)
             entities: list[DeviceLifecycleSensor] = []
             expected_unique_ids: set[str] = set()
 
-            for device_id in subentry.data.get(CONF_DEVICE_IDS, []):
-                device_entry = device_registry.async_get(device_id)
-                if device_entry is None:
-                    continue
+            if purchase is not None:
+                for device_id_value in subentry.data.get(CONF_DEVICE_IDS, []):
+                    device_id = str(device_id_value)
+                    device_entry = device_registry.async_get(device_id)
+                    asset = manager.asset_for_device_id(device_id)
+                    if device_entry is None or asset is None:
+                        continue
+                    if asset.get("purchase_uuid") != purchase["purchase_uuid"]:
+                        continue
 
-                unique_id = f"{subentry.subentry_id}_{device_id}_lifecycle"
-                expected_unique_ids.add(unique_id)
-
-                entities.append(
-                    DeviceLifecycleSensor(
-                        data=dict(subentry.data),
-                        device_entry=device_entry,
-                        unique_id=unique_id,
-                        purchase_title=subentry.title,
-                        subentry_id=subentry.subentry_id,
+                    unique_id = lifecycle_unique_id(asset["asset_uuid"])
+                    expected_unique_ids.add(unique_id)
+                    entities.append(
+                        DeviceLifecycleSensor(
+                            asset=asset,
+                            purchase=purchase,
+                            device_entry=device_entry,
+                            unique_id=unique_id,
+                            purchase_title=subentry.title,
+                        )
                     )
-                )
 
             _remove_unexpected_subentry_entities(
                 entity_registry=entity_registry,
@@ -224,21 +215,22 @@ async def async_setup_entry(
             )
             device_entry = device_registry.async_get(device_id)
 
+            asset = manager.asset(str(subentry.data.get(CONF_ASSET_UUID) or ""))
+            if asset is None and device_id:
+                asset = manager.asset_for_device_id(device_id)
+
             expected_unique_ids: set[str] = set()
             runtime_entities: list[DeviceRuntimeHoursSensor] = []
 
-            if device_entry is not None and source_entity_id:
-                unique_id = (
-                    f"{subentry.subentry_id}_{device_id}_runtime_hours"
-                )
+            if device_entry is not None and source_entity_id and asset is not None:
+                unique_id = runtime_unique_id(asset["asset_uuid"])
                 expected_unique_ids.add(unique_id)
-
                 runtime_entities.append(
                     DeviceRuntimeHoursSensor(
                         data=dict(subentry.data),
+                        asset=asset,
                         device_entry=device_entry,
                         unique_id=unique_id,
-                        subentry_id=subentry.subentry_id,
                     )
                 )
 
@@ -277,7 +269,7 @@ def _remove_unexpected_subentry_entities(
 
 
 class DeviceLifecycleSensor(SensorEntity):
-    """Lifecycle information linked to an existing physical HA device."""
+    """Lifecycle information for one persistent physical Asset."""
 
     _attr_has_entity_name = True
     _attr_translation_key = "lifecycle"
@@ -286,23 +278,23 @@ class DeviceLifecycleSensor(SensorEntity):
     def __init__(
         self,
         *,
-        data: dict[str, Any],
+        asset: AssetData,
+        purchase: PurchaseData,
         device_entry: dr.DeviceEntry,
         unique_id: str,
         purchase_title: str,
-        subentry_id: str,
     ) -> None:
         """Initialize lifecycle sensor."""
-        self._data = data
+        self._asset = asset
+        self._purchase = purchase
         self._purchase_title = purchase_title
         self.device_entry = device_entry
         self._attr_unique_id = unique_id
-        self._attr_config_subentry_id = subentry_id
 
     @property
     def icon(self) -> str:
         """Return an icon matching warranty state."""
-        warranty_until = _parse_date(self._data.get(CONF_WARRANTY_UNTIL))
+        warranty_until = _parse_date(self._asset["warranty"].get("until"))
         if warranty_until is None:
             return "mdi:calendar-question"
         if warranty_until >= dt_util.now().date():
@@ -313,7 +305,7 @@ class DeviceLifecycleSensor(SensorEntity):
     def native_value(self) -> str:
         """Return a compact warranty summary in the HA system language."""
         language = self.hass.config.language
-        warranty_until = _parse_date(self._data.get(CONF_WARRANTY_UNTIL))
+        warranty_until = _parse_date(self._asset["warranty"].get("until"))
 
         if warranty_until is None:
             return (
@@ -341,20 +333,24 @@ class DeviceLifecycleSensor(SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return purchase and automatically discovered device metadata."""
-        data = self._data
-        device = self.device_entry
-
-        warranty_until = _parse_date(data.get(CONF_WARRANTY_UNTIL))
+        """Return stable Asset data plus compatible purchase metadata."""
+        asset = self._asset
+        purchase = self._purchase
+        warranty = asset["warranty"]
+        warranty_type = str(warranty.get("type") or WARRANTY_NONE)
+        warranty_until = _parse_date(warranty.get("until"))
         warranty_active = (
             warranty_until is not None
             and warranty_until >= dt_util.now().date()
         )
 
         attrs: dict[str, Any] = {
+            "asset_id": asset["asset_id"],
+            "asset_uuid": asset["asset_uuid"],
+            "purchase_uuid": purchase["purchase_uuid"],
             "ostos": self._purchase_title,
             "takuun_tyyppi": _warranty_type_label(
-                _warranty_type(data),
+                warranty_type,
                 self.hass.config.language,
             ),
             "takuu_tila": (
@@ -366,42 +362,54 @@ class DeviceLifecycleSensor(SensorEntity):
             ),
         }
 
-        mapping = {
-            CONF_PURCHASE_NAME: "ostoksen_nimi",
-            CONF_PURCHASE_DATE: "ostopaiva",
-            CONF_INSTALLED_DATE: "kayttoonottopaiva",
-            CONF_WARRANTY_UNTIL: "takuu_paattyy",
-            CONF_SELLER: "myyja",
-            CONF_PURCHASE_PRICE: "ostoksen_hinta",
-            CONF_RECEIPT_REFERENCE: "kuitti_tilausviite",
-            CONF_NOTES: "huomautukset",
+        purchase_mapping = {
+            "name": "ostoksen_nimi",
+            "purchase_date": "ostopaiva",
+            "seller": "myyja",
+            "total_price": "ostoksen_hinta",
+            "receipt_reference": "kuitti_tilausviite",
+            "receipt_url": "kuitti_url",
+            "notes": "huomautukset",
         }
-
-        for key, attr_name in mapping.items():
-            value = data.get(key)
-            if value not in (None, ""):
+        for key, attr_name in purchase_mapping.items():
+            value = purchase.get(key)  # type: ignore[literal-required]
+            if value in (None, ""):
+                continue
+            if key == "total_price":
+                attrs[attr_name] = float(str(value))
+            else:
                 attrs[attr_name] = value
 
-        if CONF_PURCHASE_PRICE in data:
-            attrs["valuutta"] = "EUR"
+        if purchase.get("total_price") is not None:
+            attrs["valuutta"] = purchase["currency"]
 
+        if asset.get("installed_date"):
+            attrs["kayttoonottopaiva"] = asset["installed_date"]
+        if warranty.get("until"):
+            attrs["takuu_paattyy"] = warranty["until"]
         if warranty_until is not None:
             attrs["takuuta_jaljella_paivaa"] = max(
                 0,
                 (warranty_until - dt_util.now().date()).days,
             )
 
-        automatic = {
-            "valmistaja": getattr(device, "manufacturer", None),
-            "malli": getattr(device, "model", None),
-            "mallitunnus": getattr(device, "model_id", None),
-            "sarjanumero": getattr(device, "serial_number", None),
-            "laiteohjelmisto": getattr(device, "sw_version", None),
-            "laitteisto": getattr(device, "hw_version", None),
+        asset_mapping = {
+            "manufacturer": "valmistaja",
+            "model": "malli",
+            "model_id": "mallitunnus",
+            "serial_number": "sarjanumero",
+            "sw_version": "laiteohjelmisto",
+            "hw_version": "laitteisto",
         }
-        for key, value in automatic.items():
+        for key, attr_name in asset_mapping.items():
+            value = asset.get(key)  # type: ignore[literal-required]
             if value not in (None, ""):
-                attrs[key] = value
+                attrs[attr_name] = value
+
+        if asset.get("category"):
+            attrs["kategoria"] = asset["category"]
+        if asset.get("notes"):
+            attrs["laitteen_huomautukset"] = asset["notes"]
 
         return attrs
 
@@ -425,7 +433,7 @@ class DeviceLifecycleSensor(SensorEntity):
 
 
 class DeviceRuntimeHoursSensor(RestoreSensor):
-    """Cumulative runtime hours for one physical Home Assistant device."""
+    """Cumulative runtime hours for one persistent physical Asset."""
 
     _attr_has_entity_name = True
     _attr_translation_key = "runtime_hours"
@@ -439,21 +447,20 @@ class DeviceRuntimeHoursSensor(RestoreSensor):
         self,
         *,
         data: dict[str, Any],
+        asset: AssetData,
         device_entry: dr.DeviceEntry,
         unique_id: str,
-        subentry_id: str,
     ) -> None:
         """Initialize runtime hours sensor."""
         self._data = data
+        self._asset_uuid = asset["asset_uuid"]
+        self._asset_id = asset["asset_id"]
         self.device_entry = device_entry
         self._attr_unique_id = unique_id
-        self._attr_config_subentry_id = subentry_id
 
         self._source_entity_id = str(data[CONF_SOURCE_ENTITY_ID])
         self._runtime_mode = str(data[CONF_RUNTIME_MODE])
-        self._power_threshold = float(
-            data.get(CONF_POWER_THRESHOLD, 0.0)
-        )
+        self._power_threshold = float(data.get(CONF_POWER_THRESHOLD, 0.0))
         self._power_hysteresis = float(
             data.get(
                 CONF_POWER_HYSTERESIS,
@@ -477,9 +484,11 @@ class DeviceRuntimeHoursSensor(RestoreSensor):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return runtime tracking metadata."""
+        """Return runtime tracking metadata and stable Asset identity."""
         source_state = self.hass.states.get(self._source_entity_id)
         attrs: dict[str, Any] = {
+            "asset_id": self._asset_id,
+            "asset_uuid": self._asset_uuid,
             "lahde_entiteetti": self._source_entity_id,
             "lahde_saatavilla": self._source_available(source_state),
             "seurantatapa": self._runtime_mode,
@@ -504,9 +513,7 @@ class DeviceRuntimeHoursSensor(RestoreSensor):
             last_sensor_data := await self.async_get_last_sensor_data()
         ) is not None and last_sensor_data.native_value is not None:
             try:
-                self._stored_hours = Decimal(
-                    str(last_sensor_data.native_value)
-                )
+                self._stored_hours = Decimal(str(last_sensor_data.native_value))
             except (InvalidOperation, TypeError, ValueError):
                 self._stored_hours = Decimal("0")
 
@@ -570,16 +577,15 @@ class DeviceRuntimeHoursSensor(RestoreSensor):
             self.async_write_ha_state()
 
     def _commit_elapsed(self, now: datetime) -> None:
-        """Move the active interval into the persisted runtime total."""
+        """Move the active interval into the restored runtime total."""
         if self._active_since is None:
             return
 
         elapsed = now - self._active_since
         if elapsed.total_seconds() > 0:
-            self._stored_hours += (
-                Decimal(str(elapsed.total_seconds()))
-                / Decimal("3600")
-            )
+            self._stored_hours += Decimal(
+                str(elapsed.total_seconds())
+            ) / Decimal("3600")
 
         self._active_since = None
 

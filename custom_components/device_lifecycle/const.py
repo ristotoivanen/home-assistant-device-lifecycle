@@ -1,9 +1,15 @@
 """Constants for Device Lifecycle."""
 
 DOMAIN = "device_lifecycle"
+CONFIG_ENTRY_VERSION = 4
 
 SUBENTRY_TYPE_PURCHASE = "purchase"
 SUBENTRY_TYPE_RUNTIME = "runtime"
+
+# Stable Asset Core references stored inside config subentries. The normalized
+# Asset/Purchase objects themselves live in Device Lifecycle storage.
+CONF_PURCHASE_UUID = "purchase_uuid"
+CONF_ASSET_UUID = "asset_uuid"
 
 CONF_DEVICE_ID = "device_id"
 CONF_DEVICE_IDS = "device_ids"
@@ -14,7 +20,9 @@ CONF_WARRANTY_TYPE = "warranty_type"
 CONF_WARRANTY_UNTIL = "warranty_until"
 CONF_SELLER = "seller"
 CONF_PURCHASE_PRICE = "purchase_price"
+CONF_CURRENCY = "currency"
 CONF_RECEIPT_REFERENCE = "receipt_reference"
+CONF_RECEIPT_URL = "receipt_url"
 CONF_NOTES = "notes"
 
 CONF_RUNTIME_MODE = "runtime_mode"

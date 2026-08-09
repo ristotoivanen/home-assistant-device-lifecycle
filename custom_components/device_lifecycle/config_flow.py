@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from math import isfinite
 from typing import Any
 
 import voluptuous as vol
@@ -26,6 +27,9 @@ from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_conversion import PowerConverter
 
 from .const import (
+    CONFIG_ENTRY_VERSION,
+    CONF_ASSET_UUID,
+    CONF_CURRENCY,
     CONF_DEVICE_ID,
     CONF_DEVICE_IDS,
     CONF_INSTALLED_DATE,
@@ -35,7 +39,9 @@ from .const import (
     CONF_PURCHASE_DATE,
     CONF_PURCHASE_NAME,
     CONF_PURCHASE_PRICE,
+    CONF_PURCHASE_UUID,
     CONF_RECEIPT_REFERENCE,
+    CONF_RECEIPT_URL,
     CONF_RUNTIME_MODE,
     CONF_SELLER,
     CONF_SOURCE_ENTITY_ID,
@@ -82,12 +88,16 @@ DEVICE_EXCLUDED_INTEGRATIONS = frozenset(
 )
 
 
-def _text_selector(*, multiline: bool = False) -> selector.TextSelector:
+def _text_selector(
+    *,
+    multiline: bool = False,
+    selector_type: selector.TextSelectorType = selector.TextSelectorType.TEXT,
+) -> selector.TextSelector:
     """Return a text selector."""
     return selector.TextSelector(
         selector.TextSelectorConfig(
             multiline=multiline,
-            type=selector.TextSelectorType.TEXT,
+            type=selector_type,
         )
     )
 
@@ -201,6 +211,7 @@ def _purchase_schema(
     key, val = optional(CONF_SELLER, _text_selector())
     fields[key] = val
 
+    currency = str(defaults.get(CONF_CURRENCY) or hass.config.currency)
     key, val = optional(
         CONF_PURCHASE_PRICE,
         selector.NumberSelector(
@@ -208,7 +219,7 @@ def _purchase_schema(
                 min=0,
                 max=1000000,
                 step=0.01,
-                unit_of_measurement="€",
+                unit_of_measurement=currency,
                 mode=selector.NumberSelectorMode.BOX,
             )
         ),
@@ -216,6 +227,12 @@ def _purchase_schema(
     fields[key] = val
 
     key, val = optional(CONF_RECEIPT_REFERENCE, _text_selector())
+    fields[key] = val
+
+    key, val = optional(
+        CONF_RECEIPT_URL,
+        _text_selector(selector_type=selector.TextSelectorType.URL),
+    )
     fields[key] = val
 
     key, val = optional(CONF_NOTES, _text_selector(multiline=True))
@@ -460,7 +477,7 @@ def _used_device_ids(
             continue
         if subentry.subentry_id == exclude_subentry_id:
             continue
-        used.update(subentry.data.get(CONF_DEVICE_IDS, []))
+        used.update(str(device_id) for device_id in subentry.data.get(CONF_DEVICE_IDS, []))
 
     return used
 
@@ -504,22 +521,32 @@ def _add_years(value: str, years: int) -> str | None:
 
 def _prepare_purchase_data(
     user_input: dict[str, Any],
+    *,
+    preserved_data: dict[str, Any] | None = None,
+    default_currency: str,
 ) -> tuple[dict[str, Any] | None, str | None]:
-    """Validate and normalize warranty data before saving."""
+    """Validate purchase data while preserving stable Asset Core references."""
     data = {
         key: value
         for key, value in user_input.items()
         if value not in (None, "")
     }
 
+    if CONF_PURCHASE_PRICE in data:
+        try:
+            purchase_price = float(data[CONF_PURCHASE_PRICE])
+        except (TypeError, ValueError):
+            return None, "invalid_purchase_price"
+        if not isfinite(purchase_price) or purchase_price < 0:
+            return None, "invalid_purchase_price"
+        data[CONF_PURCHASE_PRICE] = purchase_price
+
     warranty_type = str(data.get(CONF_WARRANTY_TYPE, WARRANTY_NONE))
     data[CONF_WARRANTY_TYPE] = warranty_type
 
     if warranty_type == WARRANTY_NONE:
         data.pop(CONF_WARRANTY_UNTIL, None)
-        return data, None
-
-    if warranty_type in (WARRANTY_ONE_YEAR, WARRANTY_TWO_YEARS):
+    elif warranty_type in (WARRANTY_ONE_YEAR, WARRANTY_TWO_YEARS):
         purchase_date = data.get(CONF_PURCHASE_DATE)
         if not purchase_date:
             return None, "purchase_date_required_for_warranty"
@@ -530,20 +557,27 @@ def _prepare_purchase_data(
             return None, "invalid_purchase_date"
 
         data[CONF_WARRANTY_UNTIL] = warranty_until
-        return data, None
-
-    if warranty_type == WARRANTY_MANUAL:
+    elif warranty_type == WARRANTY_MANUAL:
         if not data.get(CONF_WARRANTY_UNTIL):
             return None, "manual_warranty_date_required"
-        return data, None
+    else:
+        return None, "invalid_warranty_type"
 
-    return None, "invalid_warranty_type"
+    preserved = dict(preserved_data or {})
+    data[CONF_CURRENCY] = str(
+        preserved.get(CONF_CURRENCY) or default_currency
+    )
+    if purchase_uuid := preserved.get(CONF_PURCHASE_UUID):
+        data[CONF_PURCHASE_UUID] = str(purchase_uuid)
+
+    return data, None
 
 
 def _prepare_runtime_data(
     user_input: dict[str, Any],
     *,
     device_id: str | None = None,
+    asset_uuid: str | None = None,
 ) -> tuple[dict[str, Any] | None, str | None]:
     """Validate and normalize runtime tracking data."""
     data = {
@@ -554,6 +588,8 @@ def _prepare_runtime_data(
 
     if device_id is not None:
         data[CONF_DEVICE_ID] = device_id
+    if asset_uuid:
+        data[CONF_ASSET_UUID] = asset_uuid
 
     runtime_mode = str(data.get(CONF_RUNTIME_MODE, RUNTIME_MODE_ON))
     if runtime_mode not in RUNTIME_MODES:
@@ -617,7 +653,7 @@ def _runtime_source_error(
 class DeviceLifecycleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Create exactly one parent integration entry."""
 
-    VERSION = 3
+    VERSION = CONFIG_ENTRY_VERSION
 
     async def async_step_user(
         self,
@@ -676,7 +712,7 @@ class PurchaseSubentryFlow(ConfigSubentryFlow):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            device_ids = list(user_input.get(CONF_DEVICE_IDS, []))
+            device_ids = [str(item) for item in user_input.get(CONF_DEVICE_IDS, [])]
 
             if not device_ids:
                 errors["base"] = "no_devices"
@@ -693,7 +729,10 @@ class PurchaseSubentryFlow(ConfigSubentryFlow):
                 elif _used_device_ids(entry).intersection(device_ids):
                     errors["base"] = "already_tracked"
                 else:
-                    clean, error = _prepare_purchase_data(user_input)
+                    clean, error = _prepare_purchase_data(
+                        user_input,
+                        default_currency=str(self.hass.config.currency),
+                    )
                     if error:
                         errors["base"] = error
                     elif clean is not None:
@@ -718,7 +757,7 @@ class PurchaseSubentryFlow(ConfigSubentryFlow):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            device_ids = list(user_input.get(CONF_DEVICE_IDS, []))
+            device_ids = [str(item) for item in user_input.get(CONF_DEVICE_IDS, [])]
 
             if not device_ids:
                 errors["base"] = "no_devices"
@@ -738,7 +777,11 @@ class PurchaseSubentryFlow(ConfigSubentryFlow):
                 ).intersection(device_ids):
                     errors["base"] = "already_tracked"
                 else:
-                    clean, error = _prepare_purchase_data(user_input)
+                    clean, error = _prepare_purchase_data(
+                        user_input,
+                        preserved_data=dict(subentry.data),
+                        default_currency=str(self.hass.config.currency),
+                    )
                     if error:
                         errors["base"] = error
                     elif clean is not None:
@@ -947,6 +990,10 @@ class RuntimeSubentryFlow(ConfigSubentryFlow):
                 clean, error = _prepare_runtime_data(
                     combined,
                     device_id=device_id,
+                    asset_uuid=str(
+                        subentry.data.get(CONF_ASSET_UUID) or ""
+                    )
+                    or None,
                 )
                 if error:
                     errors["base"] = error

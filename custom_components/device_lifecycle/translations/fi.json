@@ -16,7 +16,7 @@
       "step": {
         "user": {
           "title": "Lisää ostos",
-          "description": "Valitse kaikki samaan ostokseen kuuluvat fyysiset laitteet ja syötä yhteiset tiedot vain kerran. Selvästi järjestelmä- ja ohjelmistolaitteita suodatetaan pois laitelistasta.",
+          "description": "Valitse kaikki samaan ostokseen kuuluvat fyysiset laitteet ja syötä yhteiset tiedot vain kerran. Device Lifecycle luo jokaiselle fyysiselle laitteelle pysyvän elinkaaritunnisteen.",
           "data": {
             "device_ids": "Ostokseen kuuluvat laitteet",
             "purchase_name": "Ostoksen nimi",
@@ -27,19 +27,21 @@
             "seller": "Myyjä",
             "purchase_price": "Ostoksen kokonaishinta",
             "receipt_reference": "Kuitti- tai tilausviite",
+            "receipt_url": "Kuitin tai laskun URL",
             "notes": "Huomautukset"
           },
           "data_description": {
-            "device_ids": "Valitse yksi tai useampi fyysinen Home Assistant -laite. Sama laite voi kuulua vain yhteen ostokseen. Suodatus on tarkoituksella konservatiivinen: epäselvät laitteet jätetään näkyviin.",
+            "device_ids": "Valitse yksi tai useampi fyysinen Home Assistant -laite. Sama laite voi kuulua vain yhteen aktiiviseen ostokseen. Suodatus on tarkoituksella konservatiivinen: epäselvät laitteet jätetään näkyviin.",
             "purchase_name": "Esimerkiksi Hue-aloituspakkaus 8/2026.",
             "warranty_type": "1 v ja 2 v lasketaan automaattisesti ostopäivästä. Valitse Manuaalinen vain, jos haluat antaa muun päättymispäivän.",
             "warranty_until": "Käytetään vain, kun Takuu = Manuaalinen. Muissa vaihtoehdoissa integraatio laskee päivämäärän automaattisesti.",
-            "purchase_price": "Koko ostoksen hinta, ei yhden laitteen kappalehinta."
+            "purchase_price": "Koko ostoksen hinta, ei yhden laitteen kappalehinta. Ostoksen yhteyteen tallennetaan Home Assistantissa määritetty valuutta.",
+            "receipt_url": "Valinnainen URL kuittiin, laskuun tai muuhun ostodokumenttiin."
           }
         },
         "reconfigure": {
           "title": "Muokkaa ostosta",
-          "description": "Muokkaa ostoksen tietoja tai siihen kuuluvia laitteita. Poistettu laite menettää vain tämän ostoksen Elinkaari-sensorin.",
+          "description": "Muokkaa ostoksen tietoja tai siihen kuuluvia laitteita. Laitteen poistaminen ostoksesta poistaa sen tämän ostoksen Elinkaari-entiteetin, mutta pysyvä elinkaaritunniste säilyy.",
           "data": {
             "device_ids": "Ostokseen kuuluvat laitteet",
             "purchase_name": "Ostoksen nimi",
@@ -50,13 +52,15 @@
             "seller": "Myyjä",
             "purchase_price": "Ostoksen kokonaishinta",
             "receipt_reference": "Kuitti- tai tilausviite",
+            "receipt_url": "Kuitin tai laskun URL",
             "notes": "Huomautukset"
           },
           "data_description": {
             "device_ids": "Voit lisätä tai poistaa tähän ostokseen kuuluvia fyysisiä laitteita. Selvästi järjestelmä- ja ohjelmistolaitteita suodatetaan pois, mutta epäselvät jätetään näkyviin.",
             "warranty_type": "1 v ja 2 v lasketaan automaattisesti ostopäivästä. Manuaalinen käyttää alla olevaa päivämäärää.",
             "warranty_until": "Käytetään vain, kun Takuu = Manuaalinen.",
-            "purchase_price": "Koko ostoksen hinta, ei yhden laitteen kappalehinta."
+            "purchase_price": "Koko ostoksen hinta, ei yhden laitteen kappalehinta. Ostos säilyttää luotaessa tallennetun valuutan.",
+            "receipt_url": "Valinnainen URL kuittiin, laskuun tai muuhun ostodokumenttiin."
           }
         }
       },
@@ -67,6 +71,7 @@
         "purchase_date_required_for_warranty": "1 tai 2 vuoden takuu tarvitsee ostopäivän, jotta päättymispäivä voidaan laskea.",
         "manual_warranty_date_required": "Anna manuaalinen takuun päättymispäivä.",
         "invalid_purchase_date": "Ostopäivää ei voitu tulkita.",
+        "invalid_purchase_price": "Ostoksen kokonaishinnan pitää olla vähintään nolla.",
         "invalid_warranty_type": "Takuun tyyppi ei ole kelvollinen.",
         "service_device_not_allowed": "Valittu kohde on Home Assistant -palvelu eikä fyysinen laite."
       }
@@ -80,13 +85,13 @@
       "step": {
         "user": {
           "title": "Lisää käyttötuntiseuranta",
-          "description": "Valitse ensin fyysinen laite ja tapa, jolla laitteen käyntiaika tunnistetaan.",
+          "description": "Valitse ensin fyysinen laite ja käyntiajan tunnistustapa. Seuraavaksi valitaan siihen sopiva lähde-entiteetti.",
           "data": {
             "device_id": "Seurattava laite",
             "runtime_mode": "Seurantatapa"
           },
           "data_description": {
-            "device_id": "Käyttötunnit-sensori liitetään tähän fyysiseen Home Assistant -laitteeseen. Service-tyyppisiä HA-palvelulaitteita ei hyväksytä.",
+            "device_id": "Käyttötunnit-sensori liitetään tähän fyysiseen Home Assistant -laitteeseen ja sen pysyvään elinkaaritunnisteeseen. Service-tyyppisiä HA-palvelulaitteita ei hyväksytä.",
             "runtime_mode": "Valitse tunnistetaanko käynti entiteetin päällä-tilasta vai mitatusta tehosta."
           }
         },
@@ -106,7 +111,7 @@
         },
         "reconfigure": {
           "title": "Muokkaa käyttötuntiseurantaa",
-          "description": "Valitse käyntiajan tunnistustapa. Seurattava fyysinen laite ei muutu.",
+          "description": "Valitse käyntiajan tunnistustapa. Seuraavaksi valitaan siihen sopiva lähde-entiteetti. Seurattava fyysinen laite ei muutu.",
           "data": {
             "runtime_mode": "Seurantatapa"
           },
