@@ -532,6 +532,19 @@ def _prepare_purchase_data(
         if value not in (None, "")
     }
 
+    # For a new purchase, an omitted installation date defaults to the
+    # purchase date. Reconfiguration never forces this default so users can
+    # later change or clear the installation date independently.
+    if (
+        preserved_data is None
+        and CONF_PURCHASE_DATE in data
+        and CONF_INSTALLED_DATE not in data
+    ):
+        purchase_date = dt_util.parse_date(str(data[CONF_PURCHASE_DATE]))
+        if purchase_date is None:
+            return None, "invalid_purchase_date"
+        data[CONF_INSTALLED_DATE] = purchase_date.isoformat()
+
     if CONF_PURCHASE_PRICE in data:
         try:
             purchase_price = float(data[CONF_PURCHASE_PRICE])
