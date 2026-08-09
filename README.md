@@ -18,7 +18,12 @@ Lifecycle status text follows the Home Assistant system language. English and Fi
 - Warranty status is visible directly on the device page
 - Manufacturer, model, model ID, serial number, firmware and hardware version are read from Home Assistant when available
 - Optional per-device cumulative runtime tracking
-- Runtime can be detected from an entity being `on` or from a numeric power sensor exceeding a configurable threshold
+- Runtime can be detected from an entity being `on` or from a power sensor exceeding a configurable threshold
+- Runtime source pickers are filtered for the selected tracking mode
+- Power tracking supports configurable hysteresis to avoid threshold chatter
+- Runtime sources are validated again when the configuration is saved
+- Device Lifecycle's own entities are excluded from runtime source selection
+- Obvious system/software integrations are conservatively filtered from purchase device selection
 - Runtime totals are restored across Home Assistant restarts
 - Finnish and English UI translations
 
@@ -87,6 +92,8 @@ For each purchase you can store:
 
 The purchase price is the total price of the purchase, not a per-device price.
 
+The purchase device picker deliberately filters only integrations that are clearly system/software-only. Ambiguous devices remain visible rather than risking the accidental removal of a real physical device from the picker.
+
 ## Warranty
 
 Available warranty modes:
@@ -104,10 +111,14 @@ Runtime tracking is optional and configured separately for each physical device.
 
 Available tracking methods:
 
-- **Entity state is on**: counts time while the selected source entity state is `on`. This is suitable for lights, switches and similar entities.
-- **Power above threshold**: counts time while a numeric source entity is above the configured watt threshold. This is suitable for devices whose actual operation is best detected from measured power.
+- **Entity state is on**: counts time while the selected source entity state is `on`. The source picker is limited to sensible on/off domains such as switches, lights, binary sensors, input booleans and fans.
+- **Power above threshold**: counts time while a source sensor with the Home Assistant `power` device class is above the configured watt threshold. Energy (`kWh`), current (`A`), voltage (`V`) and frequency (`Hz`) sensors are not valid power sources.
 
-Runtime setup uses two short steps. First select the target device and tracking method, then select the source entity. The power threshold field is shown only for **Power above threshold** mode.
+Runtime setup uses two short steps. First select the target device and tracking method, then select the source entity. Power threshold and hysteresis are shown only for **Power above threshold** mode.
+
+Power hysteresis is optional and defaults to `0 W` to preserve the behavior of existing runtime trackers. For example, a `10 W` threshold with `2 W` hysteresis starts runtime above `10 W` and stops it below `8 W`; values between those limits retain the current running state.
+
+The selected source is validated again when the configuration is saved. This prevents a manually supplied or stale selector value from bypassing the source rules.
 
 The integration creates a cumulative **Runtime hours** sensor on the selected physical device. The entity name is localized as **Käyttötunnit** in Finnish.
 

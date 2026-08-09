@@ -20,6 +20,7 @@ CONF_NOTES = "notes"
 CONF_RUNTIME_MODE = "runtime_mode"
 CONF_SOURCE_ENTITY_ID = "source_entity_id"
 CONF_POWER_THRESHOLD = "power_threshold"
+CONF_POWER_HYSTERESIS = "power_hysteresis"
 
 WARRANTY_NONE = "none"
 WARRANTY_ONE_YEAR = "1_year"
@@ -42,3 +43,4 @@ RUNTIME_MODES = (
 )
 
 DEFAULT_POWER_THRESHOLD = 1.0
+DEFAULT_POWER_HYSTERESIS = 0.0

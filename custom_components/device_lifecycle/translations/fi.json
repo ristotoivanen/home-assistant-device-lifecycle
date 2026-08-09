@@ -16,7 +16,7 @@
       "step": {
         "user": {
           "title": "Lisää ostos",
-          "description": "Valitse kaikki samaan ostokseen kuuluvat fyysiset laitteet ja syötä yhteiset tiedot vain kerran.",
+          "description": "Valitse kaikki samaan ostokseen kuuluvat fyysiset laitteet ja syötä yhteiset tiedot vain kerran. Selvästi järjestelmä- ja ohjelmistolaitteita suodatetaan pois laitelistasta.",
           "data": {
             "device_ids": "Ostokseen kuuluvat laitteet",
             "purchase_name": "Ostoksen nimi",
@@ -30,7 +30,7 @@
             "notes": "Huomautukset"
           },
           "data_description": {
-            "device_ids": "Valitse yksi tai useampi fyysinen Home Assistant -laite. Sama laite voi kuulua vain yhteen ostokseen.",
+            "device_ids": "Valitse yksi tai useampi fyysinen Home Assistant -laite. Sama laite voi kuulua vain yhteen ostokseen. Suodatus on tarkoituksella konservatiivinen: epäselvät laitteet jätetään näkyviin.",
             "purchase_name": "Esimerkiksi Hue-aloituspakkaus 8/2026.",
             "warranty_type": "1 v ja 2 v lasketaan automaattisesti ostopäivästä. Valitse Manuaalinen vain, jos haluat antaa muun päättymispäivän.",
             "warranty_until": "Käytetään vain, kun Takuu = Manuaalinen. Muissa vaihtoehdoissa integraatio laskee päivämäärän automaattisesti.",
@@ -53,7 +53,7 @@
             "notes": "Huomautukset"
           },
           "data_description": {
-            "device_ids": "Voit lisätä tai poistaa tähän ostokseen kuuluvia fyysisiä laitteita.",
+            "device_ids": "Voit lisätä tai poistaa tähän ostokseen kuuluvia fyysisiä laitteita. Selvästi järjestelmä- ja ohjelmistolaitteita suodatetaan pois, mutta epäselvät jätetään näkyviin.",
             "warranty_type": "1 v ja 2 v lasketaan automaattisesti ostopäivästä. Manuaalinen käyttää alla olevaa päivämäärää.",
             "warranty_until": "Käytetään vain, kun Takuu = Manuaalinen.",
             "purchase_price": "Koko ostoksen hinta, ei yhden laitteen kappalehinta."
@@ -91,14 +91,16 @@
         },
         "runtime_source": {
           "title": "Määritä käyntiajan lähde",
-          "description": "Valitse käynnin tunnistamiseen käytettävä lähde-entiteetti. Tehoraja näytetään vain, kun valittuna on Teho yli rajan.",
+          "description": "Lähdelista suodatetaan valitun seurantatavan mukaan. Tehoseurannassa näytetään vain varsinaiset tehosensorit ja päällä-tilassa järkevät on/off-entiteetit.",
           "data": {
             "source_entity_id": "Lähde-entiteetti",
-            "power_threshold": "Tehoraja"
+            "power_threshold": "Tehoraja",
+            "power_hysteresis": "Hystereesi"
           },
           "data_description": {
-            "source_entity_id": "Tila päällä -seurannassa valitse esimerkiksi valo tai kytkin. Tehoseurannassa valitse numeerinen tehosensori.",
-            "power_threshold": "Käyntiaikaa kertyy, kun lähteen arvo ylittää tämän wattirajan."
+            "source_entity_id": "Tehoseurannassa hyväksytään sensorit, joiden device class on Power. Tila päällä -seurannassa hyväksytään kytkimet, valot, binary sensorit, input booleanit ja fanit. Device Lifecyclen omia entiteettejä ei näytetä.",
+            "power_threshold": "Käynti alkaa, kun lähteen arvo ylittää tämän wattirajan.",
+            "power_hysteresis": "Estää sahaamisen tehorajan ympärillä. Esim. raja 10 W ja hystereesi 2 W: käynti alkaa yli 10 W ja pysähtyy alle 8 W. Arvon pitää olla 0...tehoraja."
           }
         },
         "reconfigure": {
@@ -113,14 +115,16 @@
         },
         "reconfigure_source": {
           "title": "Määritä käyntiajan lähde",
-          "description": "Muuta lähde-entiteettiä. Tehoraja näytetään vain, kun valittuna on Teho yli rajan.",
+          "description": "Lähdelista suodatetaan valitun seurantatavan mukaan. Tehoraja ja hystereesi näytetään vain tehotilassa.",
           "data": {
             "source_entity_id": "Lähde-entiteetti",
-            "power_threshold": "Tehoraja"
+            "power_threshold": "Tehoraja",
+            "power_hysteresis": "Hystereesi"
           },
           "data_description": {
-            "source_entity_id": "Tila päällä -seurannassa valitse esimerkiksi valo tai kytkin. Tehoseurannassa valitse numeerinen tehosensori.",
-            "power_threshold": "Käyntiaikaa kertyy, kun lähteen arvo ylittää tämän wattirajan."
+            "source_entity_id": "Valitse vain kyseiseen seurantatapaan sopiva lähde. Device Lifecyclen omat entiteetit on poistettu listasta.",
+            "power_threshold": "Käynti alkaa, kun lähteen arvo ylittää tämän wattirajan.",
+            "power_hysteresis": "Esim. raja 10 W ja hystereesi 2 W: käynti pysähtyy vasta alle 8 W. Vanhoille seurannoille oletus on 0 W, joten päivitys ei muuta niiden käyttäytymistä itsestään."
           }
         }
       },
@@ -129,8 +133,12 @@
         "runtime_already_tracked": "Tällä laitteella on jo käyttötuntiseuranta.",
         "source_missing": "Valittua lähde-entiteettiä ei tällä hetkellä löydy Home Assistantista.",
         "source_required": "Valitse lähde-entiteetti.",
+        "invalid_power_source": "Tehoseurannan lähteen pitää olla sensor-entiteetti, jonka device class on Power.",
+        "invalid_on_state_source": "Tila päällä -seurannan lähteen pitää olla tuettu on/off-entiteetti.",
         "power_threshold_required": "Anna Tehoraja-tilalle tehoraja.",
         "invalid_power_threshold": "Tehorajan pitää olla vähintään nolla.",
+        "invalid_power_hysteresis": "Hystereesin pitää olla vähintään nolla.",
+        "power_hysteresis_too_large": "Hystereesi ei voi olla tehorajaa suurempi.",
         "invalid_runtime_mode": "Käyttötuntiseurannan tapa ei ole kelvollinen."
       }
     }

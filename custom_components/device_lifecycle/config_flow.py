@@ -8,6 +8,7 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant import config_entries
+from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlowResult,
@@ -17,8 +18,9 @@ from homeassistant.config_entries import (
     SubentryFlowContext,
     SubentryFlowResult,
 )
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, State, callback
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
 from homeassistant.util import dt as dt_util
 
@@ -27,6 +29,7 @@ from .const import (
     CONF_DEVICE_IDS,
     CONF_INSTALLED_DATE,
     CONF_NOTES,
+    CONF_POWER_HYSTERESIS,
     CONF_POWER_THRESHOLD,
     CONF_PURCHASE_DATE,
     CONF_PURCHASE_NAME,
@@ -37,6 +40,7 @@ from .const import (
     CONF_SOURCE_ENTITY_ID,
     CONF_WARRANTY_TYPE,
     CONF_WARRANTY_UNTIL,
+    DEFAULT_POWER_HYSTERESIS,
     DEFAULT_POWER_THRESHOLD,
     DOMAIN,
     RUNTIME_MODE_ON,
@@ -52,6 +56,28 @@ from .const import (
 )
 
 MAIN_UNIQUE_ID = "device_lifecycle_main"
+
+ON_STATE_SOURCE_DOMAINS = frozenset(
+    {
+        "binary_sensor",
+        "fan",
+        "input_boolean",
+        "light",
+        "switch",
+    }
+)
+
+# Keep this list deliberately short and conservative. These integrations create
+# software/system devices rather than physical assets users would normally buy.
+PURCHASE_EXCLUDED_INTEGRATIONS = frozenset(
+    {
+        DOMAIN,
+        "better_thermostat",
+        "browser_mod",
+        "hacs",
+        "hassio",
+    }
+)
 
 
 def _text_selector(*, multiline: bool = False) -> selector.TextSelector:
@@ -83,7 +109,36 @@ def _purchase_defaults(data: dict[str, Any] | None) -> dict[str, Any]:
     return defaults
 
 
-def _purchase_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
+def _purchase_device_selector(hass: HomeAssistant) -> selector.DeviceSelector:
+    """Return a conservative device selector with obvious software devices hidden."""
+    integrations = sorted(
+        {
+            entry.domain
+            for entry in hass.config_entries.async_entries()
+            if entry.domain not in PURCHASE_EXCLUDED_INTEGRATIONS
+        }
+    )
+
+    if not integrations:
+        return selector.DeviceSelector(
+            selector.DeviceSelectorConfig(multiple=True)
+        )
+
+    return selector.DeviceSelector(
+        selector.DeviceSelectorConfig(
+            multiple=True,
+            filter=[
+                selector.DeviceFilterSelectorConfig(integration=integration)
+                for integration in integrations
+            ],
+        )
+    )
+
+
+def _purchase_schema(
+    hass: HomeAssistant,
+    defaults: dict[str, Any] | None = None,
+) -> vol.Schema:
     """Build the add/edit purchase form."""
     defaults = _purchase_defaults(defaults)
 
@@ -96,9 +151,7 @@ def _purchase_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
         vol.Required(
             CONF_DEVICE_IDS,
             default=defaults.get(CONF_DEVICE_IDS, []),
-        ): selector.DeviceSelector(
-            selector.DeviceSelectorConfig(multiple=True)
-        ),
+        ): _purchase_device_selector(hass),
     }
 
     key, val = optional(CONF_PURCHASE_NAME, _text_selector())
@@ -186,7 +239,84 @@ def _runtime_start_schema(
     return vol.Schema(fields)
 
 
+def _entity_platform(
+    entity_registry: er.EntityRegistry,
+    entity_id: str,
+) -> str | None:
+    """Return the integration platform that owns an entity, if registered."""
+    entry = entity_registry.async_get(entity_id)
+    return entry.platform if entry is not None else None
+
+
+def _state_device_class(
+    entity_registry: er.EntityRegistry,
+    state: State,
+) -> str | None:
+    """Return a normalized sensor device class from state or registry."""
+    device_class = state.attributes.get("device_class")
+
+    if device_class is None:
+        registry_entry = entity_registry.async_get(state.entity_id)
+        if registry_entry is not None:
+            device_class = getattr(
+                registry_entry,
+                "original_device_class",
+                None,
+            )
+
+    if device_class is None:
+        return None
+
+    return str(getattr(device_class, "value", device_class))
+
+
+def _is_valid_runtime_source(
+    hass: HomeAssistant,
+    entity_id: str,
+    runtime_mode: str,
+) -> bool:
+    """Return whether an entity is a suitable runtime source for the mode."""
+    state = hass.states.get(entity_id)
+    if state is None:
+        return False
+
+    entity_registry = er.async_get(hass)
+    if _entity_platform(entity_registry, entity_id) == DOMAIN:
+        return False
+
+    domain = entity_id.split(".", 1)[0]
+
+    if runtime_mode == RUNTIME_MODE_ON:
+        return domain in ON_STATE_SOURCE_DOMAINS
+
+    if runtime_mode == RUNTIME_MODE_POWER:
+        return (
+            domain == "sensor"
+            and _state_device_class(entity_registry, state)
+            == SensorDeviceClass.POWER.value
+        )
+
+    return False
+
+
+def _runtime_source_candidates(
+    hass: HomeAssistant,
+    runtime_mode: str,
+) -> list[str]:
+    """Return runtime source entities suitable for the selected mode."""
+    return sorted(
+        state.entity_id
+        for state in hass.states.async_all()
+        if _is_valid_runtime_source(
+            hass,
+            state.entity_id,
+            runtime_mode,
+        )
+    )
+
+
 def _runtime_source_schema(
+    hass: HomeAssistant,
     runtime_mode: str,
     defaults: dict[str, Any] | None = None,
 ) -> vol.Schema:
@@ -195,12 +325,25 @@ def _runtime_source_schema(
     fields: dict[Any, Any] = {}
 
     source_key = vol.Required(CONF_SOURCE_ENTITY_ID)
-    if defaults.get(CONF_SOURCE_ENTITY_ID):
+    default_source = str(defaults.get(CONF_SOURCE_ENTITY_ID) or "")
+    if default_source and _is_valid_runtime_source(
+        hass,
+        default_source,
+        runtime_mode,
+    ):
         source_key = vol.Required(
             CONF_SOURCE_ENTITY_ID,
-            default=defaults[CONF_SOURCE_ENTITY_ID],
+            default=default_source,
         )
-    fields[source_key] = selector.EntitySelector()
+
+    fields[source_key] = selector.EntitySelector(
+        selector.EntitySelectorConfig(
+            include_entities=_runtime_source_candidates(
+                hass,
+                runtime_mode,
+            )
+        )
+    )
 
     if runtime_mode == RUNTIME_MODE_POWER:
         fields[
@@ -209,6 +352,24 @@ def _runtime_source_schema(
                 default=defaults.get(
                     CONF_POWER_THRESHOLD,
                     DEFAULT_POWER_THRESHOLD,
+                ),
+            )
+        ] = selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0,
+                max=1000000,
+                step=0.1,
+                unit_of_measurement="W",
+                mode=selector.NumberSelectorMode.BOX,
+            )
+        )
+
+        fields[
+            vol.Required(
+                CONF_POWER_HYSTERESIS,
+                default=defaults.get(
+                    CONF_POWER_HYSTERESIS,
+                    DEFAULT_POWER_HYSTERESIS,
                 ),
             )
         ] = selector.NumberSelector(
@@ -303,7 +464,6 @@ def _add_years(value: str, years: int) -> str | None:
     try:
         result = purchase_date.replace(year=purchase_date.year + years)
     except ValueError:
-        # Handles leap-day purchases: 29 Feb -> 28 Feb.
         result = purchase_date.replace(
             year=purchase_date.year + years,
             month=2,
@@ -376,17 +536,53 @@ def _prepare_runtime_data(
     if runtime_mode == RUNTIME_MODE_POWER:
         if CONF_POWER_THRESHOLD not in data:
             return None, "power_threshold_required"
+
         try:
             threshold = float(data[CONF_POWER_THRESHOLD])
+            hysteresis = float(
+                data.get(
+                    CONF_POWER_HYSTERESIS,
+                    DEFAULT_POWER_HYSTERESIS,
+                )
+            )
         except (TypeError, ValueError):
             return None, "invalid_power_threshold"
+
         if threshold < 0:
             return None, "invalid_power_threshold"
+        if hysteresis < 0:
+            return None, "invalid_power_hysteresis"
+        if hysteresis > threshold:
+            return None, "power_hysteresis_too_large"
+
         data[CONF_POWER_THRESHOLD] = threshold
+        data[CONF_POWER_HYSTERESIS] = hysteresis
     else:
         data.pop(CONF_POWER_THRESHOLD, None)
+        data.pop(CONF_POWER_HYSTERESIS, None)
 
     return data, None
+
+
+def _runtime_source_error(
+    hass: HomeAssistant,
+    source_entity_id: str,
+    runtime_mode: str,
+) -> str | None:
+    """Return a localized flow error key for an unsuitable runtime source."""
+    if hass.states.get(source_entity_id) is None:
+        return "source_missing"
+
+    if _is_valid_runtime_source(hass, source_entity_id, runtime_mode):
+        return None
+
+    if runtime_mode == RUNTIME_MODE_POWER:
+        return "invalid_power_source"
+
+    if runtime_mode == RUNTIME_MODE_ON:
+        return "invalid_on_state_source"
+
+    return "invalid_runtime_mode"
 
 
 class DeviceLifecycleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -474,7 +670,7 @@ class PurchaseSubentryFlow(ConfigSubentryFlow):
 
         return self.async_show_form(
             step_id="user",
-            data_schema=_purchase_schema(user_input),
+            data_schema=_purchase_schema(self.hass, user_input),
             errors=errors,
         )
 
@@ -522,7 +718,7 @@ class PurchaseSubentryFlow(ConfigSubentryFlow):
 
         return self.async_show_form(
             step_id="reconfigure",
-            data_schema=_purchase_schema(defaults),
+            data_schema=_purchase_schema(self.hass, defaults),
             errors=errors,
         )
 
@@ -594,7 +790,6 @@ class RuntimeSubentryFlow(ConfigSubentryFlow):
         if not context:
             return await self.async_step_user()
 
-        entry = self._get_entry()
         device_id = str(context[CONF_DEVICE_ID])
         runtime_mode = str(context[CONF_RUNTIME_MODE])
         errors: dict[str, str] = {}
@@ -604,8 +799,12 @@ class RuntimeSubentryFlow(ConfigSubentryFlow):
                 user_input.get(CONF_SOURCE_ENTITY_ID) or ""
             )
 
-            if self.hass.states.get(source_entity_id) is None:
-                errors["base"] = "source_missing"
+            if error := _runtime_source_error(
+                self.hass,
+                source_entity_id,
+                runtime_mode,
+            ):
+                errors["base"] = error
             else:
                 combined = {
                     CONF_DEVICE_ID: device_id,
@@ -625,6 +824,7 @@ class RuntimeSubentryFlow(ConfigSubentryFlow):
         return self.async_show_form(
             step_id="runtime_source",
             data_schema=_runtime_source_schema(
+                self.hass,
                 runtime_mode,
                 user_input,
             ),
@@ -690,8 +890,12 @@ class RuntimeSubentryFlow(ConfigSubentryFlow):
                 user_input.get(CONF_SOURCE_ENTITY_ID) or ""
             )
 
-            if self.hass.states.get(source_entity_id) is None:
-                errors["base"] = "source_missing"
+            if error := _runtime_source_error(
+                self.hass,
+                source_entity_id,
+                runtime_mode,
+            ):
+                errors["base"] = error
             else:
                 combined = {
                     CONF_RUNTIME_MODE: runtime_mode,
@@ -721,6 +925,7 @@ class RuntimeSubentryFlow(ConfigSubentryFlow):
         return self.async_show_form(
             step_id="reconfigure_source",
             data_schema=_runtime_source_schema(
+                self.hass,
                 runtime_mode,
                 defaults,
             ),

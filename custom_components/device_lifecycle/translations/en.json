@@ -16,7 +16,7 @@
       "step": {
         "user": {
           "title": "Add purchase",
-          "description": "Select all physical devices belonging to the same purchase and enter the shared data only once.",
+          "description": "Select all physical devices belonging to the same purchase and enter the shared data only once. Obvious system and software devices are filtered from the device list.",
           "data": {
             "device_ids": "Devices in purchase",
             "purchase_name": "Purchase name",
@@ -30,7 +30,7 @@
             "notes": "Notes"
           },
           "data_description": {
-            "device_ids": "Select one or more physical Home Assistant devices. A device can belong to only one purchase.",
+            "device_ids": "Select one or more physical Home Assistant devices. A device can belong to only one purchase. Filtering is deliberately conservative, so ambiguous devices remain visible.",
             "purchase_name": "For example Hue starter kit 8/2026.",
             "warranty_type": "1 and 2 year warranties are calculated automatically from the purchase date. Use Manual only for another end date.",
             "warranty_until": "Used only when Warranty = Manual.",
@@ -53,7 +53,7 @@
             "notes": "Notes"
           },
           "data_description": {
-            "device_ids": "Add or remove physical devices belonging to this purchase.",
+            "device_ids": "Add or remove physical devices belonging to this purchase. Obvious system/software devices are filtered, while ambiguous devices remain visible.",
             "warranty_type": "1 and 2 year warranties are calculated automatically from the purchase date. Manual uses the date below.",
             "warranty_until": "Used only when Warranty = Manual.",
             "purchase_price": "Total purchase price, not per-device price."
@@ -91,14 +91,16 @@
         },
         "runtime_source": {
           "title": "Configure runtime source",
-          "description": "Select the source entity used to detect operation. Power threshold is shown only when Power above threshold is selected.",
+          "description": "The source list is filtered for the selected tracking method. Power mode shows only actual power sensors; on-state mode shows sensible on/off entities.",
           "data": {
             "source_entity_id": "Source entity",
-            "power_threshold": "Power threshold"
+            "power_threshold": "Power threshold",
+            "power_hysteresis": "Hysteresis"
           },
           "data_description": {
-            "source_entity_id": "For on-state tracking, select a light, switch or similar entity. For power tracking, select a numeric power sensor.",
-            "power_threshold": "Runtime accumulates while the source value is above this watt limit."
+            "source_entity_id": "Power mode accepts sensor entities with the Power device class. On-state mode accepts switches, lights, binary sensors, input booleans and fans. Device Lifecycle's own entities are excluded.",
+            "power_threshold": "Runtime starts when the source value rises above this watt threshold.",
+            "power_hysteresis": "Prevents toggling around the threshold. Example: 10 W threshold and 2 W hysteresis starts above 10 W and stops below 8 W. Must be between 0 and the threshold."
           }
         },
         "reconfigure": {
@@ -113,14 +115,16 @@
         },
         "reconfigure_source": {
           "title": "Configure runtime source",
-          "description": "Change the source entity. Power threshold is shown only when Power above threshold is selected.",
+          "description": "The source list is filtered for the selected tracking method. Power threshold and hysteresis are shown only in power mode.",
           "data": {
             "source_entity_id": "Source entity",
-            "power_threshold": "Power threshold"
+            "power_threshold": "Power threshold",
+            "power_hysteresis": "Hysteresis"
           },
           "data_description": {
-            "source_entity_id": "For on-state tracking, select a light, switch or similar entity. For power tracking, select a numeric power sensor.",
-            "power_threshold": "Runtime accumulates while the source value is above this watt limit."
+            "source_entity_id": "Select a source suitable for the chosen mode. Device Lifecycle's own entities are excluded.",
+            "power_threshold": "Runtime starts when the source value rises above this watt threshold.",
+            "power_hysteresis": "Example: 10 W threshold and 2 W hysteresis stops only below 8 W. Existing trackers default to 0 W hysteresis, preserving old behavior."
           }
         }
       },
@@ -129,8 +133,12 @@
         "runtime_already_tracked": "This device already has runtime tracking.",
         "source_missing": "The selected source entity is not currently available in Home Assistant.",
         "source_required": "Select a source entity.",
+        "invalid_power_source": "Power tracking requires a sensor entity with the Power device class.",
+        "invalid_on_state_source": "On-state tracking requires a supported on/off entity.",
         "power_threshold_required": "Enter a power threshold for Power mode.",
         "invalid_power_threshold": "The power threshold must be zero or greater.",
+        "invalid_power_hysteresis": "The hysteresis must be zero or greater.",
+        "power_hysteresis_too_large": "The hysteresis cannot be greater than the power threshold.",
         "invalid_runtime_mode": "The runtime tracking method is invalid."
       }
     }

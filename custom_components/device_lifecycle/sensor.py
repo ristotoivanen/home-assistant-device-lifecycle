@@ -40,6 +40,7 @@ from .const import (
     CONF_DEVICE_IDS,
     CONF_INSTALLED_DATE,
     CONF_NOTES,
+    CONF_POWER_HYSTERESIS,
     CONF_POWER_THRESHOLD,
     CONF_PURCHASE_DATE,
     CONF_PURCHASE_NAME,
@@ -50,6 +51,7 @@ from .const import (
     CONF_SOURCE_ENTITY_ID,
     CONF_WARRANTY_TYPE,
     CONF_WARRANTY_UNTIL,
+    DEFAULT_POWER_HYSTERESIS,
     DOMAIN,
     RUNTIME_MODE_ON,
     RUNTIME_MODE_POWER,
@@ -407,7 +409,7 @@ class DeviceRuntimeHoursSensor(RestoreSensor):
     _attr_icon = "mdi:timer-outline"
     _attr_native_unit_of_measurement = UnitOfTime.HOURS
     _attr_should_poll = False
-    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_state_class = SensorStateClass.TOTAL
     _attr_suggested_display_precision = 2
 
     def __init__(
@@ -428,6 +430,12 @@ class DeviceRuntimeHoursSensor(RestoreSensor):
         self._runtime_mode = str(data[CONF_RUNTIME_MODE])
         self._power_threshold = float(
             data.get(CONF_POWER_THRESHOLD, 0.0)
+        )
+        self._power_hysteresis = float(
+            data.get(
+                CONF_POWER_HYSTERESIS,
+                DEFAULT_POWER_HYSTERESIS,
+            )
         )
 
         self._stored_hours = Decimal("0")
@@ -457,6 +465,11 @@ class DeviceRuntimeHoursSensor(RestoreSensor):
 
         if self._runtime_mode == RUNTIME_MODE_POWER:
             attrs["tehoraja_w"] = self._power_threshold
+            attrs["hystereesi_w"] = self._power_hysteresis
+            attrs["pysaytysraja_w"] = max(
+                0.0,
+                self._power_threshold - self._power_hysteresis,
+            )
 
         return attrs
 
@@ -475,7 +488,7 @@ class DeviceRuntimeHoursSensor(RestoreSensor):
                 self._stored_hours = Decimal("0")
 
         current_state = self.hass.states.get(self._source_entity_id)
-        if self._is_active(current_state):
+        if self._is_active(current_state, currently_active=False):
             self._active_since = dt_util.utcnow()
 
         self.async_on_remove(
@@ -500,27 +513,29 @@ class DeviceRuntimeHoursSensor(RestoreSensor):
         self,
         event: Event[EventStateChangedData],
     ) -> None:
-        """Handle only activity or availability transitions."""
+        """Handle activity or availability transitions with hysteresis."""
         old_state = event.data["old_state"]
         new_state = event.data["new_state"]
 
-        old_active = self._is_active(old_state)
-        new_active = self._is_active(new_state)
+        currently_active = self._active_since is not None
+        new_active = self._is_active(
+            new_state,
+            currently_active=currently_active,
+        )
         old_available = self._source_available(old_state)
         new_available = self._source_available(new_state)
 
         if (
-            old_active == new_active
+            new_active == currently_active
             and old_available == new_available
         ):
             return
 
         now = dt_util.utcnow()
 
-        if self._active_since is not None and not new_active:
+        if currently_active and not new_active:
             self._commit_elapsed(now)
-
-        if self._active_since is None and new_active:
+        elif not currently_active and new_active:
             self._active_since = now
 
         self.async_write_ha_state()
@@ -552,7 +567,12 @@ class DeviceRuntimeHoursSensor(RestoreSensor):
             and state.state not in (STATE_UNKNOWN, STATE_UNAVAILABLE)
         )
 
-    def _is_active(self, state: State | None) -> bool:
+    def _is_active(
+        self,
+        state: State | None,
+        *,
+        currently_active: bool,
+    ) -> bool:
         """Return whether the configured source currently means active."""
         if not self._source_available(state):
             return False
@@ -562,8 +582,17 @@ class DeviceRuntimeHoursSensor(RestoreSensor):
 
         if self._runtime_mode == RUNTIME_MODE_POWER:
             try:
-                return float(state.state) > self._power_threshold
+                value = float(state.state)
             except (TypeError, ValueError):
                 return False
+
+            if currently_active:
+                stop_threshold = max(
+                    0.0,
+                    self._power_threshold - self._power_hysteresis,
+                )
+                return value >= stop_threshold
+
+            return value > self._power_threshold
 
         return False
