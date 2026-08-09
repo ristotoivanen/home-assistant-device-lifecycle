@@ -132,7 +132,7 @@ For each purchase you can store:
 
 The purchase price is the total price of the purchase, not a per-device price. The configured Home Assistant currency is captured with the purchase and retained when the purchase is edited later.
 
-When adding a new purchase, leaving the installation date empty stores the purchase date as the installation date by default. The installation date can be changed or cleared later when editing the purchase.
+Purchase date and installation date are independent values. Leave the installation date empty when it is unknown or not relevant.
 
 In v0.5.0 the purchase form still contains installation date and warranty because the UI remains compatible with v0.4.x. Asset Core normalizes those values onto each Asset internally. Later Asset-oriented UI can edit them per physical Asset without changing the storage identity model.
 

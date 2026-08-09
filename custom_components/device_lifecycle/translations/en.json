@@ -37,7 +37,7 @@
             "warranty_until": "Used only when Warranty = Manual.",
             "purchase_price": "Total purchase price, not per-device price. The configured Home Assistant currency is stored with the purchase.",
             "receipt_url": "Optional URL to a receipt, invoice or other purchase document.",
-            "installed_date": "Leave empty to use the purchase date as the installation date for a new purchase. You can change it later."
+            "installed_date": "Optional date when the device was put into service. This is independent of the purchase date."
           }
         },
         "reconfigure": {
@@ -62,7 +62,7 @@
             "warranty_until": "Used only when Warranty = Manual.",
             "purchase_price": "Total purchase price, not per-device price. The purchase keeps the currency captured when it was created.",
             "receipt_url": "Optional URL to a receipt, invoice or other purchase document.",
-            "installed_date": "The installation date can be changed or cleared independently of the purchase date."
+            "installed_date": "The installation date is independent of the purchase date and can be left empty."
           }
         }
       },

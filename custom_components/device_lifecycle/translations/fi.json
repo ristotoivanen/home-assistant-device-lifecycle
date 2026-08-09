@@ -37,7 +37,7 @@
             "warranty_until": "Käytetään vain, kun Takuu = Manuaalinen. Muissa vaihtoehdoissa integraatio laskee päivämäärän automaattisesti.",
             "purchase_price": "Koko ostoksen hinta, ei yhden laitteen kappalehinta. Ostoksen yhteyteen tallennetaan Home Assistantissa määritetty valuutta.",
             "receipt_url": "Valinnainen URL kuittiin, laskuun tai muuhun ostodokumenttiin.",
-            "installed_date": "Jätä tyhjäksi, niin uuden ostoksen käyttöönottopäiväksi tallennetaan ostopäivä. Päivän voi muuttaa myöhemmin."
+            "installed_date": "Valinnainen päivämäärä, jolloin laite otettiin käyttöön. Tämä on ostopäivästä riippumaton."
           }
         },
         "reconfigure": {
@@ -62,7 +62,7 @@
             "warranty_until": "Käytetään vain, kun Takuu = Manuaalinen.",
             "purchase_price": "Koko ostoksen hinta, ei yhden laitteen kappalehinta. Ostos säilyttää luotaessa tallennetun valuutan.",
             "receipt_url": "Valinnainen URL kuittiin, laskuun tai muuhun ostodokumenttiin.",
-            "installed_date": "Käyttöönottopäivää voi muuttaa tai sen voi jättää tyhjäksi riippumatta ostopäivästä."
+            "installed_date": "Käyttöönottopäivä on ostopäivästä riippumaton ja sen voi jättää tyhjäksi."
           }
         }
       },
