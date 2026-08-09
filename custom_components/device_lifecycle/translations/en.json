@@ -67,7 +67,8 @@
         "purchase_date_required_for_warranty": "A 1 or 2 year warranty requires a purchase date.",
         "manual_warranty_date_required": "Enter a manual warranty end date.",
         "invalid_purchase_date": "The purchase date could not be parsed.",
-        "invalid_warranty_type": "The warranty type is invalid."
+        "invalid_warranty_type": "The warranty type is invalid.",
+        "service_device_not_allowed": "The selected item is a Home Assistant service rather than a physical device."
       }
     },
     "runtime": {
@@ -85,7 +86,7 @@
             "runtime_mode": "Tracking method"
           },
           "data_description": {
-            "device_id": "The Runtime hours sensor is linked to this physical Home Assistant device.",
+            "device_id": "The Runtime hours sensor is linked to this physical Home Assistant device. Service-type HA devices are rejected.",
             "runtime_mode": "Choose whether runtime is detected from an entity being on or from measured power."
           }
         },
@@ -98,8 +99,8 @@
             "power_hysteresis": "Hysteresis"
           },
           "data_description": {
-            "source_entity_id": "Power mode accepts sensor entities with the Power device class. On-state mode accepts switches, lights, binary sensors, input booleans and fans. Device Lifecycle's own entities are excluded.",
-            "power_threshold": "Runtime starts when the source value rises above this watt threshold.",
+            "source_entity_id": "Power mode accepts Power device-class sensors whose unit can be converted to watts. On-state mode accepts switches, lights, binary sensors, input booleans and fans. Device Lifecycle's own entities are excluded.",
+            "power_threshold": "Runtime starts when the source power, normalized to watts, rises above this threshold.",
             "power_hysteresis": "Prevents toggling around the threshold. Example: 10 W threshold and 2 W hysteresis starts above 10 W and stops below 8 W. Must be between 0 and the threshold."
           }
         },
@@ -123,7 +124,7 @@
           },
           "data_description": {
             "source_entity_id": "Select a source suitable for the chosen mode. Device Lifecycle's own entities are excluded.",
-            "power_threshold": "Runtime starts when the source value rises above this watt threshold.",
+            "power_threshold": "Runtime starts when the source power, normalized to watts, rises above this threshold.",
             "power_hysteresis": "Example: 10 W threshold and 2 W hysteresis stops only below 8 W. Existing trackers default to 0 W hysteresis, preserving old behavior."
           }
         }
@@ -133,13 +134,14 @@
         "runtime_already_tracked": "This device already has runtime tracking.",
         "source_missing": "The selected source entity is not currently available in Home Assistant.",
         "source_required": "Select a source entity.",
-        "invalid_power_source": "Power tracking requires a sensor entity with the Power device class.",
+        "invalid_power_source": "Power tracking requires a Power device-class sensor with a Home Assistant-supported power unit.",
         "invalid_on_state_source": "On-state tracking requires a supported on/off entity.",
         "power_threshold_required": "Enter a power threshold for Power mode.",
         "invalid_power_threshold": "The power threshold must be zero or greater.",
         "invalid_power_hysteresis": "The hysteresis must be zero or greater.",
         "power_hysteresis_too_large": "The hysteresis cannot be greater than the power threshold.",
-        "invalid_runtime_mode": "The runtime tracking method is invalid."
+        "invalid_runtime_mode": "The runtime tracking method is invalid.",
+        "service_device_not_allowed": "The selected item is a Home Assistant service rather than a trackable physical device."
       }
     }
   },

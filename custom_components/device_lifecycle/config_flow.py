@@ -23,6 +23,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
 from homeassistant.util import dt as dt_util
+from homeassistant.util.unit_conversion import PowerConverter
 
 from .const import (
     CONF_DEVICE_ID,
@@ -69,13 +70,14 @@ ON_STATE_SOURCE_DOMAINS = frozenset(
 
 # Keep this list deliberately short and conservative. These integrations create
 # software/system devices rather than physical assets users would normally buy.
-PURCHASE_EXCLUDED_INTEGRATIONS = frozenset(
+DEVICE_EXCLUDED_INTEGRATIONS = frozenset(
     {
         DOMAIN,
         "better_thermostat",
         "browser_mod",
         "hacs",
         "hassio",
+        "spook",
     }
 )
 
@@ -109,30 +111,47 @@ def _purchase_defaults(data: dict[str, Any] | None) -> dict[str, Any]:
     return defaults
 
 
-def _purchase_device_selector(hass: HomeAssistant) -> selector.DeviceSelector:
-    """Return a conservative device selector with obvious software devices hidden."""
+def _physical_device_selector(
+    hass: HomeAssistant,
+    *,
+    multiple: bool,
+) -> selector.DeviceSelector:
+    """Return a conservative selector for physical-device candidates."""
     integrations = sorted(
         {
             entry.domain
             for entry in hass.config_entries.async_entries()
-            if entry.domain not in PURCHASE_EXCLUDED_INTEGRATIONS
+            if entry.domain not in DEVICE_EXCLUDED_INTEGRATIONS
         }
     )
 
     if not integrations:
         return selector.DeviceSelector(
-            selector.DeviceSelectorConfig(multiple=True)
+            selector.DeviceSelectorConfig(multiple=multiple)
         )
 
     return selector.DeviceSelector(
         selector.DeviceSelectorConfig(
-            multiple=True,
+            multiple=multiple,
             filter=[
                 selector.DeviceFilterSelectorConfig(integration=integration)
                 for integration in integrations
             ],
         )
     )
+
+
+def _is_service_device(
+    registry: dr.DeviceRegistry,
+    device_id: str,
+) -> bool:
+    """Return whether a registry entry represents a HA service, not an asset."""
+    device = registry.async_get(device_id)
+    if device is None:
+        return False
+
+    entry_type = getattr(device, "entry_type", None)
+    return str(getattr(entry_type, "value", entry_type)) == "service"
 
 
 def _purchase_schema(
@@ -151,7 +170,7 @@ def _purchase_schema(
         vol.Required(
             CONF_DEVICE_IDS,
             default=defaults.get(CONF_DEVICE_IDS, []),
-        ): _purchase_device_selector(hass),
+        ): _physical_device_selector(hass, multiple=True),
     }
 
     key, val = optional(CONF_PURCHASE_NAME, _text_selector())
@@ -206,6 +225,7 @@ def _purchase_schema(
 
 
 def _runtime_start_schema(
+    hass: HomeAssistant,
     defaults: dict[str, Any] | None = None,
     *,
     include_device: bool,
@@ -221,7 +241,7 @@ def _runtime_start_schema(
                 CONF_DEVICE_ID,
                 default=defaults[CONF_DEVICE_ID],
             )
-        fields[device_key] = selector.DeviceSelector()
+        fields[device_key] = _physical_device_selector(hass, multiple=False)
 
     fields[
         vol.Required(
@@ -270,6 +290,14 @@ def _state_device_class(
     return str(getattr(device_class, "value", device_class))
 
 
+def _state_power_unit(state: State) -> str | None:
+    """Return a normalized power unit from a state, if present."""
+    unit = state.attributes.get("unit_of_measurement")
+    if unit is None:
+        return None
+    return str(getattr(unit, "value", unit))
+
+
 def _is_valid_runtime_source(
     hass: HomeAssistant,
     entity_id: str,
@@ -294,6 +322,7 @@ def _is_valid_runtime_source(
             domain == "sensor"
             and _state_device_class(entity_registry, state)
             == SensorDeviceClass.POWER.value
+            and _state_power_unit(state) in PowerConverter.VALID_UNITS
         )
 
     return False
@@ -656,6 +685,11 @@ class PurchaseSubentryFlow(ConfigSubentryFlow):
 
                 if any(registry.async_get(device_id) is None for device_id in device_ids):
                     errors["base"] = "device_missing"
+                elif any(
+                    _is_service_device(registry, device_id)
+                    for device_id in device_ids
+                ):
+                    errors["base"] = "service_device_not_allowed"
                 elif _used_device_ids(entry).intersection(device_ids):
                     errors["base"] = "already_tracked"
                 else:
@@ -693,6 +727,11 @@ class PurchaseSubentryFlow(ConfigSubentryFlow):
 
                 if any(registry.async_get(device_id) is None for device_id in device_ids):
                     errors["base"] = "device_missing"
+                elif any(
+                    _is_service_device(registry, device_id)
+                    for device_id in device_ids
+                ):
+                    errors["base"] = "service_device_not_allowed"
                 elif _used_device_ids(
                     entry,
                     exclude_subentry_id=subentry.subentry_id,
@@ -761,6 +800,8 @@ class RuntimeSubentryFlow(ConfigSubentryFlow):
 
             if not device_id or registry.async_get(device_id) is None:
                 errors["base"] = "device_missing"
+            elif _is_service_device(registry, device_id):
+                errors["base"] = "service_device_not_allowed"
             elif device_id in _used_runtime_device_ids(entry):
                 errors["base"] = "runtime_already_tracked"
             elif runtime_mode not in RUNTIME_MODES:
@@ -775,6 +816,7 @@ class RuntimeSubentryFlow(ConfigSubentryFlow):
         return self.async_show_form(
             step_id="user",
             data_schema=_runtime_start_schema(
+                self.hass,
                 user_input,
                 include_device=True,
             ),
@@ -863,6 +905,7 @@ class RuntimeSubentryFlow(ConfigSubentryFlow):
         return self.async_show_form(
             step_id="reconfigure",
             data_schema=_runtime_start_schema(
+                self.hass,
                 defaults,
                 include_device=False,
             ),

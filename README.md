@@ -23,7 +23,8 @@ Lifecycle status text follows the Home Assistant system language. English and Fi
 - Power tracking supports configurable hysteresis to avoid threshold chatter
 - Runtime sources are validated again when the configuration is saved
 - Device Lifecycle's own entities are excluded from runtime source selection
-- Obvious system/software integrations are conservatively filtered from purchase device selection
+- Obvious system/software integrations are conservatively filtered from physical-device selection
+- Home Assistant service-type devices are rejected as purchase/runtime targets even if the native picker still shows them
 - Runtime totals are restored across Home Assistant restarts
 - Finnish and English UI translations
 
@@ -92,7 +93,7 @@ For each purchase you can store:
 
 The purchase price is the total price of the purchase, not a per-device price.
 
-The purchase device picker deliberately filters only integrations that are clearly system/software-only. Ambiguous devices remain visible rather than risking the accidental removal of a real physical device from the picker.
+Physical-device pickers deliberately filter only integrations that are clearly system/software-only. Ambiguous devices remain visible rather than risking the accidental removal of a real physical device. Home Assistant device-registry entries marked as `service` are rejected when saving even if the native device picker still displays one.
 
 ## Warranty
 
@@ -112,13 +113,13 @@ Runtime tracking is optional and configured separately for each physical device.
 Available tracking methods:
 
 - **Entity state is on**: counts time while the selected source entity state is `on`. The source picker is limited to sensible on/off domains such as switches, lights, binary sensors, input booleans and fans.
-- **Power above threshold**: counts time while a source sensor with the Home Assistant `power` device class is above the configured watt threshold. Energy (`kWh`), current (`A`), voltage (`V`) and frequency (`Hz`) sensors are not valid power sources.
+- **Power above threshold**: counts time while a source sensor with the Home Assistant `power` device class is above the configured watt threshold. Supported power units such as `W` and `kW` are normalized to watts before comparison. Energy (`kWh`), current (`A`), voltage (`V`) and frequency (`Hz`) sensors are not valid power sources.
 
 Runtime setup uses two short steps. First select the target device and tracking method, then select the source entity. Power threshold and hysteresis are shown only for **Power above threshold** mode.
 
 Power hysteresis is optional and defaults to `0 W` to preserve the behavior of existing runtime trackers. For example, a `10 W` threshold with `2 W` hysteresis starts runtime above `10 W` and stops it below `8 W`; values between those limits retain the current running state.
 
-The selected source is validated again when the configuration is saved. This prevents a manually supplied or stale selector value from bypassing the source rules.
+The selected source is validated again when the configuration is saved. Power sources must use a Home Assistant-supported power unit and are normalized to watts before threshold and hysteresis evaluation. This prevents a manually supplied or stale selector value from bypassing the source rules.
 
 The integration creates a cumulative **Runtime hours** sensor on the selected physical device. The entity name is localized as **Käyttötunnit** in Finnish.
 

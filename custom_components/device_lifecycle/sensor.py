@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from math import isfinite
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -16,6 +17,7 @@ from homeassistant.const import (
     STATE_ON,
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
+    UnitOfPower,
     UnitOfTime,
 )
 from homeassistant.core import (
@@ -34,6 +36,7 @@ from homeassistant.helpers.event import (
     async_track_time_interval,
 )
 from homeassistant.util import dt as dt_util
+from homeassistant.util.unit_conversion import PowerConverter
 
 from .const import (
     CONF_DEVICE_ID,
@@ -127,6 +130,26 @@ def _format_warranty_date(value: date, language: str) -> str:
         "Dec",
     )[value.month - 1]
     return f"{value.day} {month} {value.year}"
+
+
+def _power_value_watts(state: State) -> float | None:
+    """Return a numeric power state normalized to watts."""
+    try:
+        value = float(state.state)
+    except (TypeError, ValueError):
+        return None
+
+    if not isfinite(value):
+        return None
+
+    unit = state.attributes.get("unit_of_measurement")
+    if unit is None:
+        return None
+    unit = str(getattr(unit, "value", unit))
+    if unit not in PowerConverter.VALID_UNITS:
+        return None
+
+    return PowerConverter.convert(value, unit, UnitOfPower.WATT)
 
 
 async def async_setup_entry(
@@ -581,9 +604,8 @@ class DeviceRuntimeHoursSensor(RestoreSensor):
             return state.state == STATE_ON
 
         if self._runtime_mode == RUNTIME_MODE_POWER:
-            try:
-                value = float(state.state)
-            except (TypeError, ValueError):
+            value = _power_value_watts(state)
+            if value is None:
                 return False
 
             if currently_active:
@@ -591,6 +613,8 @@ class DeviceRuntimeHoursSensor(RestoreSensor):
                     0.0,
                     self._power_threshold - self._power_hysteresis,
                 )
+                if stop_threshold == 0.0:
+                    return value > 0.0
                 return value >= stop_threshold
 
             return value > self._power_threshold
