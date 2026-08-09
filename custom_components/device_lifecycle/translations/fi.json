@@ -36,7 +36,8 @@
             "warranty_type": "1 v ja 2 v lasketaan automaattisesti ostopäivästä. Valitse Manuaalinen vain, jos haluat antaa muun päättymispäivän.",
             "warranty_until": "Käytetään vain, kun Takuu = Manuaalinen. Muissa vaihtoehdoissa integraatio laskee päivämäärän automaattisesti.",
             "purchase_price": "Koko ostoksen hinta, ei yhden laitteen kappalehinta. Ostoksen yhteyteen tallennetaan Home Assistantissa määritetty valuutta.",
-            "receipt_url": "Valinnainen URL kuittiin, laskuun tai muuhun ostodokumenttiin."
+            "receipt_url": "Valinnainen URL kuittiin, laskuun tai muuhun ostodokumenttiin.",
+            "installed_date": "Jätä tyhjäksi, niin uuden ostoksen käyttöönottopäiväksi tallennetaan ostopäivä. Päivän voi muuttaa myöhemmin."
           }
         },
         "reconfigure": {
@@ -60,7 +61,8 @@
             "warranty_type": "1 v ja 2 v lasketaan automaattisesti ostopäivästä. Manuaalinen käyttää alla olevaa päivämäärää.",
             "warranty_until": "Käytetään vain, kun Takuu = Manuaalinen.",
             "purchase_price": "Koko ostoksen hinta, ei yhden laitteen kappalehinta. Ostos säilyttää luotaessa tallennetun valuutan.",
-            "receipt_url": "Valinnainen URL kuittiin, laskuun tai muuhun ostodokumenttiin."
+            "receipt_url": "Valinnainen URL kuittiin, laskuun tai muuhun ostodokumenttiin.",
+            "installed_date": "Käyttöönottopäivää voi muuttaa tai sen voi jättää tyhjäksi riippumatta ostopäivästä."
           }
         }
       },
