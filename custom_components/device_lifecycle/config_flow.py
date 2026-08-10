@@ -177,7 +177,7 @@ def _purchase_schema(
         return vol.Optional(key), sel
 
     fields: dict[Any, Any] = {
-        vol.Required(
+        vol.Optional(
             CONF_DEVICE_IDS,
             default=defaults.get(CONF_DEVICE_IDS, []),
         ): _physical_device_selector(hass, multiple=True),
@@ -537,6 +537,7 @@ def _prepare_purchase_data(
     # later change or clear the installation date independently.
     if (
         preserved_data is None
+        and data.get(CONF_DEVICE_IDS)
         and CONF_PURCHASE_DATE in data
         and CONF_INSTALLED_DATE not in data
     ):
@@ -725,14 +726,18 @@ class PurchaseSubentryFlow(ConfigSubentryFlow):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            device_ids = [str(item) for item in user_input.get(CONF_DEVICE_IDS, [])]
+            device_ids = [
+                str(item)
+                for item in user_input.get(CONF_DEVICE_IDS, []) or []
+            ]
 
-            if not device_ids:
-                errors["base"] = "no_devices"
-            else:
+            if device_ids:
                 registry = dr.async_get(self.hass)
 
-                if any(registry.async_get(device_id) is None for device_id in device_ids):
+                if any(
+                    registry.async_get(device_id) is None
+                    for device_id in device_ids
+                ):
                     errors["base"] = "device_missing"
                 elif any(
                     _is_service_device(registry, device_id)
@@ -741,18 +746,19 @@ class PurchaseSubentryFlow(ConfigSubentryFlow):
                     errors["base"] = "service_device_not_allowed"
                 elif _used_device_ids(entry).intersection(device_ids):
                     errors["base"] = "already_tracked"
-                else:
-                    clean, error = _prepare_purchase_data(
-                        user_input,
-                        default_currency=str(self.hass.config.currency),
+
+            if not errors:
+                clean, error = _prepare_purchase_data(
+                    user_input,
+                    default_currency=str(self.hass.config.currency),
+                )
+                if error:
+                    errors["base"] = error
+                elif clean is not None:
+                    return self.async_create_entry(
+                        title=_purchase_title(clean),
+                        data=clean,
                     )
-                    if error:
-                        errors["base"] = error
-                    elif clean is not None:
-                        return self.async_create_entry(
-                            title=_purchase_title(clean),
-                            data=clean,
-                        )
 
         return self.async_show_form(
             step_id="user",
@@ -770,14 +776,18 @@ class PurchaseSubentryFlow(ConfigSubentryFlow):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            device_ids = [str(item) for item in user_input.get(CONF_DEVICE_IDS, [])]
+            device_ids = [
+                str(item)
+                for item in user_input.get(CONF_DEVICE_IDS, []) or []
+            ]
 
-            if not device_ids:
-                errors["base"] = "no_devices"
-            else:
+            if device_ids:
                 registry = dr.async_get(self.hass)
 
-                if any(registry.async_get(device_id) is None for device_id in device_ids):
+                if any(
+                    registry.async_get(device_id) is None
+                    for device_id in device_ids
+                ):
                     errors["base"] = "device_missing"
                 elif any(
                     _is_service_device(registry, device_id)
@@ -789,21 +799,22 @@ class PurchaseSubentryFlow(ConfigSubentryFlow):
                     exclude_subentry_id=subentry.subentry_id,
                 ).intersection(device_ids):
                     errors["base"] = "already_tracked"
-                else:
-                    clean, error = _prepare_purchase_data(
-                        user_input,
-                        preserved_data=dict(subentry.data),
-                        default_currency=str(self.hass.config.currency),
+
+            if not errors:
+                clean, error = _prepare_purchase_data(
+                    user_input,
+                    preserved_data=dict(subentry.data),
+                    default_currency=str(self.hass.config.currency),
+                )
+                if error:
+                    errors["base"] = error
+                elif clean is not None:
+                    return self.async_update_and_abort(
+                        entry,
+                        subentry,
+                        title=_purchase_title(clean),
+                        data=clean,
                     )
-                    if error:
-                        errors["base"] = error
-                    elif clean is not None:
-                        return self.async_update_and_abort(
-                            entry,
-                            subentry,
-                            title=_purchase_title(clean),
-                            data=clean,
-                        )
 
         defaults = (
             user_input

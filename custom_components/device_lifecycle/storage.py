@@ -931,6 +931,37 @@ class AssetStoreManager:
                 if asset_uuid != asset["asset_uuid"]
             ]
 
+    def _assign_reconciled_purchase(
+        self,
+        data: AssetStoreData,
+        asset: AssetData,
+        purchase_uuid: str,
+        device_id: str,
+    ) -> None:
+        """Apply legacy device membership without overriding user ownership."""
+        old_purchase_uuid = asset.get("purchase_uuid")
+        purchase_source = asset.get("field_sources", {}).get("purchase_uuid")
+
+        if purchase_source == FIELD_SOURCE_USER:
+            if old_purchase_uuid != purchase_uuid:
+                relationship = old_purchase_uuid or "no Purchase"
+                raise AssetStoreError(
+                    f"HA device {device_id} belongs to Asset {asset['asset_id']}, "
+                    f"which has a user-managed relationship to {relationship}; "
+                    f"it cannot be assigned to Purchase {purchase_uuid}"
+                )
+            return
+
+        self._remove_asset_from_previous_purchase(
+            data,
+            asset,
+            purchase_uuid,
+        )
+        asset["purchase_uuid"] = purchase_uuid
+        asset.setdefault("field_sources", {})[
+            "purchase_uuid"
+        ] = FIELD_SOURCE_PURCHASE
+
     def _reconcile_entry_data(
         self,
         data: AssetStoreData,
@@ -968,7 +999,18 @@ class AssetStoreManager:
                 )
             touched_purchase_uuids.add(purchase_uuid)
 
-            old_members = set(purchase.get("asset_uuids", []))
+            old_member_list = list(purchase.get("asset_uuids", []))
+            old_members = set(old_member_list)
+            preserved_user_members: list[str] = []
+            for asset_uuid in old_member_list:
+                member = data["assets"].get(asset_uuid)
+                if (
+                    member is not None
+                    and member.get("purchase_uuid") == purchase_uuid
+                    and member.get("field_sources", {}).get("purchase_uuid")
+                    == FIELD_SOURCE_USER
+                ):
+                    preserved_user_members.append(asset_uuid)
             new_members: list[str] = []
 
             for device_id_value in raw.get(CONF_DEVICE_IDS, []):
@@ -981,21 +1023,27 @@ class AssetStoreManager:
                     self._ensure_primary_reference(asset, device_id)
                     self._refresh_home_assistant_metadata(asset, device, device_id)
 
-                self._remove_asset_from_previous_purchase(
+                self._assign_reconciled_purchase(
                     data,
                     asset,
                     purchase_uuid,
+                    device_id,
                 )
-                asset["purchase_uuid"] = purchase_uuid
-                asset.setdefault("field_sources", {})[
-                    "purchase_uuid"
-                ] = FIELD_SOURCE_PURCHASE
                 self._apply_purchase_asset_fields(asset, raw)
                 new_members.append(asset["asset_uuid"])
 
+            for asset_uuid in preserved_user_members:
+                if asset_uuid not in new_members:
+                    new_members.append(asset_uuid)
+
             for asset_uuid in old_members.difference(new_members):
                 old_asset = data["assets"].get(asset_uuid)
-                if old_asset is not None and old_asset.get("purchase_uuid") == purchase_uuid:
+                if (
+                    old_asset is not None
+                    and old_asset.get("purchase_uuid") == purchase_uuid
+                    and old_asset.get("field_sources", {}).get("purchase_uuid")
+                    == FIELD_SOURCE_PURCHASE
+                ):
                     old_asset["purchase_uuid"] = None
 
             purchase.update(
