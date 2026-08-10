@@ -17,7 +17,7 @@ from .conftest import ASSET_UUID, DEVICE_ID, PURCHASE_SUBENTRY_ID, PURCHASE_UUID
 
 
 def test_existing_store_payload_is_valid_and_unchanged(asset_store_data) -> None:
-    """Protect the complete 0.5.3 normalized payload from accidental rewriting."""
+    """Protect the migrated 0.5.3 payload from reconciliation rewrites."""
     original = deepcopy(asset_store_data)
 
     _validate_store_data(asset_store_data)

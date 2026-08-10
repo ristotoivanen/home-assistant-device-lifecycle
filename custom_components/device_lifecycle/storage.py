@@ -19,8 +19,10 @@ from homeassistant.helpers.storage import Store
 from .const import (
     CONF_ASSET_UUID,
     CONF_CURRENCY,
+    CONF_DEPLOYMENT_STATE,
     CONF_DEVICE_ID,
     CONF_DEVICE_IDS,
+    CONF_HA_AREA_ID,
     CONF_INSTALLED_DATE,
     CONF_NOTES,
     CONF_PURCHASE_DATE,
@@ -32,6 +34,8 @@ from .const import (
     CONF_SELLER,
     CONF_WARRANTY_TYPE,
     CONF_WARRANTY_UNTIL,
+    DEPLOYMENT_STATES,
+    DEPLOYMENT_STATE_UNKNOWN,
     DOMAIN,
     SUBENTRY_TYPE_PURCHASE,
     SUBENTRY_TYPE_RUNTIME,
@@ -42,7 +46,7 @@ from .const import (
 from .models import AssetData, AssetStoreData, HADeviceReference, PurchaseData
 
 STORAGE_VERSION = 1
-STORAGE_MINOR_VERSION = 1
+STORAGE_MINOR_VERSION = 2
 STORAGE_KEY = f"{DOMAIN}.assets"
 
 ASSET_ID_PATTERN = re.compile(r"^DL([0-9]{4})$")
@@ -84,12 +88,34 @@ class DeviceLifecycleStore(Store[AssetStoreData]):
         old_minor_version: int,
         old_data: AssetStoreData,
     ) -> AssetStoreData:
-        """Migrate future Asset Core storage versions explicitly."""
-        if old_major_version == STORAGE_VERSION:
-            # Version 1.1 is the first public Asset Core schema. Keeping the
-            # migration hook from day one makes later minor migrations explicit.
-            if old_minor_version <= STORAGE_MINOR_VERSION:
-                return old_data
+        """Migrate Asset Core storage without changing persistent identity."""
+        if old_major_version != STORAGE_VERSION:
+            raise NotImplementedError
+
+        if old_minor_version == STORAGE_MINOR_VERSION:
+            return old_data
+
+        if old_minor_version == 1:
+            data = deepcopy(old_data)
+            assets = data.get("assets")
+            if not isinstance(assets, dict):
+                return data
+
+            for asset in assets.values():
+                if not isinstance(asset, dict):
+                    continue
+
+                asset.setdefault(CONF_DEPLOYMENT_STATE, DEPLOYMENT_STATE_UNKNOWN)
+                asset.setdefault(CONF_HA_AREA_ID, None)
+
+                if asset.get("purchase_uuid") is None:
+                    continue
+                sources = asset.get("field_sources")
+                if isinstance(sources, dict):
+                    sources.setdefault("purchase_uuid", FIELD_SOURCE_PURCHASE)
+
+            return data
+
         raise NotImplementedError
 
 
@@ -218,7 +244,17 @@ def _validate_store_data(data: AssetStoreData) -> None:
         if purchase_uuid is not None and _valid_uuid(purchase_uuid) != purchase_uuid:
             raise AssetStoreError(f"Asset {asset_id} has an invalid Purchase UUID")
 
+        deployment_state = asset.get(CONF_DEPLOYMENT_STATE)
+        if deployment_state not in DEPLOYMENT_STATES:
+            raise AssetStoreError(f"Asset {asset_id} has an invalid deployment state")
+
         _validate_optional_date(asset.get("installed_date"), "installed_date")
+
+        ha_area_id = asset.get(CONF_HA_AREA_ID)
+        if ha_area_id is not None and (
+            not isinstance(ha_area_id, str) or not ha_area_id.strip()
+        ):
+            raise AssetStoreError(f"Asset {asset_id} has an invalid HA Area ID")
 
         warranty = asset.get("warranty")
         if not isinstance(warranty, dict):
@@ -233,6 +269,19 @@ def _validate_store_data(data: AssetStoreData) -> None:
         for field, source in sources.items():
             if not isinstance(field, str) or source not in FIELD_SOURCES:
                 raise AssetStoreError(f"Asset {asset_id} has invalid field provenance")
+
+        purchase_source = sources.get("purchase_uuid")
+        if purchase_source is not None and purchase_source not in (
+            FIELD_SOURCE_PURCHASE,
+            FIELD_SOURCE_USER,
+        ):
+            raise AssetStoreError(
+                f"Asset {asset_id} has invalid Purchase relationship provenance"
+            )
+        if purchase_uuid is not None and purchase_source is None:
+            raise AssetStoreError(
+                f"Asset {asset_id} has no Purchase relationship provenance"
+            )
 
         refs = asset.get("ha_device_refs")
         if not isinstance(refs, list):
@@ -417,7 +466,9 @@ class AssetStoreManager:
             "name": _device_name(device, device_id),
             "category": None,
             "purchase_uuid": None,
+            CONF_DEPLOYMENT_STATE: DEPLOYMENT_STATE_UNKNOWN,
             "installed_date": None,
+            CONF_HA_AREA_ID: None,
             "warranty": {"type": WARRANTY_NONE, "until": None},
             "manufacturer": None,
             "model": None,
@@ -645,6 +696,9 @@ class AssetStoreManager:
                     purchase_uuid,
                 )
                 asset["purchase_uuid"] = purchase_uuid
+                asset.setdefault("field_sources", {})[
+                    "purchase_uuid"
+                ] = FIELD_SOURCE_PURCHASE
                 self._apply_purchase_asset_fields(asset, raw)
                 new_members.append(asset["asset_uuid"])
 

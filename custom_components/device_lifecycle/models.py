@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import Literal, TypedDict
+
+
+DeploymentState = Literal["unknown", "not_deployed", "deployed"]
 
 
 class HADeviceReference(TypedDict):
@@ -31,7 +34,9 @@ class AssetData(TypedDict):
     name: str
     category: str | None
     purchase_uuid: str | None
+    deployment_state: DeploymentState
     installed_date: str | None
+    ha_area_id: str | None
     warranty: WarrantyData
     manufacturer: str | None
     model: str | None

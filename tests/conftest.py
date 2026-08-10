@@ -11,8 +11,10 @@ import pytest
 from custom_components.device_lifecycle.const import (
     CONF_ASSET_UUID,
     CONF_CURRENCY,
+    CONF_DEPLOYMENT_STATE,
     CONF_DEVICE_ID,
     CONF_DEVICE_IDS,
+    CONF_HA_AREA_ID,
     CONF_INSTALLED_DATE,
     CONF_NOTES,
     CONF_POWER_HYSTERESIS,
@@ -28,6 +30,7 @@ from custom_components.device_lifecycle.const import (
     CONF_SOURCE_ENTITY_ID,
     CONF_WARRANTY_TYPE,
     CONF_WARRANTY_UNTIL,
+    DEPLOYMENT_STATE_UNKNOWN,
     RUNTIME_MODE_POWER,
     SUBENTRY_TYPE_PURCHASE,
     SUBENTRY_TYPE_RUNTIME,
@@ -51,7 +54,7 @@ def _enable_custom_integrations(enable_custom_integrations: None) -> None:
 
 
 @pytest.fixture
-def asset_store_data() -> AssetStoreData:
+def asset_store_data_v1_1() -> AssetStoreData:
     """Return a representative valid Device Lifecycle 0.5.3 store payload."""
     return {
         "next_asset_number": 8,
@@ -110,6 +113,17 @@ def asset_store_data() -> AssetStoreData:
             }
         },
     }
+
+
+@pytest.fixture
+def asset_store_data(asset_store_data_v1_1: AssetStoreData) -> AssetStoreData:
+    """Return the representative payload after migration to schema 1.2."""
+    data = deepcopy(asset_store_data_v1_1)
+    asset = data["assets"][ASSET_UUID]
+    asset[CONF_DEPLOYMENT_STATE] = DEPLOYMENT_STATE_UNKNOWN
+    asset[CONF_HA_AREA_ID] = None
+    asset["field_sources"]["purchase_uuid"] = "purchase"
+    return data
 
 
 @pytest.fixture
