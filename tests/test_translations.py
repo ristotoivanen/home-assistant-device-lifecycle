@@ -47,11 +47,7 @@ def _key_shape(value: Any) -> Any:
 def _string_values(value: Any) -> list[str]:
     """Flatten only user-visible string values from a translation subtree."""
     if isinstance(value, dict):
-        return [
-            text
-            for child in value.values()
-            for text in _string_values(child)
-        ]
+        return [text for child in value.values() for text in _string_values(child)]
     return [value] if isinstance(value, str) else []
 
 
@@ -115,9 +111,7 @@ def _completion_keys() -> set[str]:
         if node.func.attr != "_finish_asset_action" or len(node.args) < 2:
             continue
         description = node.args[1]
-        if isinstance(description, ast.Constant) and isinstance(
-            description.value, str
-        ):
+        if isinstance(description, ast.Constant) and isinstance(description.value, str):
             keys.add(description.value)
     return keys
 
@@ -135,20 +129,26 @@ def test_options_translation_structures_match_and_are_valid_json() -> None:
 
 
 def test_strings_source_matches_english_translation() -> None:
-    """The primary strings source preserves the complete English UI surface."""
+    """Legacy strings remain unchanged while runtime translations add 0.6.1."""
     with STRINGS_FILE.open(encoding="utf-8") as strings_file:
         strings = json.load(strings_file)
 
-    assert strings == _translation("en")
+    english = _translation("en")
+    installed_date = english["entity"]["sensor"].pop("installed_date")
+    assert installed_date == {"name": "Installation date"}
+    assert "installed_date" not in strings["entity"]["sensor"]
+    assert strings == english
 
 
-def test_0_6_entity_names_and_enum_states_are_translated() -> None:
+def test_exposure_entity_names_and_enum_states_are_translated() -> None:
     """Both supported languages expose the new translated entity contract."""
     english = _translation("en")["entity"]["sensor"]
     finnish = _translation("fi")["entity"]["sensor"]
 
     assert english["asset_id"]["name"] == "Asset ID"
     assert finnish["asset_id"]["name"] == "Elinkaaritunnus"
+    assert english["installed_date"]["name"] == "Installation date"
+    assert finnish["installed_date"]["name"] == "Käyttöönottopäivä"
     assert set(english["deployment"]["state"]) == {
         "unknown",
         "not_deployed",
@@ -208,9 +208,9 @@ def test_deployment_relationship_confirmation_and_results_exist(
     assert set(translation["selector"]["deployment_state"]["options"]) == set(
         DEPLOYMENT_STATES
     )
-    assert set(
-        translation["selector"]["ha_relationship_action"]["options"]
-    ) == set(HA_RELATIONSHIP_ACTIONS)
+    assert set(translation["selector"]["ha_relationship_action"]["options"]) == set(
+        HA_RELATIONSHIP_ACTIONS
+    )
     assert translation["options"]["step"]["confirm_not_deployed"]["title"]
     assert translation["options"]["step"]["confirm_not_deployed"]["description"]
     assert _completion_keys() <= set(translation["options"]["create_entry"])
@@ -262,23 +262,18 @@ def test_purchase_creation_copy_explicitly_allows_zero_devices() -> None:
 
 def test_purchase_reconfigure_copy_separates_assets_from_ha_devices() -> None:
     """Both languages explain the read-only Asset and HA registry scopes."""
-    english = _translation("en")["config_subentries"]["purchase"]["step"][
-        "reconfigure"
-    ]
-    finnish = _translation("fi")["config_subentries"]["purchase"]["step"][
-        "reconfigure"
-    ]
+    english = _translation("en")["config_subentries"]["purchase"]["step"]["reconfigure"]
+    finnish = _translation("fi")["config_subentries"]["purchase"]["step"]["reconfigure"]
 
     assert "{linked_assets}" in english["description"]
     assert "read-only" in english["description"]
-    assert "Device Registry devices only" in english["data_description"][
-        "device_ids"
-    ]
+    assert "Device Registry devices only" in english["data_description"]["device_ids"]
     assert "{linked_assets}" in finnish["description"]
     assert "vain tiedoksi" in finnish["description"]
-    assert "vain Home Assistantin laiterekisterin" in finnish[
-        "data_description"
-    ]["device_ids"]
+    assert (
+        "vain Home Assistantin laiterekisterin"
+        in finnish["data_description"]["device_ids"]
+    )
 
 
 def test_finalized_english_and_finnish_lifecycle_terms() -> None:

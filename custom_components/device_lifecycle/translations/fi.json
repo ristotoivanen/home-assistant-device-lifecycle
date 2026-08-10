@@ -339,6 +339,9 @@
           "deployed": "Käytössä"
         }
       },
+      "installed_date": {
+        "name": "Käyttöönottopäivä"
+      },
       "relationships": {
         "name": "Laitelinkit",
         "state": {

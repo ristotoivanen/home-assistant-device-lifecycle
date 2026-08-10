@@ -12,24 +12,38 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.device_lifecycle.config_flow import NO_PURCHASE_SELECTION
 from custom_components.device_lifecycle.const import (
     CONF_ASSET_NAME,
     CONF_ASSET_UUID,
+    CONF_DEVICE_IDS,
     CONF_DEPLOYMENT_STATE,
     CONF_DEVICE_ID,
+    CONF_INSTALLED_DATE,
     CONF_MANUFACTURER,
+    CONF_NOTES,
+    CONF_PURCHASE_DATE,
+    CONF_PURCHASE_NAME,
+    CONF_PURCHASE_PRICE,
     CONF_PURCHASE_UUID,
+    CONF_RECEIPT_REFERENCE,
+    CONF_RECEIPT_URL,
+    CONF_SELLER,
+    CONF_WARRANTY_TYPE,
+    CONF_WARRANTY_UNTIL,
     CONFIG_ENTRY_VERSION,
     DEPLOYMENT_STATE_DEPLOYED,
     DOMAIN,
+    SUBENTRY_TYPE_PURCHASE,
 )
 from custom_components.device_lifecycle.exposure import (
     asset_device_entry,
     asset_id_unique_id,
     deployment_unique_id,
+    installed_date_unique_id,
     relationships_unique_id,
 )
 from custom_components.device_lifecycle.migration import lifecycle_unique_id
@@ -69,6 +83,8 @@ async def _setup_loaded_entry(
     hass: HomeAssistant,
     hass_storage: dict,
     data: AssetStoreData,
+    *,
+    subentries_data: tuple[dict[str, object], ...] = (),
 ) -> MockConfigEntry:
     """Load the real integration from one exact Store 2.1 payload."""
     hass_storage[STORAGE_KEY] = {
@@ -84,6 +100,7 @@ async def _setup_loaded_entry(
         version=CONFIG_ENTRY_VERSION,
         data={},
         options={},
+        subentries_data=subentries_data,
     )
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
@@ -132,7 +149,33 @@ def _entity_id(registry: er.EntityRegistry, unique_id: str) -> str:
     return entity_id
 
 
-async def test_create_asset_flow_reload_exposes_device_and_four_entities(
+def _purchase_edit_input(
+    purchase_data: dict,
+    *,
+    device_id: str,
+    installed_date: str,
+) -> dict:
+    """Return exactly the editable Purchase fields for a real reconfigure flow."""
+    editable_fields = (
+        CONF_PURCHASE_NAME,
+        CONF_PURCHASE_DATE,
+        CONF_WARRANTY_TYPE,
+        CONF_WARRANTY_UNTIL,
+        CONF_SELLER,
+        CONF_PURCHASE_PRICE,
+        CONF_RECEIPT_REFERENCE,
+        CONF_RECEIPT_URL,
+        CONF_NOTES,
+    )
+    result = {
+        key: purchase_data[key] for key in editable_fields if key in purchase_data
+    }
+    result[CONF_DEVICE_IDS] = [device_id]
+    result[CONF_INSTALLED_DATE] = installed_date
+    return result
+
+
+async def test_create_asset_flow_reload_exposes_device_and_five_entities(
     hass: HomeAssistant,
     hass_storage: dict,
     device_registry: dr.DeviceRegistry,
@@ -183,6 +226,7 @@ async def test_create_asset_flow_reload_exposes_device_and_four_entities(
     expected_unique_ids = {
         lifecycle_unique_id(asset_uuid),
         deployment_unique_id(asset_uuid),
+        installed_date_unique_id(asset_uuid),
         relationships_unique_id(asset_uuid),
         asset_id_unique_id(asset_uuid),
     }
@@ -194,6 +238,13 @@ async def test_create_asset_flow_reload_exposes_device_and_four_entities(
         )
         if item.unique_id in expected_unique_ids
     } == expected_unique_ids
+    installed_date_entry = entity_registry.async_get(
+        _entity_id(entity_registry, installed_date_unique_id(asset_uuid))
+    )
+    assert installed_date_entry is not None
+    assert installed_date_entry.config_entry_id == entry.entry_id
+    assert installed_date_entry.config_subentry_id is None
+    assert installed_date_entry.device_id == device.id
     assert entry.options == {}
 
 
@@ -394,3 +445,97 @@ async def test_failed_asset_mutation_does_not_schedule_reload(
     schedule_reload.assert_not_called()
     assert entry.runtime_data is manager
     assert entry.options == {}
+
+
+@pytest.mark.parametrize(
+    ("provenance", "canonical_before", "canonical_after"),
+    [
+        ("purchase", "2026-01-20", "2026-08-07"),
+        ("user", "2026-02-02", "2026-02-02"),
+    ],
+)
+async def test_purchase_edit_reload_refreshes_canonical_installation_date(
+    hass: HomeAssistant,
+    hass_storage: dict,
+    device_registry: dr.DeviceRegistry,
+    entity_registry: er.EntityRegistry,
+    asset_store_data: AssetStoreData,
+    purchase_subentry_data: dict,
+    provenance: str,
+    canonical_before: str,
+    canonical_after: str,
+) -> None:
+    """A real Purchase edit reload exposes canonical provenance-safe date data."""
+    owner = MockConfigEntry(domain="hue", title="External owner", data={})
+    owner.add_to_hass(hass)
+    external = device_registry.async_get_or_create(
+        config_entry_id=owner.entry_id,
+        identifiers={("hue", f"purchase-date-{provenance}")},
+        name="Purchased external device",
+    )
+    data = deepcopy(asset_store_data)
+    asset = data["assets"][ASSET_UUID]
+    asset["installed_date"] = canonical_before
+    asset["field_sources"]["installed_date"] = provenance
+    asset["ha_device_refs"] = [{"device_id": external.id, "role": "primary"}]
+    purchase_data = deepcopy(purchase_subentry_data)
+    purchase_data[CONF_DEVICE_IDS] = [external.id]
+    subentries_data = (
+        {
+            "data": purchase_data,
+            "subentry_type": SUBENTRY_TYPE_PURCHASE,
+            "title": "Workshop equipment",
+            "unique_id": None,
+        },
+    )
+
+    with _verified_store_readback(hass_storage):
+        entry = await _setup_loaded_entry(
+            hass,
+            hass_storage,
+            data,
+            subentries_data=subentries_data,
+        )
+
+    initial_state = hass.states.get(
+        _entity_id(entity_registry, installed_date_unique_id(ASSET_UUID))
+    )
+    assert initial_state is not None
+    assert initial_state.state == canonical_before
+    purchase_subentry = next(iter(entry.subentries.values()))
+    initial = await entry.start_subentry_reconfigure_flow(
+        hass,
+        purchase_subentry.subentry_id,
+    )
+    assert initial["type"] is FlowResultType.FORM
+    original_schedule_reload = hass.config_entries.async_schedule_reload
+
+    with (
+        _verified_store_readback(hass_storage),
+        patch.object(
+            hass.config_entries,
+            "async_schedule_reload",
+            wraps=original_schedule_reload,
+        ) as schedule_reload,
+    ):
+        completed = await hass.config_entries.subentries.async_configure(
+            initial["flow_id"],
+            _purchase_edit_input(
+                purchase_data,
+                device_id=external.id,
+                installed_date="2026-08-07",
+            ),
+        )
+        assert completed["type"] is FlowResultType.ABORT
+        assert completed["reason"] == "reconfigure_successful"
+        await hass.async_block_till_done()
+        schedule_reload.assert_called_once_with(entry.entry_id)
+
+    refreshed_state = hass.states.get(
+        _entity_id(entity_registry, installed_date_unique_id(ASSET_UUID))
+    )
+    assert refreshed_state is not None
+    assert refreshed_state.state == canonical_after
+    refreshed_asset = entry.runtime_data.asset(ASSET_UUID)
+    assert refreshed_asset["installed_date"] == canonical_after
+    assert refreshed_asset["field_sources"]["installed_date"] == provenance
