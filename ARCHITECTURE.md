@@ -214,7 +214,7 @@ Store 1.2 contains only current Deployment status, Installation date, and Area. 
 
 ## Home Assistant relationships
 
-`ha_device_refs` stores user-managed relationships from an Asset to Home Assistant Device Registry devices. The persisted Store 1.2 representation is unchanged:
+`ha_device_refs` stores relationships from an Asset to Home Assistant Device Registry devices. In 0.5.6, related relationships are explicitly user-managed. Primary relationships may be established through Asset management or the existing Purchase and Runtime reconciliation paths. The persisted Store 1.2 representation is unchanged:
 
 ```text
 ha_device_refs:

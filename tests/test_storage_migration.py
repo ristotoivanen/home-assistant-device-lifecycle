@@ -3,21 +3,30 @@
 from __future__ import annotations
 
 from copy import deepcopy
-import json
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.device_lifecycle.const import (
     CONFIG_ENTRY_VERSION,
+    CONF_ASSET_UUID,
     CONF_DEPLOYMENT_STATE,
+    CONF_DEVICE_ID,
     CONF_HA_AREA_ID,
     DEPLOYMENT_STATE_UNKNOWN,
+    DOMAIN,
+    SUBENTRY_TYPE_RUNTIME,
 )
-from custom_components.device_lifecycle.migration import runtime_unique_id
+from custom_components.device_lifecycle.migration import (
+    async_migrate_entity_registry,
+    runtime_unique_id,
+)
 from custom_components.device_lifecycle.storage import (
     STORAGE_MINOR_VERSION,
     STORAGE_VERSION,
@@ -206,18 +215,82 @@ def test_purchase_relationship_rejects_home_assistant_provenance(
 
 def test_schema_and_config_entry_versions_remain_stable_for_0_5_6() -> None:
     """0.5.6 changes neither Store nor config-entry schemas."""
-    manifest_path = (
-        Path(__file__).parents[1]
-        / "custom_components"
-        / "device_lifecycle"
-        / "manifest.json"
-    )
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-
     assert STORAGE_VERSION == 1
     assert STORAGE_MINOR_VERSION == 2
     assert CONFIG_ENTRY_VERSION == 4
-    assert manifest["version"] == "0.5.5"
+
+
+async def test_runtime_entity_migration_resolves_primary_asset(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """Runtime entity migration ignores a related-only stored Asset UUID."""
+    external_entry = MockConfigEntry(
+        domain="hue",
+        title="External owner",
+        data={},
+    )
+    external_entry.add_to_hass(hass)
+    device = device_registry.async_get_or_create(
+        config_entry_id=external_entry.entry_id,
+        identifiers={("hue", "migration-primary-only")},
+        name="Migration device",
+    )
+
+    manager = AssetStoreManager(hass)
+    manager._store.async_save = AsyncMock()
+    related_asset = await manager.async_create_manual_asset(name="Related Asset")
+    primary_asset = await manager.async_create_manual_asset(name="Primary Asset")
+    await manager.async_add_related_device(related_asset["asset_uuid"], device.id)
+    await manager.async_link_asset_device(primary_asset["asset_uuid"], device.id)
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="device_lifecycle_main",
+        version=CONFIG_ENTRY_VERSION,
+        data={},
+        subentries_data=(
+            {
+                "data": {
+                    CONF_ASSET_UUID: related_asset["asset_uuid"],
+                    CONF_DEVICE_ID: device.id,
+                },
+                "subentry_type": SUBENTRY_TYPE_RUNTIME,
+                "title": "Runtime migration",
+                "unique_id": None,
+            },
+        ),
+    )
+    entry.add_to_hass(hass)
+    runtime_subentry = next(iter(entry.subentries.values()))
+    legacy_unique_id = (
+        f"{runtime_subentry.subentry_id}_{device.id}_runtime_hours"
+    )
+    registry_entry = entity_registry.async_get_or_create(
+        Platform.SENSOR,
+        DOMAIN,
+        legacy_unique_id,
+        suggested_object_id="migration_runtime_hours",
+        config_entry=entry,
+        config_subentry_id=runtime_subentry.subentry_id,
+        device_id=device.id,
+    )
+    original_entity_id = registry_entry.entity_id
+
+    await async_migrate_entity_registry(hass, entry, manager)
+
+    migrated = entity_registry.async_get(original_entity_id)
+    assert migrated is not None
+    assert migrated.entity_id == original_entity_id
+    assert migrated.unique_id == runtime_unique_id(primary_asset["asset_uuid"])
+    assert migrated.config_subentry_id == runtime_subentry.subentry_id
+    assert migrated.device_id == device.id
+    assert entity_registry.async_get_entity_id(
+        Platform.SENSOR,
+        DOMAIN,
+        runtime_unique_id(related_asset["asset_uuid"]),
+    ) is None
 
 
 async def test_existing_device_purchase_creation_sets_purchase_provenance(
