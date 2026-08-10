@@ -42,6 +42,7 @@ CONF_CLEAR_HA_AREA = "clear_ha_area"
 CONF_CONFIRM_AREA_CLEAR = "confirm_area_clear"
 
 CONF_RUNTIME_MODE = "runtime_mode"
+CONF_RUNTIME_DATA_VERSION = "runtime_data_version"
 CONF_SOURCE_ENTITY_ID = "source_entity_id"
 CONF_POWER_THRESHOLD = "power_threshold"
 CONF_POWER_HYSTERESIS = "power_hysteresis"
@@ -68,6 +69,7 @@ RUNTIME_MODES = (
 
 DEFAULT_POWER_THRESHOLD = 1.0
 DEFAULT_POWER_HYSTERESIS = 0.0
+RUNTIME_DATA_VERSION = 1
 
 DEPLOYMENT_STATE_UNKNOWN = "unknown"
 DEPLOYMENT_STATE_NOT_DEPLOYED = "not_deployed"

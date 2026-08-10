@@ -2,18 +2,24 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from math import isfinite
 from typing import Any
 
 from homeassistant.components.sensor import (
-    RestoreSensor,
     SensorEntity,
+    SensorExtraStoredData,
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
+    EVENT_HOMEASSISTANT_STOP,
     STATE_ON,
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
@@ -29,6 +35,7 @@ from homeassistant.core import (
 )
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import restore_state as rs
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.event import (
     async_track_state_change_event,
@@ -44,10 +51,12 @@ from .const import (
     CONF_DEVICE_IDS,
     CONF_POWER_HYSTERESIS,
     CONF_POWER_THRESHOLD,
+    CONF_RUNTIME_DATA_VERSION,
     CONF_RUNTIME_MODE,
     CONF_SOURCE_ENTITY_ID,
     DEFAULT_POWER_HYSTERESIS,
     DOMAIN,
+    RUNTIME_DATA_VERSION,
     RUNTIME_MODE_ON,
     RUNTIME_MODE_POWER,
     SUBENTRY_TYPE_PURCHASE,
@@ -59,9 +68,18 @@ from .const import (
 )
 from .migration import lifecycle_unique_id, runtime_unique_id
 from .models import AssetData, PurchaseData
-from .storage import AssetStoreManager
+from .storage import AssetStoreError, AssetStoreManager
 
 RUNTIME_REFRESH_INTERVAL = timedelta(minutes=5)
+_LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _PendingRuntimeDelta:
+    """One sealed Runtime commit that can be retried idempotently."""
+
+    expected_total: Decimal
+    delta: Decimal
 
 
 def _parse_date(value: str | None) -> date | None:
@@ -137,6 +155,38 @@ def _power_value_watts(state: State) -> float | None:
     return PowerConverter.convert(value, unit, UnitOfPower.WATT)
 
 
+def _legacy_restore_runtime_seconds(
+    hass: HomeAssistant,
+    entity_id: str,
+) -> Decimal:
+    """Read exact legacy native sensor hours and convert them to seconds."""
+    stored = rs.async_get(hass).last_states.get(entity_id)
+    if stored is None or stored.extra_data is None:
+        raise AssetStoreError("legacy native restore data is missing")
+
+    sensor_data = SensorExtraStoredData.from_dict(stored.extra_data.as_dict())
+    if sensor_data is None or sensor_data.native_value is None:
+        raise AssetStoreError("legacy native Runtime value is missing")
+
+    unit = sensor_data.native_unit_of_measurement
+    if unit is None or str(getattr(unit, "value", unit)) != UnitOfTime.HOURS:
+        raise AssetStoreError("legacy Runtime unit is missing or is not hours")
+
+    native_value = sensor_data.native_value
+    if isinstance(native_value, bool) or not isinstance(
+        native_value,
+        (Decimal, int, str),
+    ):
+        raise AssetStoreError("legacy native Runtime value is not safely decimal")
+    try:
+        hours = Decimal(native_value)
+    except (InvalidOperation, TypeError, ValueError) as err:
+        raise AssetStoreError("legacy native Runtime value is malformed") from err
+    if not hours.is_finite() or hours < 0:
+        raise AssetStoreError("legacy native Runtime value is negative or non-finite")
+    return hours * Decimal(3600)
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -146,6 +196,7 @@ async def async_setup_entry(
     device_registry = dr.async_get(hass)
     entity_registry = er.async_get(hass)
     manager: AssetStoreManager = entry.runtime_data
+    runtime_asset_uuids: set[str] = set()
 
     valid_subentry_ids = {
         subentry.subentry_id
@@ -231,17 +282,83 @@ async def async_setup_entry(
             expected_unique_ids: set[str] = set()
             runtime_entities: list[DeviceRuntimeHoursSensor] = []
 
-            if device_entry is not None and source_entity_id and asset is not None:
+            if asset is not None:
                 unique_id = runtime_unique_id(asset["asset_uuid"])
                 expected_unique_ids.add(unique_id)
-                runtime_entities.append(
-                    DeviceRuntimeHoursSensor(
-                        data=dict(subentry.data),
-                        asset=asset,
-                        device_entry=device_entry,
-                        unique_id=unique_id,
+                asset_uuid = asset["asset_uuid"]
+
+                if source_entity_id and asset_uuid in runtime_asset_uuids:
+                    _LOGGER.error(
+                        "Refusing a second active Runtime writer for Asset %s",
+                        asset_uuid,
                     )
-                )
+                elif source_entity_id:
+                    runtime_asset_uuids.add(asset_uuid)
+                    canonical_total = manager.runtime_total_seconds(asset_uuid)
+
+                    if canonical_total is None:
+                        marker = subentry.data.get(CONF_RUNTIME_DATA_VERSION)
+                        try:
+                            if (
+                                isinstance(marker, int)
+                                and not isinstance(marker, bool)
+                                and marker == RUNTIME_DATA_VERSION
+                            ):
+                                canonical_total = (
+                                    await manager.async_initialize_new_runtime(
+                                        asset_uuid
+                                    )
+                                )
+                            elif marker is None:
+                                entity_id = entity_registry.async_get_entity_id(
+                                    "sensor",
+                                    DOMAIN,
+                                    unique_id,
+                                )
+                                if entity_id is None:
+                                    raise AssetStoreError(
+                                        "existing Runtime entity identity is missing"
+                                    )
+                                restored_seconds = (
+                                    _legacy_restore_runtime_seconds(
+                                        hass,
+                                        entity_id,
+                                    )
+                                )
+                                canonical_total = (
+                                    await manager.async_import_legacy_runtime(
+                                        asset_uuid,
+                                        restored_seconds,
+                                    )
+                                )
+                            else:
+                                raise AssetStoreError(
+                                    "Runtime provenance marker is invalid"
+                                )
+                        except (AssetStoreError, OSError) as err:
+                            _LOGGER.error(
+                                "Runtime migration for Asset %s is unresolved: %s. "
+                                "The canonical total remains uninitialized and "
+                                "migration will retry on reload",
+                                asset_uuid,
+                                err,
+                            )
+
+                    if canonical_total is not None:
+                        initialized_asset = manager.asset(asset_uuid)
+                        if (
+                            device_entry is not None
+                            and initialized_asset is not None
+                        ):
+                            runtime_entities.append(
+                                DeviceRuntimeHoursSensor(
+                                    data=dict(subentry.data),
+                                    asset=initialized_asset,
+                                    device_entry=device_entry,
+                                    unique_id=unique_id,
+                                    manager=manager,
+                                )
+                            )
 
             _remove_unexpected_subentry_entities(
                 entity_registry=entity_registry,
@@ -441,8 +558,8 @@ class DeviceLifecycleSensor(SensorEntity):
         )
 
 
-class DeviceRuntimeHoursSensor(RestoreSensor):
-    """Cumulative runtime hours for one persistent physical Asset."""
+class DeviceRuntimeHoursSensor(SensorEntity):
+    """Projection of one Asset's canonical cumulative Runtime total."""
 
     _attr_has_entity_name = True
     _attr_translation_key = "runtime_hours"
@@ -459,11 +576,21 @@ class DeviceRuntimeHoursSensor(RestoreSensor):
         asset: AssetData,
         device_entry: dr.DeviceEntry,
         unique_id: str,
+        manager: AssetStoreManager,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
-        """Initialize runtime hours sensor."""
+        """Initialize a canonical Runtime projection."""
+        total = asset["runtime"]["total_seconds"]
+        if total is None:
+            raise AssetStoreError(
+                f"Asset {asset['asset_uuid']} Runtime is not initialized"
+            )
+
         self._data = data
         self._asset_uuid = asset["asset_uuid"]
         self._asset_id = asset["asset_id"]
+        self._manager = manager
+        self._monotonic = monotonic
         self.device_entry = device_entry
         self._attr_unique_id = unique_id
 
@@ -477,23 +604,33 @@ class DeviceRuntimeHoursSensor(RestoreSensor):
             )
         )
 
-        self._stored_hours = Decimal("0")
-        self._active_since: datetime | None = None
+        self._committed_seconds = Decimal(total)
+        self._pending: list[_PendingRuntimeDelta] = []
+        self._active_since: float | None = None
+        self._runtime_lock = asyncio.Lock()
+        self._removing = False
+        self._unsub_source: Callable[[], None] | None = None
+        self._unsub_interval: Callable[[], None] | None = None
+        self._unsub_shutdown: Callable[[], None] | None = None
 
     @property
     def native_value(self) -> Decimal:
-        """Return cumulative runtime in hours."""
-        total = self._stored_hours
-
+        """Return committed, pending, and currently active Runtime in hours."""
+        total_seconds = self._committed_seconds + sum(
+            (item.delta for item in self._pending),
+            start=Decimal(0),
+        )
         if self._active_since is not None:
-            elapsed = dt_util.utcnow() - self._active_since
-            total += Decimal(str(elapsed.total_seconds())) / Decimal("3600")
-
-        return total.quantize(Decimal("0.000001"))
+            elapsed = self._monotonic() - self._active_since
+            if elapsed > 0:
+                total_seconds += Decimal(str(elapsed))
+        return (total_seconds / Decimal(3600)).quantize(
+            Decimal("0.000001")
+        )
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return runtime tracking metadata and stable Asset identity."""
+        """Return Runtime tracking metadata and stable Asset identity."""
         source_state = self.hass.states.get(self._source_entity_id)
         attrs: dict[str, Any] = {
             "asset_id": self._asset_id,
@@ -515,88 +652,158 @@ class DeviceRuntimeHoursSensor(RestoreSensor):
         return attrs
 
     async def async_added_to_hass(self) -> None:
-        """Restore total runtime and start listeners."""
+        """Start a fresh observable interval and register Runtime listeners."""
         await super().async_added_to_hass()
-
-        if (
-            last_sensor_data := await self.async_get_last_sensor_data()
-        ) is not None and last_sensor_data.native_value is not None:
-            try:
-                self._stored_hours = Decimal(str(last_sensor_data.native_value))
-            except (InvalidOperation, TypeError, ValueError):
-                self._stored_hours = Decimal("0")
 
         current_state = self.hass.states.get(self._source_entity_id)
         if self._is_active(current_state, currently_active=False):
-            self._active_since = dt_util.utcnow()
+            self._active_since = self._monotonic()
 
-        self.async_on_remove(
-            async_track_state_change_event(
-                self.hass,
-                [self._source_entity_id],
-                self._handle_source_change,
-            )
+        # These are intentionally not async_on_remove callbacks: Home Assistant
+        # runs those before async_will_remove_from_hass(), while Runtime must
+        # attempt its final checkpoint before listener cleanup.
+        self._unsub_source = async_track_state_change_event(
+            self.hass,
+            [self._source_entity_id],
+            self._handle_source_change,
         )
-        self.async_on_remove(
-            async_track_time_interval(
-                self.hass,
-                self._handle_periodic_refresh,
-                RUNTIME_REFRESH_INTERVAL,
-            )
+        self._unsub_interval = async_track_time_interval(
+            self.hass,
+            self._handle_periodic_checkpoint,
+            RUNTIME_REFRESH_INTERVAL,
+        )
+        self._unsub_shutdown = self.hass.bus.async_listen_once(
+            EVENT_HOMEASSISTANT_STOP,
+            self._handle_shutdown,
         )
 
         self.async_write_ha_state()
 
-    @callback
-    def _handle_source_change(
+    async def async_will_remove_from_hass(self) -> None:
+        """Attempt a final serialized checkpoint before listener cleanup."""
+        self._removing = True
+        try:
+            async with self._runtime_lock:
+                self._seal_active(self._monotonic(), continue_active=False)
+                await self._async_flush_pending()
+                self.async_write_ha_state()
+        finally:
+            self._cleanup_runtime_listeners()
+        await super().async_will_remove_from_hass()
+
+    async def _handle_source_change(
         self,
         event: Event[EventStateChangedData],
     ) -> None:
-        """Handle activity or availability transitions with hysteresis."""
+        """Handle activity and availability transitions with hysteresis."""
+        if self._removing:
+            return
+
         old_state = event.data["old_state"]
         new_state = event.data["new_state"]
 
-        currently_active = self._active_since is not None
-        new_active = self._is_active(
-            new_state,
-            currently_active=currently_active,
-        )
-        old_available = self._source_available(old_state)
-        new_available = self._source_available(new_state)
+        async with self._runtime_lock:
+            currently_active = self._active_since is not None
+            new_active = self._is_active(
+                new_state,
+                currently_active=currently_active,
+            )
+            old_available = self._source_available(old_state)
+            new_available = self._source_available(new_state)
 
-        if (
-            new_active == currently_active
-            and old_available == new_available
-        ):
-            return
+            if (
+                new_active == currently_active
+                and old_available == new_available
+            ):
+                return
 
-        now = dt_util.utcnow()
+            now = self._monotonic()
+            if currently_active and not new_active:
+                self._seal_active(now, continue_active=False)
+            elif not currently_active and new_active:
+                self._active_since = now
 
-        if currently_active and not new_active:
-            self._commit_elapsed(now)
-        elif not currently_active and new_active:
-            self._active_since = now
-
-        self.async_write_ha_state()
-
-    @callback
-    def _handle_periodic_refresh(self, _now: datetime) -> None:
-        """Refresh a running counter without creating source-event churn."""
-        if self._active_since is not None:
+            await self._async_flush_pending()
             self.async_write_ha_state()
 
-    def _commit_elapsed(self, now: datetime) -> None:
-        """Move the active interval into the restored runtime total."""
+    async def _handle_periodic_checkpoint(self, _now: datetime) -> None:
+        """Seal active elapsed and durably retry all pending Runtime deltas."""
+        if self._removing:
+            return
+        async with self._runtime_lock:
+            if self._active_since is not None:
+                self._seal_active(self._monotonic(), continue_active=True)
+            await self._async_flush_pending()
+            self.async_write_ha_state()
+
+    async def _handle_shutdown(self, _event: Event) -> None:
+        """Attempt a final checkpoint during normal Home Assistant shutdown."""
+        async with self._runtime_lock:
+            self._seal_active(self._monotonic(), continue_active=False)
+            await self._async_flush_pending()
+            self.async_write_ha_state()
+
+    def _seal_active(self, now: float, *, continue_active: bool) -> None:
+        """Move observable active time to an ordered retryable pending delta."""
         if self._active_since is None:
             return
 
         elapsed = now - self._active_since
-        if elapsed.total_seconds() > 0:
-            self._stored_hours += Decimal(
-                str(elapsed.total_seconds())
-            ) / Decimal("3600")
+        if elapsed > 0:
+            delta = Decimal(str(elapsed))
+            expected = self._committed_seconds + sum(
+                (item.delta for item in self._pending),
+                start=Decimal(0),
+            )
+            self._pending.append(_PendingRuntimeDelta(expected, delta))
 
-        self._active_since = None
+        self._active_since = now if continue_active else None
+
+    async def _async_flush_pending(self) -> None:
+        """Commit pending deltas in order, retaining every failed delta."""
+        while self._pending:
+            pending = self._pending[0]
+            try:
+                committed = await self._manager.async_commit_runtime_delta(
+                    self._asset_uuid,
+                    expected_total=pending.expected_total,
+                    delta=pending.delta,
+                )
+            except (AssetStoreError, OSError) as err:
+                _LOGGER.error(
+                    "Runtime checkpoint for Asset %s failed; %s seconds remain "
+                    "pending and will be retried: %s",
+                    self._asset_uuid,
+                    sum(
+                        (item.delta for item in self._pending),
+                        start=Decimal(0),
+                    ),
+                    err,
+                )
+                return
+
+            expected_committed = pending.expected_total + pending.delta
+            if committed != expected_committed:
+                _LOGGER.error(
+                    "Runtime checkpoint for Asset %s returned an unexpected total; "
+                    "the delta remains pending",
+                    self._asset_uuid,
+                )
+                return
+            self._committed_seconds = committed
+            self._pending.pop(0)
+
+    def _cleanup_runtime_listeners(self) -> None:
+        """Remove Runtime listeners after the final checkpoint attempt."""
+        for attribute in (
+            "_unsub_source",
+            "_unsub_interval",
+            "_unsub_shutdown",
+        ):
+            unsubscribe = getattr(self, attribute)
+            if unsubscribe is not None:
+                unsubscribe()
+                setattr(self, attribute, None)
 
     def _source_available(self, state: State | None) -> bool:
         """Return whether a source state is usable."""

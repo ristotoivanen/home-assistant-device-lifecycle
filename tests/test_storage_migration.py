@@ -1,4 +1,4 @@
-"""Tests for the Device Lifecycle Asset Store 1.1 to 1.2 migration."""
+"""Tests for Device Lifecycle Asset Store 1.1/1.2 to 2.1 migration."""
 
 from __future__ import annotations
 
@@ -14,11 +14,11 @@ from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.device_lifecycle.const import (
-    CONFIG_ENTRY_VERSION,
     CONF_ASSET_UUID,
     CONF_DEPLOYMENT_STATE,
     CONF_DEVICE_ID,
     CONF_HA_AREA_ID,
+    CONFIG_ENTRY_VERSION,
     DEPLOYMENT_STATE_UNKNOWN,
     DOMAIN,
     SUBENTRY_TYPE_RUNTIME,
@@ -105,8 +105,8 @@ async def test_store_migration_is_idempotent(
         deepcopy(migrated_once),
     )
     current_schema = await store._async_migrate_func(
-        1,
         2,
+        1,
         deepcopy(migrated_once),
     )
 
@@ -114,11 +114,11 @@ async def test_store_migration_is_idempotent(
     assert current_schema == migrated_once
 
 
-async def test_store_1_2_related_refs_load_without_migration(
+async def test_store_1_2_related_refs_survive_v2_migration(
     hass: HomeAssistant,
     asset_store_data,
 ) -> None:
-    """Existing valid related references already belong to Store schema 1.2."""
+    """Existing Store 1.2 related references survive the v2 boundary."""
     source = deepcopy(asset_store_data)
     source["assets"][ASSET_UUID]["ha_device_refs"].extend(
         [
@@ -213,10 +213,10 @@ def test_purchase_relationship_rejects_home_assistant_provenance(
         _validate_store_data(asset_store_data)
 
 
-def test_schema_and_config_entry_versions_remain_stable_for_0_5_6() -> None:
-    """0.5.6 changes neither Store nor config-entry schemas."""
-    assert STORAGE_VERSION == 1
-    assert STORAGE_MINOR_VERSION == 2
+def test_schema_and_config_entry_versions_for_0_5_7() -> None:
+    """0.5.7 isolates canonical Runtime data in Store major version two."""
+    assert STORAGE_VERSION == 2
+    assert STORAGE_MINOR_VERSION == 1
     assert CONFIG_ENTRY_VERSION == 4
 
 
