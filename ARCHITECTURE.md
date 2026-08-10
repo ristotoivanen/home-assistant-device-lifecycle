@@ -1,6 +1,6 @@
 # Device Lifecycle architecture
 
-This document defines the Asset Core and Asset Exposure invariants through Device Lifecycle 0.6.0. Future releases must extend the model through explicit migrations instead of replacing Asset identity.
+This document defines the Asset Core and Asset Exposure invariants through Device Lifecycle 0.6.1. Future releases must extend the model through explicit migrations instead of replacing Asset identity.
 
 ## Core concepts
 
@@ -41,7 +41,7 @@ Asset Core uses one private, atomic, versioned Home Assistant Store:
 device_lifecycle.assets
 ```
 
-Device Lifecycle 0.6.0 uses Store major version `2`, minor version `1`. Asset Exposure is derived entirely from this existing payload and adds no stored projection IDs, exposure state, migration markers, or persistent relationship fields.
+Device Lifecycle 0.6.1 uses Store major version `2`, minor version `1`. Asset Exposure is derived entirely from this existing payload and adds no stored projection IDs, exposure state, migration markers, or persistent relationship fields.
 
 Conceptual payload:
 
@@ -295,16 +295,19 @@ Device Lifecycle owns only these deterministic projection devices. External Home
 
 ## Asset exposure entities
 
-Every valid Asset exposes four parent-owned entities on its Asset Device, regardless of Purchase, external relationship, Runtime configuration, or deployment state:
+Every valid Asset exposes five parent-owned entities on its Asset Device, regardless of Purchase, external relationship, Runtime configuration, or deployment state:
 
 - Lifecycle, with stable unique ID `<asset_uuid>_lifecycle`
 - Deployment, with stable unique ID `<asset_uuid>_deployment`
+- Installation Date, with stable unique ID `<asset_uuid>_installed_date`
 - Relationships, with stable unique ID `<asset_uuid>_relationships`
 - Asset ID, with stable unique ID `<asset_uuid>_asset_id`
 
 Lifecycle retains its existing state and warranty behavior, existing attributes, unique ID, entity ID, user naming, enabled state, options, and Recorder identity. It no longer belongs to a Purchase subentry. An Asset with no Purchase or warranty still exposes Lifecycle with the existing not-specified style state.
 
 Deployment is a normal enum sensor with canonical states `unknown`, `not_deployed`, and `deployed`. It resolves only the exact stored `ha_area_id` for display. Its deterministic Area state is `not_set`, `present`, or `missing`; a stale ID remains stored and is never repaired by name.
+
+Installation Date is a normal native date sensor derived only from canonical Asset `installed_date`. It holds no independent canonical state and does not read Purchase subentry data directly. Purchase reconciliation and user provenance determine the canonical Asset value before exposure; both provenance modes are displayed identically. A date never implies or changes Deployment state, and the existing Deployment and Lifecycle compatibility attributes remain unchanged.
 
 Relationships is an enabled-by-default diagnostic enum sensor. Its state is `none` when no references are stored, `present` when every exact stored Device Registry ID resolves, and `missing` when any stored ID does not resolve. `primary_state` uses `not_linked`, `present`, or `missing`; related entries use only `present` or `missing`. Current Device Registry names are derived display metadata and are never persisted. Registry presence means only that a `DeviceEntry` exists, not that the device is operational or available.
 
@@ -357,7 +360,7 @@ The 0.6.0 registry migration is deliberately separate from Asset Store migration
 10. Publish `runtime_data` and forward sensor platform setup.
 11. Create any missing parent-owned exposure entities and register the centralized relationship listener.
 
-The preflight scans all Assets and all desired entity identities before the first exposure-related Device or Entity Registry mutation. An exact Asset Device identifier may have zero or one active match. Multiple matches, external ownership, additional identifiers or connections, a foreign entity collision, a noncanonical Lifecycle/Runtime unique ID, a mismatched config entry, or multiple Runtime subentries for one Asset fail setup closed. An otherwise exact Device Lifecycle-owned projection found on one of the same parent entry's subentries is an incomplete derived projection and is safely moved back to the parent; metadata is never used to choose between devices or entities.
+The preflight scans all Assets and all desired entity identities, including `<asset_uuid>_installed_date`, before the first exposure-related Device or Entity Registry mutation. An exact Asset Device identifier may have zero or one active match. Multiple matches, external ownership, additional identifiers or connections, a foreign entity collision, a noncanonical Lifecycle/Runtime unique ID, a mismatched config entry, or multiple Runtime subentries for one Asset fail setup closed. An otherwise exact Device Lifecycle-owned projection found on one of the same parent entry's subentries is an incomplete derived projection and is safely moved back to the parent; metadata is never used to choose between devices or entities.
 
 Registry reconciliation is idempotent. A valid existing Asset Device is reused; only a missing exact projection is created. Existing entity updates change only `device_id` and `config_subentry_id`; they do not rewrite entity ID, unique ID, name overrides, enabled state, options, categories, labels, or unrelated customization.
 
@@ -434,9 +437,9 @@ Examples from the existing roadmap include:
 
 Growing histories do not belong in ConfigSubentries. ConfigSubentries remain suitable for active user configuration; persistent history belongs in explicitly versioned Device Lifecycle storage.
 
-## 0.6.0 schema and migration impact
+## 0.6.1 schema and migration impact
 
-Device Lifecycle 0.6.0 adds only derived Home Assistant exposure while retaining canonical storage and existing entity identity. Therefore:
+Device Lifecycle 0.6.1 adds only a native Home Assistant date projection of the already-canonical Asset `installed_date`. Therefore:
 
 - Store major/minor is `2.1`
 - config entry version remains `4`
@@ -445,6 +448,7 @@ Device Lifecycle 0.6.0 adds only derived Home Assistant exposure while retaining
 - Runtime entity unique IDs and entity IDs remain unchanged
 - Lifecycle entity unique IDs and entity IDs remain unchanged
 - no Device Registry ID or exposure status is stored
+- no installation-date field, provenance rule, Store migration, or ConfigEntry migration is added
 
 ## Explicit non-goals for 0.6.0
 

@@ -339,6 +339,9 @@
           "deployed": "Deployed"
         }
       },
+      "installed_date": {
+        "name": "Installation date"
+      },
       "relationships": {
         "name": "Relationships",
         "state": {

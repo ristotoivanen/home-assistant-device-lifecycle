@@ -17,6 +17,12 @@ Asset IDs are allocated monotonically and never recycled. The UUID and Asset ID 
 
 Asset Core uses Home Assistant's private, atomic, versioned storage. Its invariants and Store 2.1 schema are documented in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
+## What's new in 0.6.1
+
+Device Lifecycle 0.6.1 exposes the canonical Asset `installed_date`, already stored and reconciled in 0.6.0, as an enabled native Home Assistant **Installation Date** sensor. Its unique ID is `<asset_uuid>_installed_date`, and it belongs to the parent ConfigEntry and the deterministic Asset Device.
+
+The sensor reports the canonical date without inferring it from Purchase date, Deployment, Area, external devices, Runtime, or entity history. Deployment status remains independent: an Asset may have an Installation Date while its Deployment state is still `unknown` or `not_deployed`. Store remains 2.1, ConfigEntry remains version 4, and 0.6.1 adds no persistence or config-entry migration.
+
 ## What's new in 0.6.0
 
 Device Lifecycle 0.6.0, **Asset Exposure Core**, gives every existing canonical Asset a clean Home Assistant representation:
@@ -47,12 +53,13 @@ The Asset deployment Area is intentionally not synchronized to the Asset Device'
 
 ## Exposure entities
 
-Every valid Asset now has these entities on its Asset Device:
+Every valid Asset now has these five parent-owned entities on its Asset Device:
 
-- **Lifecycle** preserves the existing warranty/state behavior and compatibility attributes. No Purchase or warranty information is required; the entity uses the existing not-specified state in that case.
-- **Deployment** reports `unknown`, `not_deployed`, or `deployed`. Its attributes expose Installation date and the exact stored Asset Area as `not_set`, `present`, or `missing`. A stale Area ID is preserved and never repaired by name.
-- **Relationships** reports `none`, `present`, or `missing` from exact stored external Device Registry IDs. It shows primary and related states and current display names without persisting those names or treating registry presence as operational availability.
-- **Asset ID** reports the permanent `DLxxxx` value. In Finnish its name is **Elinkaaritunnus**.
+- **Lifecycle** (`<asset_uuid>_lifecycle`) preserves the existing warranty/state behavior and compatibility attributes. No Purchase or warranty information is required; the entity uses the existing not-specified state in that case.
+- **Deployment** (`<asset_uuid>_deployment`) reports `unknown`, `not_deployed`, or `deployed`. Its attributes continue to expose Installation date and the exact stored Asset Area as `not_set`, `present`, or `missing`. A stale Area ID is preserved and never repaired by name.
+- **Installation Date** (`<asset_uuid>_installed_date`) exposes canonical `asset["installed_date"]` as a native Home Assistant date. It has no independent state or persistence.
+- **Relationships** (`<asset_uuid>_relationships`) reports `none`, `present`, or `missing` from exact stored external Device Registry IDs. It shows primary and related states and current display names without persisting those names or treating registry presence as operational availability.
+- **Asset ID** (`<asset_uuid>_asset_id`) reports the permanent `DLxxxx` value. In Finnish its name is **Elinkaaritunnus**.
 
 Relationships remain read-only references. A missing external device stays linked by its stored ID and is never automatically remapped. Related devices never refresh Asset metadata, alter Purchase or Deployment, or become Runtime targets or fallbacks.
 
@@ -194,7 +201,7 @@ Existing relationships to historical or no-longer-configured Purchases are prese
 
 ## Storage and migration impact
 
-0.6.0 retains Store 2.1 and the existing `ha_device_refs` structure, where each reference contains only `device_id` and `role` (`primary` or `related`). No Asset Device ID, exposure state, migration marker, or new relationship field is persisted, and there is no config-entry version migration.
+0.6.1 retains Store 2.1 and ConfigEntry version 4. It only adds a projection of the existing canonical `installed_date`; no Asset Device ID, entity ID, exposure state, migration marker, provenance field, or relationship field is persisted, and there is no config-entry migration.
 
 ## Warranty
 
@@ -225,6 +232,10 @@ While active, Runtime checkpoints to Asset Store every five minutes. It also che
 Runtime configuration remains owned by its Runtime subentry, and the external primary relationship remains its configured target. In 0.6.0 only the entity's Device Registry placement changes to the owned Asset Device. Runtime unique ID, entity ID, subentry ID, total, source behavior, initialization, restore import, thresholds, hysteresis, units, precision, state class, checkpointing, and CAS behavior are unchanged.
 
 ## Upgrade notes
+
+### Upgrading from 0.6.0 to 0.6.1
+
+No Store or ConfigEntry migration runs. Setup preflights the new immutable Asset UUID-derived Installation Date identity before platform setup, then Home Assistant creates or reuses the parent-owned entity on the existing deterministic Asset Device.
 
 ### Upgrading from 0.5.7 to 0.6.0
 

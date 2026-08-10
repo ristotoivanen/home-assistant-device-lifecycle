@@ -1,8 +1,9 @@
-"""Deployment, Relationships, Asset ID, and Lifecycle exposure tests."""
+"""Parent-owned Asset exposure sensor tests through 0.6.1."""
 
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import date
 from unittest.mock import AsyncMock, Mock
 
 from homeassistant.components.sensor import SensorDeviceClass
@@ -23,6 +24,7 @@ from custom_components.device_lifecycle.exposure import (
     asset_device_identifier,
     asset_id_unique_id,
     deployment_unique_id,
+    installed_date_unique_id,
     relationships_unique_id,
 )
 from custom_components.device_lifecycle.migration import lifecycle_unique_id
@@ -30,6 +32,7 @@ from custom_components.device_lifecycle.models import AssetData
 from custom_components.device_lifecycle.sensor import (
     DeviceAssetIdSensor,
     DeviceDeploymentSensor,
+    DeviceInstallationDateSensor,
     DeviceLifecycleSensor,
     DeviceRelationshipsSensor,
     _DeploymentAreaRegistryCoordinator,
@@ -134,7 +137,59 @@ async def test_every_asset_gets_parent_owned_lifecycle_without_purchase(
     lifecycle.hass = hass
     assert lifecycle.native_value == "Warranty not specified"
     assert "purchase_uuid" not in lifecycle.extra_state_attributes
-    assert len(entities) == 4
+    installation_date = next(
+        entity
+        for entity in entities
+        if isinstance(entity, DeviceInstallationDateSensor)
+    )
+    assert installation_date.device_entry.id == asset_device.id
+    assert len(entities) == 5
+
+
+def test_installation_date_sensor_exposes_only_canonical_asset_date(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+    asset_store_data,
+) -> None:
+    """The native date projection is identical for Purchase and user provenance."""
+    entry = _entry(hass)
+    device = _asset_device(device_registry, entry)
+    asset = deepcopy(asset_store_data["assets"][ASSET_UUID])
+
+    for provenance in ("purchase", "user"):
+        asset["installed_date"] = "2026-08-07"
+        asset["field_sources"]["installed_date"] = provenance
+        snapshot = deepcopy(asset)
+        sensor = DeviceInstallationDateSensor(
+            asset=asset,
+            device_entry=device,
+        )
+
+        assert sensor.native_value == date(2026, 8, 7)
+        assert sensor.device_class == SensorDeviceClass.DATE
+        assert sensor.unique_id == installed_date_unique_id(ASSET_UUID)
+        assert sensor.has_entity_name is True
+        assert sensor.translation_key == "installed_date"
+        assert sensor.entity_registry_enabled_default is True
+        assert sensor.entity_category is None
+        assert sensor.device_entry.id == device.id
+        assert sensor.extra_state_attributes is None
+        assert asset == snapshot
+
+
+def test_installation_date_sensor_does_not_fabricate_missing_date(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+    asset_store_data,
+) -> None:
+    """A canonical null installation date remains a null native value."""
+    entry = _entry(hass)
+    device = _asset_device(device_registry, entry)
+    asset = deepcopy(asset_store_data["assets"][ASSET_UUID])
+    asset["installed_date"] = None
+    sensor = DeviceInstallationDateSensor(asset=asset, device_entry=device)
+
+    assert sensor.native_value is None
 
 
 async def test_deployment_states_and_area_resolution_are_exact(

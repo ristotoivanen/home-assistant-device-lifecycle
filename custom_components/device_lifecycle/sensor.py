@@ -72,6 +72,7 @@ from .exposure import (
     asset_device_entry,
     asset_id_unique_id,
     deployment_unique_id,
+    installed_date_unique_id,
     relationships_unique_id,
 )
 from .migration import lifecycle_unique_id, runtime_unique_id
@@ -224,8 +225,7 @@ async def async_setup_entry(
     valid_subentry_ids = {
         subentry.subentry_id
         for subentry in entry.subentries.values()
-        if subentry.subentry_type
-        in (SUBENTRY_TYPE_PURCHASE, SUBENTRY_TYPE_RUNTIME)
+        if subentry.subentry_type in (SUBENTRY_TYPE_PURCHASE, SUBENTRY_TYPE_RUNTIME)
     }
 
     # If an entire subentry was deleted, remove only entities that belonged to
@@ -285,6 +285,10 @@ async def async_setup_entry(
                     purchase_title=purchase_title,
                 ),
                 deployment,
+                DeviceInstallationDateSensor(
+                    asset=asset,
+                    device_entry=device_entry,
+                ),
                 DeviceAssetIdSensor(
                     asset=asset,
                     device_entry=device_entry,
@@ -324,15 +328,11 @@ async def async_setup_entry(
     for subentry in entry.subentries.values():
         if subentry.subentry_type == SUBENTRY_TYPE_RUNTIME:
             device_id = str(subentry.data.get(CONF_DEVICE_ID) or "")
-            source_entity_id = str(
-                subentry.data.get(CONF_SOURCE_ENTITY_ID) or ""
-            )
+            source_entity_id = str(subentry.data.get(CONF_SOURCE_ENTITY_ID) or "")
 
             asset = manager.asset(str(subentry.data.get(CONF_ASSET_UUID) or ""))
             primary_asset = (
-                manager.asset_for_primary_device_id(device_id)
-                if device_id
-                else None
+                manager.asset_for_primary_device_id(device_id) if device_id else None
             )
             if (
                 asset is None
@@ -381,11 +381,9 @@ async def async_setup_entry(
                                     raise AssetStoreError(
                                         "existing Runtime entity identity is missing"
                                     )
-                                restored_seconds = (
-                                    _legacy_restore_runtime_seconds(
-                                        hass,
-                                        entity_id,
-                                    )
+                                restored_seconds = _legacy_restore_runtime_seconds(
+                                    hass,
+                                    entity_id,
                                 )
                                 canonical_total = (
                                     await manager.async_import_legacy_runtime(
@@ -525,8 +523,7 @@ class DeviceLifecycleSensor(SensorEntity):
         warranty_type = str(warranty.get("type") or WARRANTY_NONE)
         warranty_until = _parse_date(warranty.get("until"))
         warranty_active = (
-            warranty_until is not None
-            and warranty_until >= dt_util.now().date()
+            warranty_until is not None and warranty_until >= dt_util.now().date()
         )
 
         attrs: dict[str, Any] = {
@@ -682,6 +679,32 @@ class DeviceDeploymentSensor(SensorEntity):
         }
 
 
+class DeviceInstallationDateSensor(SensorEntity):
+    """Native date projection of one Asset's canonical installation date."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "installed_date"
+    _attr_should_poll = False
+    _attr_device_class = SensorDeviceClass.DATE
+    _attr_entity_registry_enabled_default = True
+
+    def __init__(
+        self,
+        *,
+        asset: AssetData,
+        device_entry: dr.DeviceEntry,
+    ) -> None:
+        """Initialize an Installation Date projection."""
+        self._asset = asset
+        self.device_entry = device_entry
+        self._attr_unique_id = installed_date_unique_id(asset["asset_uuid"])
+
+    @property
+    def native_value(self) -> date | None:
+        """Return the parsed canonical Asset installation date."""
+        return _parse_date(self._asset.get("installed_date"))
+
+
 class _DeploymentAreaRegistryCoordinator:
     """One Area Registry listener shared by all Deployment entities."""
 
@@ -748,8 +771,7 @@ class DeviceRelationshipsSensor(SensorEntity):
         self.device_entry = device_entry
         self._attr_unique_id = relationships_unique_id(asset["asset_uuid"])
         self.referenced_device_ids = frozenset(
-            str(reference["device_id"])
-            for reference in asset.get("ha_device_refs", [])
+            str(reference["device_id"]) for reference in asset.get("ha_device_refs", [])
         )
 
     @property
@@ -856,9 +878,7 @@ class _RelationshipsRegistryCoordinator:
         ] = {}
         for entity in entities:
             for device_id in entity.referenced_device_ids:
-                self._entities_by_device_id.setdefault(device_id, []).append(
-                    entity
-                )
+                self._entities_by_device_id.setdefault(device_id, []).append(entity)
 
     @callback
     def _async_registry_updated(
@@ -947,9 +967,7 @@ class DeviceRuntimeHoursSensor(SensorEntity):
             elapsed = self._monotonic() - self._active_since
             if elapsed > 0:
                 total_seconds += Decimal(str(elapsed))
-        return (total_seconds / Decimal(3600)).quantize(
-            Decimal("0.000001")
-        )
+        return (total_seconds / Decimal(3600)).quantize(Decimal("0.000001"))
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -1034,10 +1052,7 @@ class DeviceRuntimeHoursSensor(SensorEntity):
             old_available = self._source_available(old_state)
             new_available = self._source_available(new_state)
 
-            if (
-                new_active == currently_active
-                and old_available == new_available
-            ):
+            if new_active == currently_active and old_available == new_available:
                 return
 
             now = self._monotonic()
@@ -1130,9 +1145,9 @@ class DeviceRuntimeHoursSensor(SensorEntity):
 
     def _source_available(self, state: State | None) -> bool:
         """Return whether a source state is usable."""
-        return (
-            state is not None
-            and state.state not in (STATE_UNKNOWN, STATE_UNAVAILABLE)
+        return state is not None and state.state not in (
+            STATE_UNKNOWN,
+            STATE_UNAVAILABLE,
         )
 
     def _is_active(

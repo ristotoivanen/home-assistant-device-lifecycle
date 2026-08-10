@@ -1,4 +1,4 @@
-"""Asset Device and exposure registry migration tests for 0.6.0."""
+"""Asset Device and exposure registry migration tests through 0.6.1."""
 
 from __future__ import annotations
 
@@ -30,6 +30,7 @@ from custom_components.device_lifecycle.exposure import (
     async_reconcile_exposure_registry,
     build_exposure_migration_plan,
     deployment_unique_id,
+    installed_date_unique_id,
 )
 from custom_components.device_lifecycle.migration import (
     async_migrate_entity_registry,
@@ -451,13 +452,13 @@ async def test_lifecycle_and_runtime_registry_ownership_migrates_in_place(
     assert manager._data == store_before
 
 
-async def test_new_entity_collision_fails_closed_without_device_creation(
+async def test_deployment_entity_collision_fails_closed_without_device_creation(
     hass: HomeAssistant,
     device_registry: dr.DeviceRegistry,
     entity_registry: er.EntityRegistry,
     asset_store_data: AssetStoreData,
 ) -> None:
-    """A foreign desired unique ID is not deleted or taken over."""
+    """A foreign Deployment unique ID is not deleted or taken over."""
     manager = _manager(hass, asset_store_data)
     entry = _entry(hass)
     foreign = MockConfigEntry(domain=DOMAIN, title="Foreign", data={})
@@ -475,6 +476,72 @@ async def test_new_entity_collision_fails_closed_without_device_creation(
 
     assert entity_registry.async_get(collision.entity_id) == collision
     assert dr.async_entries_for_config_entry(device_registry, entry.entry_id) == []
+
+
+async def test_installation_date_collision_fails_closed_without_device_creation(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+    entity_registry: er.EntityRegistry,
+    asset_store_data: AssetStoreData,
+) -> None:
+    """A foreign Installation Date unique ID is not deleted or taken over."""
+    manager = _manager(hass, asset_store_data)
+    entry = _entry(hass)
+    foreign = MockConfigEntry(domain=DOMAIN, title="Foreign", data={})
+    foreign.add_to_hass(hass)
+    collision = entity_registry.async_get_or_create(
+        Platform.SENSOR,
+        DOMAIN,
+        installed_date_unique_id(ASSET_UUID),
+        suggested_object_id="installation_date_collision",
+        config_entry=foreign,
+    )
+
+    with pytest.raises(AssetStoreError, match="not unambiguously owned"):
+        await async_reconcile_exposure_registry(hass, entry, manager)
+
+    assert entity_registry.async_get(collision.entity_id) == collision
+    assert dr.async_entries_for_config_entry(device_registry, entry.entry_id) == []
+
+
+async def test_compatible_installation_date_entity_is_reused_idempotently(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+    entity_registry: er.EntityRegistry,
+    asset_store_data: AssetStoreData,
+) -> None:
+    """A correctly owned existing identity converges onto the Asset Device."""
+    manager = _manager(hass, asset_store_data)
+    entry = _entry(hass)
+    unique_id = installed_date_unique_id(ASSET_UUID)
+    existing = entity_registry.async_get_or_create(
+        Platform.SENSOR,
+        DOMAIN,
+        unique_id,
+        suggested_object_id="installation_date",
+        config_entry=entry,
+    )
+
+    await async_reconcile_exposure_registry(hass, entry, manager)
+    first = entity_registry.async_get(existing.entity_id)
+    asset_device = asset_device_entry(
+        device_registry,
+        config_entry_id=entry.entry_id,
+        asset_uuid=ASSET_UUID,
+    )
+    assert first is not None
+    assert asset_device is not None
+    assert first.entity_id == existing.entity_id
+    assert first.unique_id == unique_id
+    assert first.config_subentry_id is None
+    assert first.device_id == asset_device.id
+
+    await async_reconcile_exposure_registry(hass, entry, manager)
+    second = entity_registry.async_get(existing.entity_id)
+    assert second is not None
+    assert second.entity_id == first.entity_id
+    assert second.unique_id == first.unique_id
+    assert second.device_id == first.device_id
 
 
 @pytest.mark.parametrize("fail_after_creations", [0, 1, 2])
@@ -820,7 +887,7 @@ async def test_partial_migration_after_rollback_failure_recovers_on_reload(
     )
 
 
-def test_0_6_has_no_store_or_config_entry_schema_change() -> None:
+def test_0_6_1_has_no_store_or_config_entry_schema_change() -> None:
     """Asset exposure adds no canonical persistence or config migration flags."""
     assert STORAGE_VERSION == 2
     assert STORAGE_MINOR_VERSION == 1
@@ -861,6 +928,7 @@ async def test_full_setup_creates_parent_owned_entities_after_registry_gate(
     expected_unique_ids = {
         lifecycle_unique_id(ASSET_UUID),
         deployment_unique_id(ASSET_UUID),
+        installed_date_unique_id(ASSET_UUID),
         f"{ASSET_UUID}_relationships",
         f"{ASSET_UUID}_asset_id",
     }

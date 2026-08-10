@@ -28,6 +28,7 @@ ExposureEntityKind = Literal[
     "lifecycle",
     "runtime",
     "deployment",
+    "installed_date",
     "relationships",
     "asset_id",
 ]
@@ -36,8 +37,9 @@ _ENTITY_KIND_ORDER: dict[ExposureEntityKind, int] = {
     "lifecycle": 0,
     "runtime": 1,
     "deployment": 2,
-    "relationships": 3,
-    "asset_id": 4,
+    "installed_date": 3,
+    "relationships": 4,
+    "asset_id": 5,
 }
 
 
@@ -49,6 +51,11 @@ def asset_device_identifier(asset_uuid: str) -> tuple[str, str]:
 def deployment_unique_id(asset_uuid: str) -> str:
     """Return the stable Asset-owned Deployment entity unique ID."""
     return f"{asset_uuid}_deployment"
+
+
+def installed_date_unique_id(asset_uuid: str) -> str:
+    """Return the stable Asset-owned Installation Date entity unique ID."""
+    return f"{asset_uuid}_installed_date"
 
 
 def relationships_unique_id(asset_uuid: str) -> str:
@@ -256,6 +263,10 @@ def build_exposure_migration_plan(
             deployment_unique_id(asset_uuid): asset_uuid
             for asset_uuid in assets_by_uuid
         },
+        "installed_date": {
+            installed_date_unique_id(asset_uuid): asset_uuid
+            for asset_uuid in assets_by_uuid
+        },
         "relationships": {
             relationships_unique_id(asset_uuid): asset_uuid
             for asset_uuid in assets_by_uuid
@@ -293,6 +304,7 @@ def build_exposure_migration_plan(
         "lifecycle",
         "runtime",
         "deployment",
+        "installed_date",
         "relationships",
         "asset_id",
     ):
