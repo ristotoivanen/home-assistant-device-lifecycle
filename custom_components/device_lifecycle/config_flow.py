@@ -21,6 +21,7 @@ from homeassistant.config_entries import (
     SubentryFlowResult,
 )
 from homeassistant.core import HomeAssistant, State, callback
+from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
@@ -32,10 +33,15 @@ from .const import (
     CONF_ASSET_NAME,
     CONF_ASSET_UUID,
     CONF_CATEGORY,
+    CONF_CLEAR_HA_AREA,
+    CONF_CLEAR_INSTALLED_DATE,
+    CONF_CONFIRM_AREA_CLEAR,
     CONF_CURRENCY,
+    CONF_DEPLOYMENT_STATE,
     CONF_DEVICE_ID,
     CONF_DEVICE_IDS,
     CONF_HW_VERSION,
+    CONF_HA_AREA_ID,
     CONF_INSTALLED_DATE,
     CONF_MANUFACTURER,
     CONF_MODEL,
@@ -58,6 +64,8 @@ from .const import (
     CONF_WARRANTY_UNTIL,
     DEFAULT_POWER_HYSTERESIS,
     DEFAULT_POWER_THRESHOLD,
+    DEPLOYMENT_STATES,
+    DEPLOYMENT_STATE_NOT_DEPLOYED,
     DOMAIN,
     RUNTIME_MODE_ON,
     RUNTIME_MODE_POWER,
@@ -874,7 +882,25 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             return "invalid_purchase"
         if "relationship" in message or "conflict" in message:
             return "purchase_conflict"
+        if "deployment state" in message:
+            return "invalid_deployment_state"
+        if "installed_date" in message:
+            return "invalid_installed_date"
+        if "ha area" in message:
+            return "invalid_area"
         return "asset_store_error"
+
+    def _area_label(self, area_id: str | None) -> str:
+        """Describe a current Area without guessing from its name."""
+        if area_id is None:
+            return self._localized_label("No Area", "Ei aluetta")
+        area = ar.async_get(self.hass).async_get_area(area_id)
+        if area is None:
+            return self._localized_label(
+                f"Unavailable (stored ID: {area_id})",
+                f"Ei saatavilla (tallennettu tunnus: {area_id})",
+            )
+        return f"{area.name} ({area.id})"
 
     def _finish_asset_action(
         self,
@@ -1007,7 +1033,11 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             return self._show_asset_selection(errors={"base": "asset_missing"})
         return self.async_show_menu(
             step_id="manage_asset_menu",
-            menu_options=["edit_asset_metadata", "change_asset_purchase"],
+            menu_options=[
+                "edit_asset_metadata",
+                "change_asset_purchase",
+                "asset_deployment",
+            ],
             description_placeholders={"asset": _asset_label(asset)},
         )
 
@@ -1114,6 +1144,203 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             description_placeholders={
                 "asset": _asset_label(asset),
                 "current_purchase": current_label,
+            },
+        )
+
+    def _show_asset_deployment_form(
+        self,
+        asset: AssetData,
+        *,
+        user_input: dict[str, Any] | None = None,
+        errors: dict[str, str] | None = None,
+    ) -> ConfigFlowResult:
+        """Show explicit deployment fields without inferring HA relationships."""
+        fields: dict[Any, Any] = {
+            vol.Required(
+                CONF_DEPLOYMENT_STATE,
+                default=asset[CONF_DEPLOYMENT_STATE],
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=list(DEPLOYMENT_STATES),
+                    translation_key="deployment_state",
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
+            vol.Optional(CONF_INSTALLED_DATE): selector.DateSelector(),
+            vol.Required(
+                CONF_CLEAR_INSTALLED_DATE,
+                default=False,
+            ): selector.BooleanSelector(),
+            vol.Optional(CONF_HA_AREA_ID): selector.AreaSelector(),
+            vol.Required(
+                CONF_CLEAR_HA_AREA,
+                default=False,
+            ): selector.BooleanSelector(),
+        }
+        suggested: dict[str, Any] = {
+            CONF_DEPLOYMENT_STATE: asset[CONF_DEPLOYMENT_STATE],
+            CONF_CLEAR_INSTALLED_DATE: False,
+            CONF_CLEAR_HA_AREA: False,
+        }
+        if installed_date := asset.get(CONF_INSTALLED_DATE):
+            suggested[CONF_INSTALLED_DATE] = installed_date
+        current_area_id = asset.get(CONF_HA_AREA_ID)
+        if (
+            current_area_id is not None
+            and ar.async_get(self.hass).async_get_area(current_area_id) is not None
+        ):
+            suggested[CONF_HA_AREA_ID] = current_area_id
+        if user_input is not None:
+            suggested.update(user_input)
+
+        return self.async_show_form(
+            step_id="asset_deployment",
+            data_schema=self.add_suggested_values_to_schema(
+                vol.Schema(fields),
+                suggested,
+            ),
+            errors=errors or {},
+            description_placeholders={
+                "asset": _asset_label(asset),
+                "current_area": self._area_label(current_area_id),
+            },
+        )
+
+    async def async_step_asset_deployment(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Edit explicit deployment state, date, and Asset Area metadata."""
+        asset_uuid = getattr(self, "_selected_asset_uuid", None)
+        asset = self._manager.asset(asset_uuid)
+        if asset is None:
+            return self._show_asset_selection(errors={"base": "asset_missing"})
+
+        if user_input is None:
+            return self._show_asset_deployment_form(asset)
+
+        errors: dict[str, str] = {}
+        deployment_state = str(user_input.get(CONF_DEPLOYMENT_STATE) or "")
+        updates: dict[str, str | None] = {}
+        if deployment_state not in DEPLOYMENT_STATES:
+            errors["base"] = "invalid_deployment_state"
+        elif deployment_state != asset[CONF_DEPLOYMENT_STATE]:
+            updates[CONF_DEPLOYMENT_STATE] = deployment_state
+
+        if user_input.get(CONF_CLEAR_INSTALLED_DATE):
+            if asset.get(CONF_INSTALLED_DATE) is not None:
+                updates[CONF_INSTALLED_DATE] = None
+        elif selected_date := user_input.get(CONF_INSTALLED_DATE):
+            try:
+                parsed_date = dt_util.parse_date(str(selected_date))
+            except (TypeError, ValueError):
+                parsed_date = None
+            if parsed_date is None:
+                errors["base"] = "invalid_installed_date"
+            elif parsed_date.isoformat() != asset.get(CONF_INSTALLED_DATE):
+                updates[CONF_INSTALLED_DATE] = parsed_date.isoformat()
+
+        current_area_id = asset.get(CONF_HA_AREA_ID)
+        if user_input.get(CONF_CLEAR_HA_AREA):
+            if current_area_id is not None:
+                updates[CONF_HA_AREA_ID] = None
+        elif selected_area := user_input.get(CONF_HA_AREA_ID):
+            selected_area = str(selected_area)
+            if selected_area != current_area_id:
+                if ar.async_get(self.hass).async_get_area(selected_area) is None:
+                    errors["base"] = "invalid_area"
+                else:
+                    updates[CONF_HA_AREA_ID] = selected_area
+
+        if (
+            deployment_state == DEPLOYMENT_STATE_NOT_DEPLOYED
+            and current_area_id is None
+            and updates.get(CONF_HA_AREA_ID) is not None
+        ):
+            errors["base"] = "invalid_area"
+
+        if errors:
+            return self._show_asset_deployment_form(
+                asset,
+                user_input=user_input,
+                errors=errors,
+            )
+
+        if (
+            current_area_id is not None
+            and asset[CONF_DEPLOYMENT_STATE] != DEPLOYMENT_STATE_NOT_DEPLOYED
+            and deployment_state == DEPLOYMENT_STATE_NOT_DEPLOYED
+        ):
+            updates[CONF_DEPLOYMENT_STATE] = DEPLOYMENT_STATE_NOT_DEPLOYED
+            updates[CONF_HA_AREA_ID] = None
+            self._pending_deployment_update = {
+                "asset_uuid": asset["asset_uuid"],
+                "updates": updates,
+                "area_label": self._area_label(current_area_id),
+            }
+            return await self.async_step_confirm_not_deployed()
+
+        try:
+            if updates:
+                asset = await self._manager.async_set_asset_deployment(
+                    asset["asset_uuid"],
+                    **updates,
+                )
+        except (AssetStoreError, OSError) as err:
+            return self._show_asset_deployment_form(
+                asset,
+                user_input=user_input,
+                errors={"base": self._storage_error_key(err)},
+            )
+        return self._finish_asset_action(asset, "asset_deployment_updated")
+
+    async def async_step_confirm_not_deployed(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Require confirmation before a not-deployed transition clears Area."""
+        pending = getattr(self, "_pending_deployment_update", None)
+        if pending is None:
+            return await self.async_step_asset_deployment()
+
+        asset = self._manager.asset(pending["asset_uuid"])
+        if asset is None:
+            del self._pending_deployment_update
+            return self._show_asset_selection(errors={"base": "asset_missing"})
+
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            if not user_input.get(CONF_CONFIRM_AREA_CLEAR):
+                del self._pending_deployment_update
+                return await self.async_step_asset_deployment()
+            try:
+                asset = await self._manager.async_set_asset_deployment(
+                    asset["asset_uuid"],
+                    **pending["updates"],
+                )
+            except (AssetStoreError, OSError) as err:
+                errors["base"] = self._storage_error_key(err)
+            else:
+                del self._pending_deployment_update
+                return self._finish_asset_action(
+                    asset,
+                    "asset_deployment_updated",
+                )
+
+        return self.async_show_form(
+            step_id="confirm_not_deployed",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_CONFIRM_AREA_CLEAR,
+                        default=False,
+                    ): selector.BooleanSelector()
+                }
+            ),
+            errors=errors,
+            description_placeholders={
+                "asset": _asset_label(asset),
+                "current_area": pending["area_label"],
             },
         )
 

@@ -36,6 +36,9 @@ CONF_NOTES = "notes"
 
 CONF_DEPLOYMENT_STATE = "deployment_state"
 CONF_HA_AREA_ID = "ha_area_id"
+CONF_CLEAR_INSTALLED_DATE = "clear_installed_date"
+CONF_CLEAR_HA_AREA = "clear_ha_area"
+CONF_CONFIRM_AREA_CLEAR = "confirm_area_clear"
 
 CONF_RUNTIME_MODE = "runtime_mode"
 CONF_SOURCE_ENTITY_ID = "source_entity_id"
