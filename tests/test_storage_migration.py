@@ -105,6 +105,30 @@ async def test_store_migration_is_idempotent(
     assert current_schema == migrated_once
 
 
+async def test_store_1_2_related_refs_load_without_migration(
+    hass: HomeAssistant,
+    asset_store_data,
+) -> None:
+    """Existing valid related references already belong to Store schema 1.2."""
+    source = deepcopy(asset_store_data)
+    source["assets"][ASSET_UUID]["ha_device_refs"].extend(
+        [
+            {"device_id": "related-one", "role": "related"},
+            {"device_id": "related-two", "role": "related"},
+        ]
+    )
+    store = DeviceLifecycleStore(hass)
+
+    loaded = await store._async_migrate_func(1, 2, source)
+
+    assert loaded == source
+    assert loaded["assets"][ASSET_UUID]["ha_device_refs"][-2:] == [
+        {"device_id": "related-one", "role": "related"},
+        {"device_id": "related-two", "role": "related"},
+    ]
+    _validate_store_data(loaded)
+
+
 async def test_migration_preserves_purchase_with_zero_assets(
     hass: HomeAssistant,
     asset_store_data_v1_1,
@@ -180,8 +204,8 @@ def test_purchase_relationship_rejects_home_assistant_provenance(
         _validate_store_data(asset_store_data)
 
 
-def test_schema_versions_remain_stable_after_0_5_4_release() -> None:
-    """The released manifest retains the schema and config-entry versions."""
+def test_schema_and_config_entry_versions_remain_stable_for_0_5_6() -> None:
+    """0.5.6 changes neither Store nor config-entry schemas."""
     manifest_path = (
         Path(__file__).parents[1]
         / "custom_components"
@@ -193,7 +217,7 @@ def test_schema_versions_remain_stable_after_0_5_4_release() -> None:
     assert STORAGE_VERSION == 1
     assert STORAGE_MINOR_VERSION == 2
     assert CONFIG_ENTRY_VERSION == 4
-    assert manifest["version"] == "0.5.4"
+    assert manifest["version"] == "0.5.5"
 
 
 async def test_existing_device_purchase_creation_sets_purchase_provenance(

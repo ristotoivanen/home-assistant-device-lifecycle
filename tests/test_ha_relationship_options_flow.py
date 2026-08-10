@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, PropertyMock, patch
 
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
@@ -146,14 +146,27 @@ async def test_ha_relationship_action_is_visible_and_uses_device_selector(
     flow, _entry = _options_flow(hass, manager)
 
     menu = await _select_asset(flow, asset["asset_uuid"])
-    form = await flow.async_step_ha_relationship()
+    overview = await flow.async_step_ha_relationship()
+    form = await flow.async_step_manage_primary_device()
 
     assert "ha_relationship" in menu["menu_options"]
+    assert overview["type"] is FlowResultType.MENU
+    assert overview["step_id"] == "ha_relationship"
+    assert overview["menu_options"] == [
+        "manage_primary_device",
+        "add_related_device",
+    ]
+    assert overview["description_placeholders"]["current_primary"] == (
+        "No primary Home Assistant device"
+    )
+    assert overview["description_placeholders"]["related_devices"] == (
+        "No related Home Assistant devices"
+    )
     assert form["type"] is FlowResultType.FORM
-    assert form["step_id"] == "ha_relationship"
+    assert form["step_id"] == "manage_primary_device"
     assert isinstance(_schema_validator(form, CONF_DEVICE_ID), selector.DeviceSelector)
     assert form["description_placeholders"]["current_device"] == (
-        "No linked Home Assistant device"
+        "No primary Home Assistant device"
     )
 
 
@@ -199,7 +212,7 @@ async def test_manual_asset_links_without_identity_or_registry_mutation(
     flow, parent_entry = _options_flow(hass, manager)
     await _select_asset(flow, asset["asset_uuid"])
 
-    result = await flow.async_step_ha_relationship({CONF_DEVICE_ID: device.id})
+    result = await flow.async_step_manage_primary_device({CONF_DEVICE_ID: device.id})
 
     updated = manager.asset(asset["asset_uuid"])
     registry_after = device_registry.async_get(device.id)
@@ -261,7 +274,7 @@ async def test_non_user_metadata_refreshes_but_user_fields_remain_owned(
     flow, _parent = _options_flow(hass, manager)
     await _select_asset(flow, ASSET_UUID)
 
-    await flow.async_step_ha_relationship({CONF_DEVICE_ID: device.id})
+    await flow.async_step_manage_primary_device({CONF_DEVICE_ID: device.id})
 
     updated = manager.asset(ASSET_UUID)
     assert updated["name"] == "HA refreshed name"
@@ -296,7 +309,7 @@ async def test_repeated_same_device_link_is_idempotent(
     flow, _parent = _options_flow(hass, manager)
     await _select_asset(flow, asset["asset_uuid"])
 
-    result = await flow.async_step_ha_relationship(
+    result = await flow.async_step_manage_primary_device(
         {
             CONF_HA_RELATIONSHIP_ACTION: HA_RELATIONSHIP_ACTION_REPLACE,
             CONF_DEVICE_ID: device.id,
@@ -327,13 +340,13 @@ async def test_device_primary_for_another_asset_is_rejected_with_dl_id(
     flow, _parent = _options_flow(hass, manager)
     await _select_asset(flow, candidate["asset_uuid"])
 
-    result = await flow.async_step_ha_relationship({CONF_DEVICE_ID: device.id})
+    result = await flow.async_step_manage_primary_device({CONF_DEVICE_ID: device.id})
 
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "device_already_linked"}
     assert result["description_placeholders"]["owner_asset_id"] == owner["asset_id"]
     assert manager.asset(candidate["asset_uuid"])["ha_device_refs"] == []
-    assert manager.asset_for_device_id(device.id)["asset_uuid"] == owner["asset_uuid"]
+    assert manager.asset_for_primary_device_id(device.id)["asset_uuid"] == owner["asset_uuid"]
     manager._store.async_save.assert_not_awaited()
 
 
@@ -370,7 +383,7 @@ async def test_missing_service_excluded_and_own_devices_are_rejected(
         (excluded.id, "non_physical_device_not_allowed"),
         (own_device.id, "device_lifecycle_device_not_allowed"),
     ):
-        result = await flow.async_step_ha_relationship(
+        result = await flow.async_step_manage_primary_device(
             {CONF_DEVICE_ID: device_id}
         )
         assert result["type"] is FlowResultType.FORM
@@ -388,7 +401,7 @@ async def test_missing_stored_device_is_displayed_and_can_be_unlinked(
     flow, _parent = _options_flow(hass, manager)
     await _select_asset(flow, ASSET_UUID)
 
-    form = await flow.async_step_ha_relationship()
+    form = await flow.async_step_manage_primary_device()
 
     assert form["type"] is FlowResultType.FORM
     assert "Unavailable" in form["description_placeholders"]["current_device"]
@@ -397,7 +410,7 @@ async def test_missing_stored_device_is_displayed_and_can_be_unlinked(
     ]["current_device"]
     assert manager.asset(ASSET_UUID)["ha_device_refs"] == before["ha_device_refs"]
 
-    result = await flow.async_step_ha_relationship(
+    result = await flow.async_step_manage_primary_device(
         {CONF_HA_RELATIONSHIP_ACTION: HA_RELATIONSHIP_ACTION_UNLINK}
     )
 
@@ -439,7 +452,7 @@ async def test_dependency_free_replacement_is_one_atomic_save(
     flow, _parent = _options_flow(hass, manager)
     await _select_asset(flow, asset["asset_uuid"])
 
-    result = await flow.async_step_ha_relationship(
+    result = await flow.async_step_manage_primary_device(
         {
             CONF_HA_RELATIONSHIP_ACTION: HA_RELATIONSHIP_ACTION_REPLACE,
             CONF_DEVICE_ID: second.id,
@@ -495,10 +508,10 @@ async def test_active_dependency_blocks_unlink_and_replacement(
     )
     await _select_asset(flow, asset["asset_uuid"])
 
-    unlink = await flow.async_step_ha_relationship(
+    unlink = await flow.async_step_manage_primary_device(
         {CONF_HA_RELATIONSHIP_ACTION: HA_RELATIONSHIP_ACTION_UNLINK}
     )
-    replace = await flow.async_step_ha_relationship(
+    replace = await flow.async_step_manage_primary_device(
         {
             CONF_HA_RELATIONSHIP_ACTION: HA_RELATIONSHIP_ACTION_REPLACE,
             CONF_DEVICE_ID: new.id,
@@ -534,7 +547,7 @@ async def test_failed_replacement_keeps_old_relationship(
     flow, _parent = _options_flow(hass, manager)
     await _select_asset(flow, asset["asset_uuid"])
 
-    result = await flow.async_step_ha_relationship(
+    result = await flow.async_step_manage_primary_device(
         {
             CONF_HA_RELATIONSHIP_ACTION: HA_RELATIONSHIP_ACTION_REPLACE,
             CONF_DEVICE_ID: new.id,
@@ -544,8 +557,8 @@ async def test_failed_replacement_keeps_old_relationship(
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "asset_store_error"}
     assert manager._data == before
-    assert manager.asset_for_device_id(old.id)["asset_uuid"] == asset["asset_uuid"]
-    assert manager.asset_for_device_id(new.id) is None
+    assert manager.asset_for_primary_device_id(old.id)["asset_uuid"] == asset["asset_uuid"]
+    assert manager.asset_for_primary_device_id(new.id) is None
 
 
 @pytest.mark.parametrize(
@@ -566,6 +579,11 @@ async def test_later_reconciliation_resolves_same_linked_asset(
     manager = _manager(hass)
     asset = await manager.async_create_manual_asset(name="Reconcile Asset")
     await manager.async_link_asset_device(asset["asset_uuid"], device.id)
+    related_device_id = f"related-{subentry_type}"
+    await manager.async_add_related_device(
+        asset["asset_uuid"],
+        related_device_id,
+    )
     counter_before = manager._data["next_asset_number"]
     flow, parent_entry = _options_flow(
         hass,
@@ -582,7 +600,8 @@ async def test_later_reconciliation_resolves_same_linked_asset(
     assert updated["asset_uuid"] == asset["asset_uuid"]
     assert updated["asset_id"] == asset["asset_id"]
     assert updated["ha_device_refs"] == [
-        {"device_id": device.id, "role": "primary"}
+        {"device_id": device.id, "role": "primary"},
+        {"device_id": related_device_id, "role": "related"},
     ]
     if subentry_type == SUBENTRY_TYPE_PURCHASE:
         purchase = manager.purchases()[0]
@@ -590,3 +609,353 @@ async def test_later_reconciliation_resolves_same_linked_asset(
     else:
         runtime_subentry = next(iter(parent_entry.subentries.values()))
         assert runtime_subentry.data[CONF_ASSET_UUID] == asset["asset_uuid"]
+
+
+async def test_relationship_overview_displays_primary_related_and_stale_refs(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+) -> None:
+    """Overview names current devices and never hides stale stored IDs."""
+    _primary_entry, primary = _external_device(
+        hass,
+        device_registry,
+        key="overview-primary",
+    )
+    _related_entry, related = _external_device(
+        hass,
+        device_registry,
+        key="overview-related",
+    )
+    manager = _manager(hass)
+    asset = await manager.async_create_manual_asset(name="Overview")
+    await manager.async_link_asset_device(asset["asset_uuid"], primary.id)
+    await manager.async_add_related_device(asset["asset_uuid"], related.id)
+    await manager.async_add_related_device(asset["asset_uuid"], "stale-related")
+    flow, _parent = _options_flow(hass, manager)
+    await _select_asset(flow, asset["asset_uuid"])
+
+    overview = await flow.async_step_ha_relationship()
+
+    assert overview["type"] is FlowResultType.MENU
+    assert overview["menu_options"] == [
+        "manage_primary_device",
+        "add_related_device",
+        "remove_related_device",
+    ]
+    placeholders = overview["description_placeholders"]
+    assert primary.id in placeholders["current_primary"]
+    assert primary.name in placeholders["current_primary"]
+    assert related.id in placeholders["related_devices"]
+    assert related.name in placeholders["related_devices"]
+    assert "stale-related" in placeholders["related_devices"]
+    assert "Unavailable" in placeholders["related_devices"]
+
+
+async def test_add_related_uses_device_selector_without_metadata_or_registry_writes(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+) -> None:
+    """Related add is validated but has no operational or ownership effects."""
+    external_entry, device = _external_device(
+        hass,
+        device_registry,
+        key="add-related",
+    )
+    registry_before = _device_snapshot(device)
+    entry_data_before = dict(external_entry.data)
+    manager = _manager(hass)
+    asset = await manager.async_create_manual_asset(
+        name="User Asset",
+        manufacturer="User manufacturer",
+        model="User model",
+    )
+    before = manager.asset(asset["asset_uuid"])
+    manager._store.async_save.reset_mock()
+    flow, _parent = _options_flow(
+        hass,
+        manager,
+        subentries_data=(
+            _subentry_data(SUBENTRY_TYPE_PURCHASE, device.id),
+            _subentry_data(SUBENTRY_TYPE_RUNTIME, device.id),
+        ),
+    )
+    await _select_asset(flow, asset["asset_uuid"])
+
+    form = await flow.async_step_add_related_device()
+    result = await flow.async_step_add_related_device(
+        {CONF_DEVICE_ID: device.id}
+    )
+
+    updated = manager.asset(asset["asset_uuid"])
+    current_device = device_registry.async_get(device.id)
+    assert form["type"] is FlowResultType.FORM
+    assert isinstance(_schema_validator(form, CONF_DEVICE_ID), selector.DeviceSelector)
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert updated["ha_device_refs"] == [
+        {"device_id": device.id, "role": "related"}
+    ]
+    for field in (
+        "asset_uuid",
+        "asset_id",
+        "name",
+        "manufacturer",
+        "model",
+        "purchase_uuid",
+        CONF_DEPLOYMENT_STATE,
+        CONF_INSTALLED_DATE,
+        CONF_HA_AREA_ID,
+        "field_sources",
+    ):
+        assert updated[field] == before[field]
+    assert _device_snapshot(current_device) == registry_before
+    assert external_entry.data == entry_data_before
+    manager._store.async_save.assert_awaited_once()
+
+
+async def test_related_add_allows_primary_owner_elsewhere_but_not_same_asset(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+) -> None:
+    """Related is non-exclusive, while one Asset cannot duplicate its primary."""
+    _entry, device = _external_device(
+        hass,
+        device_registry,
+        key="related-primary-owner",
+    )
+    manager = _manager(hass)
+    related_asset = await manager.async_create_manual_asset(name="Related Asset")
+    primary_asset = await manager.async_create_manual_asset(name="Primary Asset")
+    await manager.async_link_asset_device(primary_asset["asset_uuid"], device.id)
+    flow, _parent = _options_flow(hass, manager)
+    await _select_asset(flow, related_asset["asset_uuid"])
+
+    allowed = await flow.async_step_add_related_device(
+        {CONF_DEVICE_ID: device.id}
+    )
+
+    assert allowed["type"] is FlowResultType.CREATE_ENTRY
+    assert manager.asset(related_asset["asset_uuid"])["ha_device_refs"] == [
+        {"device_id": device.id, "role": "related"}
+    ]
+
+    await _select_asset(flow, primary_asset["asset_uuid"])
+    rejected = await flow.async_step_add_related_device(
+        {CONF_DEVICE_ID: device.id}
+    )
+
+    assert rejected["type"] is FlowResultType.FORM
+    assert rejected["errors"] == {"base": "related_device_is_primary"}
+    assert manager.asset(primary_asset["asset_uuid"])["ha_device_refs"] == [
+        {"device_id": device.id, "role": "primary"}
+    ]
+
+
+async def test_remove_related_uses_stored_options_and_removes_stale_ref(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+) -> None:
+    """Removal uses stored references so missing devices remain repairable."""
+    _entry, current = _external_device(
+        hass,
+        device_registry,
+        key="remove-current-related",
+    )
+    manager = _manager(hass)
+    asset = await manager.async_create_manual_asset(name="Remove stale")
+    await manager.async_add_related_device(asset["asset_uuid"], current.id)
+    await manager.async_add_related_device(asset["asset_uuid"], "missing-related")
+    flow, _parent = _options_flow(hass, manager)
+    await _select_asset(flow, asset["asset_uuid"])
+
+    form = await flow.async_step_remove_related_device()
+    validator = _schema_validator(form, CONF_DEVICE_ID)
+    options = list(validator.config["options"])
+    result = await flow.async_step_remove_related_device(
+        {CONF_DEVICE_ID: "missing-related"}
+    )
+
+    assert isinstance(validator, selector.SelectSelector)
+    assert {option["value"] for option in options} == {
+        current.id,
+        "missing-related",
+    }
+    stale_option = next(
+        option for option in options if option["value"] == "missing-related"
+    )
+    assert "missing-related" in stale_option["label"]
+    assert "Unavailable" in stale_option["label"]
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert manager.asset(asset["asset_uuid"])["ha_device_refs"] == [
+        {"device_id": current.id, "role": "related"}
+    ]
+
+
+async def test_related_device_can_be_promoted_in_primary_flow(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+) -> None:
+    """Primary replacement promotes the target without demoting the old primary."""
+    _old_entry, old = _external_device(
+        hass,
+        device_registry,
+        key="promote-old",
+    )
+    _new_entry, new = _external_device(
+        hass,
+        device_registry,
+        key="promote-new",
+    )
+    _keep_entry, keep = _external_device(
+        hass,
+        device_registry,
+        key="promote-keep",
+    )
+    manager = _manager(hass)
+    asset = await manager.async_create_manual_asset(name="Promote UI")
+    await manager.async_link_asset_device(asset["asset_uuid"], old.id)
+    await manager.async_add_related_device(asset["asset_uuid"], new.id)
+    await manager.async_add_related_device(asset["asset_uuid"], keep.id)
+    manager._store.async_save.reset_mock()
+    flow, _parent = _options_flow(hass, manager)
+    await _select_asset(flow, asset["asset_uuid"])
+
+    result = await flow.async_step_manage_primary_device(
+        {
+            CONF_HA_RELATIONSHIP_ACTION: HA_RELATIONSHIP_ACTION_REPLACE,
+            CONF_DEVICE_ID: new.id,
+        }
+    )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert manager.asset(asset["asset_uuid"])["ha_device_refs"] == [
+        {"device_id": new.id, "role": "primary"},
+        {"device_id": keep.id, "role": "related"},
+    ]
+    manager._store.async_save.assert_awaited_once()
+
+
+async def test_related_target_validation_uses_single_config_entry_owner(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+) -> None:
+    """HA 2026.8 validation does not read deprecated multi-owner properties."""
+    _entry, device = _external_device(
+        hass,
+        device_registry,
+        key="single-owner-api",
+    )
+    manager = _manager(hass)
+    asset = await manager.async_create_manual_asset(name="Single owner")
+    flow, _parent = _options_flow(hass, manager)
+    await _select_asset(flow, asset["asset_uuid"])
+
+    with patch.object(
+        dr.DeviceEntry,
+        "config_entries",
+        new_callable=PropertyMock,
+        side_effect=AssertionError("deprecated config_entries was read"),
+    ):
+        result = await flow.async_step_add_related_device(
+            {CONF_DEVICE_ID: device.id}
+        )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+
+
+async def test_related_add_enforces_all_primary_target_safety_checks(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+) -> None:
+    """DeviceSelector filtering never replaces server-side validation."""
+    _service_entry, service = _external_device(
+        hass,
+        device_registry,
+        key="related-service",
+        entry_type=dr.DeviceEntryType.SERVICE,
+    )
+    _excluded_entry, excluded = _external_device(
+        hass,
+        device_registry,
+        key="related-excluded",
+        domain="hassio",
+    )
+    manager = _manager(hass)
+    asset = await manager.async_create_manual_asset(name="Related validation")
+    flow, parent_entry = _options_flow(hass, manager)
+    own_device = device_registry.async_get_or_create(
+        config_entry_id=parent_entry.entry_id,
+        identifiers={(DOMAIN, "related-owned")},
+        name="Device Lifecycle owned",
+    )
+    await _select_asset(flow, asset["asset_uuid"])
+
+    for device_id, expected_error in (
+        ("missing-related-id", "device_missing"),
+        (service.id, "service_device_not_allowed"),
+        (excluded.id, "non_physical_device_not_allowed"),
+        (own_device.id, "device_lifecycle_device_not_allowed"),
+    ):
+        result = await flow.async_step_add_related_device(
+            {CONF_DEVICE_ID: device_id}
+        )
+        assert result["type"] is FlowResultType.FORM
+        assert result["errors"] == {"base": expected_error}
+
+    assert manager.asset(asset["asset_uuid"])["ha_device_refs"] == []
+
+
+@pytest.mark.parametrize(
+    "subentry_type",
+    [SUBENTRY_TYPE_PURCHASE, SUBENTRY_TYPE_RUNTIME],
+)
+async def test_reconciliation_uses_primary_only_and_preserves_related_identity(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+    subentry_type: str,
+) -> None:
+    """A related reference is neither identity nor a reconciliation fallback."""
+    _external_entry, device = _external_device(
+        hass,
+        device_registry,
+        key=f"related-not-identity-{subentry_type}",
+    )
+    manager = _manager(hass)
+    related_asset = await manager.async_create_manual_asset(
+        name="Reference-only Asset"
+    )
+    await manager.async_add_related_device(
+        related_asset["asset_uuid"],
+        device.id,
+    )
+    flow, parent_entry = _options_flow(
+        hass,
+        manager,
+        subentries_data=(_subentry_data(subentry_type, device.id),),
+    )
+    del flow
+
+    await manager.async_reconcile_entry(parent_entry)
+    first_snapshot = deepcopy(manager._data)
+    await manager.async_reconcile_entry(parent_entry)
+
+    operational_asset = manager.asset_for_primary_device_id(device.id)
+    assert operational_asset is not None
+    assert operational_asset["asset_uuid"] != related_asset["asset_uuid"]
+    assert operational_asset["ha_device_refs"] == [
+        {"device_id": device.id, "role": "primary"}
+    ]
+    assert manager.asset(related_asset["asset_uuid"])["ha_device_refs"] == [
+        {"device_id": device.id, "role": "related"}
+    ]
+    assert manager.asset_count == 2
+    assert manager._data == first_snapshot
+
+    if subentry_type == SUBENTRY_TYPE_PURCHASE:
+        assert manager.purchases()[0]["asset_uuids"] == [
+            operational_asset["asset_uuid"]
+        ]
+    else:
+        runtime_subentry = next(iter(parent_entry.subentries.values()))
+        assert runtime_subentry.data[CONF_ASSET_UUID] == operational_asset[
+            "asset_uuid"
+        ]

@@ -62,7 +62,7 @@ async def test_reconcile_existing_subentries_preserves_asset_core_identity(
 
     assert manager._data == original
     assert manager.asset(ASSET_UUID) == original["assets"][ASSET_UUID]
-    assert manager.asset_for_device_id(DEVICE_ID) == original["assets"][ASSET_UUID]
+    assert manager.asset_for_primary_device_id(DEVICE_ID) == original["assets"][ASSET_UUID]
     assert manager.purchase(PURCHASE_UUID) == original["purchases"][PURCHASE_UUID]
     assert manager.purchase_for_subentry(PURCHASE_SUBENTRY_ID) == original[
         "purchases"

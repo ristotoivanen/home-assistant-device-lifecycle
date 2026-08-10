@@ -158,6 +158,8 @@
       "asset_deployment_updated": "Deployment status for {asset_id} — {asset_name} was updated.",
       "asset_ha_relationship_updated": "The Home Assistant device link for {asset_id} — {asset_name} was updated.",
       "asset_purchase_updated": "The Purchase for {asset_id} — {asset_name} was updated.",
+      "asset_related_device_added": "A related Home Assistant device was added to {asset_id} — {asset_name}.",
+      "asset_related_device_removed": "A related Home Assistant device was removed from {asset_id} — {asset_name}.",
       "asset_updated": "Asset {asset_id} — {asset_name} was updated."
     },
     "error": {
@@ -177,6 +179,8 @@
       "no_assets": "There are no Assets to manage yet.",
       "non_physical_device_not_allowed": "Select a physical Home Assistant device provided by another integration.",
       "purchase_conflict": "This Asset is already linked to a different Purchase. Review its current Purchase and try again.",
+      "related_device_is_primary": "The selected Home Assistant device is already the primary device for this Asset.",
+      "related_device_not_found": "The selected related relationship no longer exists. Review the current relationships and try again.",
       "service_device_not_allowed": "The selected item is a Home Assistant service rather than a physical device."
     },
     "step": {
@@ -237,12 +241,35 @@
         "title": "Edit Asset metadata"
       },
       "ha_relationship": {
+        "description": "Asset: {asset}. Primary device: {current_primary}. Related devices: {related_devices}. Related devices are references only and do not affect Asset identity, metadata, Purchases, Runtime, entity placement, or Home Assistant device ownership.",
+        "menu_options": {
+          "add_related_device": "Add related device",
+          "manage_primary_device": "Manage primary device",
+          "remove_related_device": "Remove related device"
+        },
+        "title": "Home Assistant relationships"
+      },
+      "manage_primary_device": {
         "data": {
           "device_id": "Home Assistant device",
           "ha_relationship_action": "Action"
         },
-        "description": "Asset: {asset}. Current linked device: {current_device}. Linking, unlinking, or replacing a Home Assistant device does not change the Asset ID or modify the Home Assistant device.",
-        "title": "Link Home Assistant device"
+        "description": "Asset: {asset}. Current primary device: {current_device}. Linking, unlinking, replacing, or promoting a related device does not change the Asset ID or modify the Home Assistant device.",
+        "title": "Manage primary device"
+      },
+      "add_related_device": {
+        "data": {
+          "device_id": "Home Assistant device"
+        },
+        "description": "Asset: {asset}. Primary device: {current_primary}. Current related devices: {related_devices}. Adding a related reference does not refresh Asset metadata or affect Purchases, Runtime, entity placement, deployment, or the Home Assistant device.",
+        "title": "Add related device"
+      },
+      "remove_related_device": {
+        "data": {
+          "device_id": "Related Home Assistant device"
+        },
+        "description": "Asset: {asset}. Primary device: {current_primary}. Current related devices: {related_devices}. Unavailable devices remain selectable here by their stored ID.",
+        "title": "Remove related device"
       },
       "init": {
         "menu_options": {
@@ -264,7 +291,7 @@
           "asset_deployment": "Deployment status",
           "change_asset_purchase": "Change Purchase",
           "edit_asset_metadata": "Edit metadata",
-          "ha_relationship": "Home Assistant device"
+          "ha_relationship": "Home Assistant relationships"
         },
         "title": "Manage Asset"
       }

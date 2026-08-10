@@ -1,4 +1,4 @@
-"""Translation structure and 0.5.4 UI terminology tests."""
+"""Translation structure and Asset-management UI terminology tests."""
 
 from __future__ import annotations
 
@@ -155,9 +155,15 @@ def test_every_menu_action_and_step_has_translation(language: str) -> None:
         "edit_asset_metadata",
         "ha_relationship",
     }
+    assert set(steps["ha_relationship"]["menu_options"]) == {
+        "add_related_device",
+        "manage_primary_device",
+        "remove_related_device",
+    }
     menu_actions = {
         *steps["init"]["menu_options"],
         *steps["manage_asset_menu"]["menu_options"],
+        *steps["ha_relationship"]["menu_options"],
     }
     assert menu_actions <= set(steps)
 
@@ -166,7 +172,7 @@ def test_every_menu_action_and_step_has_translation(language: str) -> None:
 def test_deployment_relationship_confirmation_and_results_exist(
     language: str,
 ) -> None:
-    """All 0.5.4 selectors, confirmation copy, and result messages exist."""
+    """All selectors, relationship copy, and result messages exist."""
     translation = _translation(language)
 
     assert set(translation["selector"]["deployment_state"]["options"]) == set(

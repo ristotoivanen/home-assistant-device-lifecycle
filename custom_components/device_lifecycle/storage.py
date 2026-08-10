@@ -814,6 +814,59 @@ class AssetStoreManager:
 
         return await self._async_mutate(_unlink)
 
+    async def async_add_related_device(
+        self,
+        asset_uuid: str,
+        device_id: str,
+    ) -> AssetData:
+        """Atomically add one non-exclusive related HA device reference."""
+        if not isinstance(device_id, str) or not device_id.strip():
+            raise AssetStoreError("Home Assistant device ID is required")
+        device_id = device_id.strip()
+
+        def _add_related(data: AssetStoreData) -> AssetData:
+            asset = self._require_asset(data, asset_uuid)
+            for reference in asset.get("ha_device_refs", []):
+                if reference.get("device_id") != device_id:
+                    continue
+                if reference.get("role") == DEVICE_ROLE_PRIMARY:
+                    raise AssetStoreError(
+                        f"HA device {device_id} is already primary for Asset "
+                        f"{asset['asset_id']}"
+                    )
+                return asset
+
+            asset["ha_device_refs"].append(
+                {"device_id": device_id, "role": DEVICE_ROLE_RELATED}
+            )
+            return asset
+
+        return await self._async_mutate(_add_related)
+
+    async def async_remove_related_device(
+        self,
+        asset_uuid: str,
+        device_id: str,
+    ) -> AssetData:
+        """Atomically remove only one exact related HA device reference."""
+        if not isinstance(device_id, str) or not device_id.strip():
+            raise AssetStoreError("Home Assistant device ID is required")
+        device_id = device_id.strip()
+
+        def _remove_related(data: AssetStoreData) -> AssetData:
+            asset = self._require_asset(data, asset_uuid)
+            asset["ha_device_refs"] = [
+                reference
+                for reference in asset.get("ha_device_refs", [])
+                if not (
+                    reference.get("role") == DEVICE_ROLE_RELATED
+                    and reference.get("device_id") == device_id
+                )
+            ]
+            return asset
+
+        return await self._async_mutate(_remove_related)
+
     def _ensure_primary_reference(self, asset: AssetData, device_id: str) -> None:
         """Set a primary HA relationship while preserving future related links."""
         related: list[HADeviceReference] = [
@@ -1189,7 +1242,7 @@ class AssetStoreManager:
         asset = self._data["assets"].get(asset_uuid)
         return deepcopy(asset) if asset is not None else None
 
-    def asset_for_device_id(self, device_id: str) -> AssetData | None:
+    def asset_for_primary_device_id(self, device_id: str) -> AssetData | None:
         """Return a detached Asset snapshot for a primary HA device."""
         asset = self._find_asset_by_primary_device(self._data, device_id)
         return deepcopy(asset) if asset is not None else None

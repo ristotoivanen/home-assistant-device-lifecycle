@@ -177,7 +177,7 @@ async def async_setup_entry(
                 for device_id_value in subentry.data.get(CONF_DEVICE_IDS, []):
                     device_id = str(device_id_value)
                     device_entry = device_registry.async_get(device_id)
-                    asset = manager.asset_for_device_id(device_id)
+                    asset = manager.asset_for_primary_device_id(device_id)
                     if device_entry is None or asset is None:
                         continue
                     if asset.get("purchase_uuid") != purchase["purchase_uuid"]:
@@ -216,8 +216,17 @@ async def async_setup_entry(
             device_entry = device_registry.async_get(device_id)
 
             asset = manager.asset(str(subentry.data.get(CONF_ASSET_UUID) or ""))
-            if asset is None and device_id:
-                asset = manager.asset_for_device_id(device_id)
+            primary_asset = (
+                manager.asset_for_primary_device_id(device_id)
+                if device_id
+                else None
+            )
+            if (
+                asset is None
+                or primary_asset is None
+                or asset["asset_uuid"] != primary_asset["asset_uuid"]
+            ):
+                asset = primary_asset
 
             expected_unique_ids: set[str] = set()
             runtime_entities: list[DeviceRuntimeHoursSensor] = []
