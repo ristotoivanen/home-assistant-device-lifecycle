@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import timedelta
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
@@ -401,3 +401,303 @@ async def test_replacement_persistence_failure_has_zero_reload(
     assert result["errors"] == {"base": "persistence_error"}
     assert manager._data == before
     schedule_reload.assert_not_called()
+
+
+async def test_lifecycle_forms_reject_invalid_status_and_unconfirmed_disposal(
+    hass: HomeAssistant,
+) -> None:
+    """The initial form, enum guard, and disposal confirmation keep Store authority."""
+    manager = _manager(hass)
+    asset = await manager.async_create_manual_asset(name="Lifecycle forms")
+    flow = await _select(hass, manager, asset["asset_uuid"])
+
+    initial = await flow.async_step_asset_lifecycle()
+    invalid = await flow.async_step_asset_lifecycle(
+        {CONF_LIFECYCLE_STATUS: "stored", CONF_NOTES: "Not a lifecycle state"}
+    )
+    confirmation = await flow.async_step_asset_lifecycle(
+        {CONF_LIFECYCLE_STATUS: "disposed"}
+    )
+    declined = await flow.async_step_confirm_disposed(
+        {CONF_CONFIRM_DISPOSED: False}
+    )
+
+    assert initial["step_id"] == "asset_lifecycle"
+    assert invalid["errors"] == {"base": "invalid_lifecycle_status"}
+    assert confirmation["step_id"] == "confirm_disposed"
+    assert declined["errors"] == {"base": "confirmation_required"}
+    assert manager.asset(asset["asset_uuid"])["lifecycle"]["status"] == "active"
+
+
+async def test_disposal_confirmation_stale_and_persistence_error_paths(
+    hass: HomeAssistant,
+) -> None:
+    """A disappeared Asset or failed save cannot publish a pending disposal."""
+    stale_manager = _manager(hass)
+    stale_asset = await stale_manager.async_create_manual_asset(name="Stale disposal")
+    stale_flow = await _select(hass, stale_manager, stale_asset["asset_uuid"])
+    await stale_flow.async_step_asset_lifecycle(
+        {CONF_LIFECYCLE_STATUS: "disposed"}
+    )
+    stale_manager._data["assets"].pop(stale_asset["asset_uuid"])
+    stale_manager._data["lifecycle_events"].clear()
+    stale = await stale_flow.async_step_confirm_disposed(
+        {CONF_CONFIRM_DISPOSED: True}
+    )
+
+    manager = _manager(hass)
+    asset = await manager.async_create_manual_asset(name="Failed disposal")
+    flow = await _select(hass, manager, asset["asset_uuid"])
+    await flow.async_step_asset_lifecycle({CONF_LIFECYCLE_STATUS: "disposed"})
+    manager._store.async_save = AsyncMock(side_effect=OSError("save failed"))
+    failed = await flow.async_step_confirm_disposed(
+        {CONF_CONFIRM_DISPOSED: True}
+    )
+
+    assert stale["step_id"] == "manage_asset"
+    assert stale["errors"] == {"base": "asset_missing"}
+    assert not hasattr(stale_flow, "_pending_lifecycle_update")
+    assert failed["errors"] == {"base": "persistence_error"}
+    assert manager.asset(asset["asset_uuid"])["lifecycle"]["status"] == "active"
+
+
+async def test_disposal_confirmation_without_pending_update_returns_to_lifecycle(
+    hass: HomeAssistant,
+) -> None:
+    """A stale confirmation URL safely returns to the current lifecycle form."""
+    manager = _manager(hass)
+    asset = await manager.async_create_manual_asset(name="No pending disposal")
+    flow = await _select(hass, manager, asset["asset_uuid"])
+
+    result = await flow.async_step_confirm_disposed()
+
+    assert result["step_id"] == "asset_lifecycle"
+
+
+async def test_replacement_menu_and_initial_forms_cover_current_graph_state(
+    hass: HomeAssistant,
+) -> None:
+    """Replacement menus expose management only when an active record exists."""
+    manager = _manager(hass)
+    old, new, _other = await _three_assets(manager)
+    flow = await _select(hass, manager, old["asset_uuid"])
+
+    empty_menu = await flow.async_step_asset_replacement()
+    initial_create = await flow.async_step_replacement_replaced_by()
+    record = await manager.async_create_asset_replacement(
+        old["asset_uuid"],
+        new["asset_uuid"],
+        reason="failure",
+        effective_date=None,
+        notes=None,
+    )
+    populated_menu = await flow.async_step_asset_replacement()
+    initial_manage = await flow.async_step_manage_asset_replacement()
+
+    assert empty_menu["menu_options"] == [
+        "replacement_replaces",
+        "replacement_replaced_by",
+    ]
+    assert initial_create["step_id"] == "replacement_replaced_by"
+    assert populated_menu["menu_options"][-1] == "manage_asset_replacement"
+    assert initial_manage["step_id"] == "manage_asset_replacement"
+    record_selector = next(
+        validator
+        for marker, validator in initial_manage["data_schema"].schema.items()
+        if getattr(marker, "schema", marker) == CONF_REPLACEMENT_UUID
+    )
+    assert record["replacement_uuid"] in {
+        option["value"] for option in record_selector.config["options"]
+    }
+
+
+async def test_replacement_selected_asset_stale_paths_return_to_selector(
+    hass: HomeAssistant,
+) -> None:
+    """Every replacement entry point rechecks the selected Asset at submit time."""
+    manager = _manager(hass)
+    asset = await manager.async_create_manual_asset(name="Selected then removed")
+    flow = await _select(hass, manager, asset["asset_uuid"])
+    manager._data["assets"].pop(asset["asset_uuid"])
+    manager._data["lifecycle_events"].clear()
+
+    menu = await flow.async_step_asset_replacement()
+    create = await flow.async_step_replacement_replaced_by()
+    manage = await flow.async_step_manage_asset_replacement()
+    correct = await flow.async_step_correct_asset_replacement()
+    void = await flow.async_step_confirm_void_replacement()
+
+    for result in (menu, create, manage, correct, void):
+        assert result["step_id"] == "manage_asset"
+        assert result["errors"] == {"base": "asset_missing"}
+
+
+async def test_manage_replacement_stale_selection_action_and_empty_graph(
+    hass: HomeAssistant,
+) -> None:
+    """The management form rejects stale record/action values and graph changes."""
+    manager = _manager(hass)
+    old, new, _other = await _three_assets(manager)
+    record = await manager.async_create_asset_replacement(
+        old["asset_uuid"],
+        new["asset_uuid"],
+        reason="failure",
+        effective_date=None,
+        notes=None,
+    )
+    flow = await _select(hass, manager, old["asset_uuid"])
+
+    missing = await flow.async_step_manage_asset_replacement(
+        {
+            CONF_REPLACEMENT_UUID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            CONF_REPLACEMENT_ACTION: REPLACEMENT_ACTION_CORRECT,
+        }
+    )
+    invalid_action = await flow.async_step_manage_asset_replacement(
+        {
+            CONF_REPLACEMENT_UUID: record["replacement_uuid"],
+            CONF_REPLACEMENT_ACTION: "delete",
+        }
+    )
+    await manager.async_void_asset_replacement(
+        record["replacement_uuid"], void_reason="Graph changed"
+    )
+    empty = await flow.async_step_manage_asset_replacement()
+
+    assert missing["errors"] == {"base": "replacement_missing"}
+    assert invalid_action["errors"] == {"base": "replacement_missing"}
+    assert empty["step_id"] == "asset_replacement"
+
+
+async def test_correction_stale_record_error_and_disappearing_asset_paths(
+    hass: HomeAssistant,
+) -> None:
+    """Correction revalidates the record and never reloads after failure."""
+    manager = _manager(hass)
+    old, wrong, correct = await _three_assets(manager)
+    record = await manager.async_create_asset_replacement(
+        old["asset_uuid"],
+        wrong["asset_uuid"],
+        reason="failure",
+        effective_date="2026-08-09",
+        notes="Original",
+    )
+    flow = await _select(hass, manager, old["asset_uuid"])
+    flow._pending_replacement_uuid = record["replacement_uuid"]
+
+    initial = await flow.async_step_correct_asset_replacement()
+    with patch.object(
+        manager,
+        "async_correct_asset_replacement",
+        AsyncMock(side_effect=OSError("save failed")),
+    ), patch.object(hass.config_entries, "async_schedule_reload") as reload:
+        failed = await flow.async_step_correct_asset_replacement(
+            {
+                CONF_PREDECESSOR_ASSET_UUID: old["asset_uuid"],
+                CONF_SUCCESSOR_ASSET_UUID: correct["asset_uuid"],
+                CONF_REPLACEMENT_REASON: "upgrade",
+                CONF_VOID_REASON: "Wrong endpoint",
+            }
+        )
+    assert initial["step_id"] == "correct_asset_replacement"
+    assert failed["errors"] == {"base": "asset_store_error"}
+    reload.assert_not_called()
+
+    await manager.async_void_asset_replacement(
+        record["replacement_uuid"], void_reason="Made stale"
+    )
+    stale = await flow.async_step_correct_asset_replacement()
+    assert stale["errors"] == {"base": "replacement_missing"}
+
+    manager2 = _manager(hass)
+    a, b, c = await _three_assets(manager2)
+    active = await manager2.async_create_asset_replacement(
+        a["asset_uuid"], b["asset_uuid"], reason="failure", effective_date=None, notes=None
+    )
+    flow2 = await _select(hass, manager2, a["asset_uuid"])
+    flow2._pending_replacement_uuid = active["replacement_uuid"]
+    with patch.object(manager2, "asset", Mock(side_effect=[a, None])):
+        disappeared = await flow2.async_step_correct_asset_replacement(
+            {
+                CONF_PREDECESSOR_ASSET_UUID: a["asset_uuid"],
+                CONF_SUCCESSOR_ASSET_UUID: c["asset_uuid"],
+                CONF_REPLACEMENT_REASON: "other",
+                CONF_VOID_REASON: "Correct then disappear",
+            }
+        )
+    assert disappeared["step_id"] == "manage_asset"
+    assert disappeared["errors"] == {"base": "asset_missing"}
+
+
+async def test_void_confirmation_guards_errors_and_disappearing_asset(
+    hass: HomeAssistant,
+) -> None:
+    """Void requires confirmation/reason and handles stale and failed mutations."""
+    manager = _manager(hass)
+    old, new, _other = await _three_assets(manager)
+    record = await manager.async_create_asset_replacement(
+        old["asset_uuid"], new["asset_uuid"], reason="failure", effective_date=None, notes=None
+    )
+    flow = await _select(hass, manager, old["asset_uuid"])
+    flow._pending_replacement_uuid = record["replacement_uuid"]
+
+    initial = await flow.async_step_confirm_void_replacement()
+    unconfirmed = await flow.async_step_confirm_void_replacement(
+        {CONF_VOID_REASON: "Reason", CONF_CONFIRM_VOID: False}
+    )
+    empty_reason = await flow.async_step_confirm_void_replacement(
+        {CONF_VOID_REASON: "   ", CONF_CONFIRM_VOID: True}
+    )
+    with patch.object(
+        manager,
+        "async_void_asset_replacement",
+        AsyncMock(side_effect=OSError("save failed")),
+    ):
+        failed = await flow.async_step_confirm_void_replacement(
+            {CONF_VOID_REASON: "Reason", CONF_CONFIRM_VOID: True}
+        )
+
+    assert initial["step_id"] == "confirm_void_replacement"
+    assert unconfirmed["errors"] == {"base": "confirmation_required"}
+    assert empty_reason["errors"] == {"base": "replacement_void_reason_required"}
+    assert failed["errors"] == {"base": "asset_store_error"}
+
+    manager2 = _manager(hass)
+    a, b, _c = await _three_assets(manager2)
+    active = await manager2.async_create_asset_replacement(
+        a["asset_uuid"], b["asset_uuid"], reason="failure", effective_date=None, notes=None
+    )
+    flow2 = await _select(hass, manager2, a["asset_uuid"])
+    flow2._pending_replacement_uuid = active["replacement_uuid"]
+    with patch.object(manager2, "asset", Mock(side_effect=[a, None])):
+        disappeared = await flow2.async_step_confirm_void_replacement(
+            {CONF_VOID_REASON: "Valid", CONF_CONFIRM_VOID: True}
+        )
+    assert disappeared["step_id"] == "manage_asset"
+
+    flow2._pending_replacement_uuid = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    stale = await flow2.async_step_confirm_void_replacement()
+    assert stale["errors"] == {"base": "replacement_missing"}
+
+
+async def test_replacement_create_detects_post_mutation_asset_disappearance(
+    hass: HomeAssistant,
+) -> None:
+    """The completion path does not reload if the selected Asset disappears."""
+    manager = _manager(hass)
+    old, new, _other = await _three_assets(manager)
+    flow = await _select(hass, manager, old["asset_uuid"])
+
+    with patch.object(manager, "asset", Mock(side_effect=[old, new, None])), patch.object(
+        hass.config_entries, "async_schedule_reload"
+    ) as reload:
+        result = await flow.async_step_replacement_replaced_by(
+            {
+                CONF_REPLACEMENT_TARGET_ASSET_UUID: new["asset_uuid"],
+                CONF_REPLACEMENT_REASON: "failure",
+            }
+        )
+
+    assert result["step_id"] == "manage_asset"
+    assert result["errors"] == {"base": "asset_missing"}
+    reload.assert_not_called()

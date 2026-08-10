@@ -27,6 +27,16 @@ TRANSLATION_DIRECTORY = (
 )
 STRINGS_FILE = TRANSLATION_DIRECTORY.parent / "strings.json"
 LANGUAGES = ("en", "fi")
+LIFECYCLE_REPLACEMENT_STEPS = {
+    "asset_lifecycle",
+    "asset_replacement",
+    "confirm_disposed",
+    "confirm_void_replacement",
+    "correct_asset_replacement",
+    "manage_asset_replacement",
+    "replacement_replaced_by",
+    "replacement_replaces",
+}
 
 
 def _translation(language: str) -> dict[str, Any]:
@@ -126,6 +136,40 @@ def test_options_translation_structures_match_and_are_valid_json() -> None:
         finnish["config_subentries"]["purchase"]
     )
     assert _key_shape(english["entity"]) == _key_shape(finnish["entity"])
+
+
+@pytest.mark.parametrize("language", LANGUAGES)
+def test_custom_integration_runtime_translation_is_independently_complete(
+    language: str,
+) -> None:
+    """Each runtime translation file contains full non-empty 0.7 UI/entity text."""
+    translation = _translation(language)
+    assert all(value.strip() for value in _string_values(translation))
+
+    steps = translation["options"]["step"]
+    for step_id in LIFECYCLE_REPLACEMENT_STEPS:
+        step = steps[step_id]
+        assert step["title"].strip()
+        assert step["description"].strip()
+        assert all(value.strip() for value in step.get("data", {}).values())
+        assert all(
+            value.strip() for value in step.get("data_description", {}).values()
+        )
+
+    for selector_key in (
+        "lifecycle_status",
+        "replacement_action",
+        "replacement_reason",
+    ):
+        assert all(
+            value.strip()
+            for value in translation["selector"][selector_key]["options"].values()
+        )
+
+    for entity_key in ("lifecycle_status", "replacement"):
+        entity = translation["entity"]["sensor"][entity_key]
+        assert entity["name"].strip()
+        assert all(value.strip() for value in entity["state"].values())
 
 
 def test_strings_source_matches_english_translation() -> None:
