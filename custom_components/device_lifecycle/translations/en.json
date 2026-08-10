@@ -156,18 +156,28 @@
     "create_entry": {
       "asset_created": "Asset {asset_id} — {asset_name} was created.",
       "asset_deployment_updated": "Deployment for {asset_id} — {asset_name} was updated.",
+      "asset_ha_relationship_updated": "The Home Assistant relationship for {asset_id} — {asset_name} was updated.",
       "asset_purchase_updated": "The Purchase relationship for {asset_id} — {asset_name} was updated.",
       "asset_updated": "Asset {asset_id} — {asset_name} was updated."
     },
     "error": {
       "asset_missing": "The selected Asset no longer exists.",
       "asset_store_error": "The Asset Store rejected or could not save the change. No replacement Asset was created.",
+      "device_already_linked": "The selected device is already the primary relationship of Asset {owner_asset_id}.",
+      "device_lifecycle_device_not_allowed": "A Device Lifecycle-owned device cannot be linked as an external relationship.",
+      "device_missing": "The selected Home Assistant device is missing or unavailable.",
+      "ha_device_purchase_dependency": "The current device is used by an active Purchase. Remove that dependency before unlinking or replacing it.",
+      "ha_device_runtime_dependency": "The current device is used by active Runtime tracking. Remove that dependency before unlinking or replacing it.",
+      "ha_relationship_changed": "The primary Home Assistant relationship changed while this form was open. Review the current relationship and try again.",
       "invalid_area": "Select an existing Home Assistant Area, or explicitly clear the current Area.",
       "invalid_deployment_state": "The selected deployment state is invalid.",
+      "invalid_ha_relationship_action": "Select a valid Home Assistant relationship action.",
       "invalid_installed_date": "Enter a valid installation date.",
       "invalid_purchase": "The selected Purchase is not available for a new relationship.",
       "no_assets": "There are no Assets to manage yet.",
-      "purchase_conflict": "The Purchase relationship conflicts with existing Asset Store ownership."
+      "non_physical_device_not_allowed": "The selected Home Assistant device belongs to an excluded non-physical integration.",
+      "purchase_conflict": "The Purchase relationship conflicts with existing Asset Store ownership.",
+      "service_device_not_allowed": "The selected item is a Home Assistant service rather than a physical device."
     },
     "step": {
       "asset_deployment": {
@@ -226,6 +236,14 @@
         "description": "Edit physical metadata for {asset}. Asset UUID, DL ID, deployment, warranty and Home Assistant relationships are not editable here.",
         "title": "Edit Asset metadata"
       },
+      "ha_relationship": {
+        "data": {
+          "device_id": "Home Assistant device",
+          "ha_relationship_action": "Action"
+        },
+        "description": "Asset: {asset}. Current primary relationship: {current_device}. Linking changes only Asset Store references; the external device is not claimed, renamed, moved, or modified.",
+        "title": "Home Assistant relationship"
+      },
       "init": {
         "menu_options": {
           "create_manual_asset": "Create manual Asset",
@@ -245,7 +263,8 @@
         "menu_options": {
           "asset_deployment": "Deployment",
           "change_asset_purchase": "Change Purchase relationship",
-          "edit_asset_metadata": "Edit metadata"
+          "edit_asset_metadata": "Edit metadata",
+          "ha_relationship": "HA relationship"
         },
         "title": "Manage Asset"
       }
@@ -257,6 +276,12 @@
         "deployed": "Deployed",
         "not_deployed": "Not deployed",
         "unknown": "Unknown"
+      }
+    },
+    "ha_relationship_action": {
+      "options": {
+        "replace": "Replace primary device",
+        "unlink": "Unlink primary device"
       }
     },
     "runtime_mode": {

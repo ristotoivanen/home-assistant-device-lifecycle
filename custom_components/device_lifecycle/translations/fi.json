@@ -156,18 +156,28 @@
     "create_entry": {
       "asset_created": "Asset {asset_id} — {asset_name} luotiin.",
       "asset_deployment_updated": "Assetin {asset_id} — {asset_name} käyttöönotto päivitettiin.",
+      "asset_ha_relationship_updated": "Assetin {asset_id} — {asset_name} Home Assistant -suhde päivitettiin.",
       "asset_purchase_updated": "Assetin {asset_id} — {asset_name} ostossuhde päivitettiin.",
       "asset_updated": "Asset {asset_id} — {asset_name} päivitettiin."
     },
     "error": {
       "asset_missing": "Valittua Assetia ei enää ole.",
       "asset_store_error": "Asset Store hylkäsi muutoksen tai sitä ei voitu tallentaa. Korvaavaa Assetia ei luotu.",
+      "device_already_linked": "Valittu laite on jo Assetin {owner_asset_id} ensisijainen suhde.",
+      "device_lifecycle_device_not_allowed": "Device Lifecyclen omistamaa laitetta ei voi liittää ulkoiseksi suhteeksi.",
+      "device_missing": "Valittu Home Assistant -laite puuttuu tai ei ole saatavilla.",
+      "ha_device_purchase_dependency": "Nykyistä laitetta käyttää aktiivinen ostos. Poista riippuvuus ennen suhteen irrottamista tai korvaamista.",
+      "ha_device_runtime_dependency": "Nykyistä laitetta käyttää aktiivinen käyttötuntiseuranta. Poista riippuvuus ennen suhteen irrottamista tai korvaamista.",
+      "ha_relationship_changed": "Ensisijainen Home Assistant -suhde muuttui lomakkeen ollessa auki. Tarkista nykyinen suhde ja yritä uudelleen.",
       "invalid_area": "Valitse olemassa oleva Home Assistant -alue tai tyhjennä nykyinen alue erikseen.",
       "invalid_deployment_state": "Valittu käyttöönottotila ei ole kelvollinen.",
+      "invalid_ha_relationship_action": "Valitse kelvollinen Home Assistant -suhteen toiminto.",
       "invalid_installed_date": "Anna kelvollinen asennuspäivä.",
       "invalid_purchase": "Valittua ostosta ei voi käyttää uuteen suhteeseen.",
       "no_assets": "Hallittavia Asseteja ei vielä ole.",
-      "purchase_conflict": "Ostossuhde on ristiriidassa Asset Storen nykyisen omistajuuden kanssa."
+      "non_physical_device_not_allowed": "Valittu Home Assistant -laite kuuluu poissuljettuun ei-fyysiseen integraatioon.",
+      "purchase_conflict": "Ostossuhde on ristiriidassa Asset Storen nykyisen omistajuuden kanssa.",
+      "service_device_not_allowed": "Valittu kohde on Home Assistant -palvelu eikä fyysinen laite."
     },
     "step": {
       "asset_deployment": {
@@ -226,6 +236,14 @@
         "description": "Muokkaa Assetin {asset} fyysisiä metatietoja. UUID, DL-tunnus, käyttöönotto, takuu ja Home Assistant -suhteet eivät ole muokattavissa tässä.",
         "title": "Muokkaa Assetin metatietoja"
       },
+      "ha_relationship": {
+        "data": {
+          "device_id": "Home Assistant -laite",
+          "ha_relationship_action": "Toiminto"
+        },
+        "description": "Asset: {asset}. Nykyinen ensisijainen suhde: {current_device}. Linkitys muuttaa vain Asset Storen viitteitä; ulkoista laitetta ei oteta omistukseen, nimetä, siirretä tai muuteta.",
+        "title": "Home Assistant -suhde"
+      },
       "init": {
         "menu_options": {
           "create_manual_asset": "Luo manuaalinen Asset",
@@ -245,7 +263,8 @@
         "menu_options": {
           "asset_deployment": "Käyttöönotto",
           "change_asset_purchase": "Vaihda ostossuhde",
-          "edit_asset_metadata": "Muokkaa metatietoja"
+          "edit_asset_metadata": "Muokkaa metatietoja",
+          "ha_relationship": "HA-suhde"
         },
         "title": "Hallitse Assetia"
       }
@@ -257,6 +276,12 @@
         "deployed": "Käytössä",
         "not_deployed": "Ei käytössä",
         "unknown": "Tuntematon"
+      }
+    },
+    "ha_relationship_action": {
+      "options": {
+        "replace": "Korvaa ensisijainen laite",
+        "unlink": "Irrota ensisijainen laite"
       }
     },
     "runtime_mode": {

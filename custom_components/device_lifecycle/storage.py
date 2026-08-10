@@ -754,8 +754,10 @@ class AssetStoreManager:
         device_id: str,
         *,
         replace: bool = False,
+        device: dr.DeviceEntry | None = None,
+        expected_current_device_id: str | None | object = _UNSET,
     ) -> AssetData:
-        """Set a stored primary HA reference without touching the HA registry."""
+        """Atomically set a primary HA reference without mutating the registry."""
         if not isinstance(device_id, str) or not device_id.strip():
             raise AssetStoreError("Home Assistant device ID is required")
         device_id = device_id.strip()
@@ -763,6 +765,13 @@ class AssetStoreManager:
         def _link(data: AssetStoreData) -> AssetData:
             asset = self._require_asset(data, asset_uuid)
             current = _primary_device_id(asset)
+            if (
+                expected_current_device_id is not _UNSET
+                and current != expected_current_device_id
+            ):
+                raise AssetStoreError(
+                    f"Asset {asset_uuid} primary HA relationship changed"
+                )
             if current not in (None, device_id) and not replace:
                 raise AssetStoreError(
                     f"Asset {asset_uuid} is already linked to HA device {current}"
@@ -775,9 +784,35 @@ class AssetStoreManager:
                 )
 
             self._ensure_primary_reference(asset, device_id)
+            if device is not None:
+                self._refresh_home_assistant_metadata(asset, device, device_id)
             return asset
 
         return await self._async_mutate(_link)
+
+    async def async_unlink_asset_device(
+        self,
+        asset_uuid: str,
+        *,
+        expected_device_id: str | None | object = _UNSET,
+    ) -> AssetData:
+        """Atomically remove only the primary stored HA relationship."""
+
+        def _unlink(data: AssetStoreData) -> AssetData:
+            asset = self._require_asset(data, asset_uuid)
+            current = _primary_device_id(asset)
+            if expected_device_id is not _UNSET and current != expected_device_id:
+                raise AssetStoreError(
+                    f"Asset {asset_uuid} primary HA relationship changed"
+                )
+            asset["ha_device_refs"] = [
+                reference
+                for reference in asset.get("ha_device_refs", [])
+                if reference.get("role") != DEVICE_ROLE_PRIMARY
+            ]
+            return asset
+
+        return await self._async_mutate(_unlink)
 
     def _ensure_primary_reference(self, asset: AssetData, device_id: str) -> None:
         """Set a primary HA relationship while preserving future related links."""

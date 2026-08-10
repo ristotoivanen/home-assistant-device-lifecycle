@@ -42,6 +42,7 @@ from .const import (
     CONF_DEVICE_IDS,
     CONF_HW_VERSION,
     CONF_HA_AREA_ID,
+    CONF_HA_RELATIONSHIP_ACTION,
     CONF_INSTALLED_DATE,
     CONF_MANUFACTURER,
     CONF_MODEL,
@@ -67,6 +68,9 @@ from .const import (
     DEPLOYMENT_STATES,
     DEPLOYMENT_STATE_NOT_DEPLOYED,
     DOMAIN,
+    HA_RELATIONSHIP_ACTION_REPLACE,
+    HA_RELATIONSHIP_ACTION_UNLINK,
+    HA_RELATIONSHIP_ACTIONS,
     RUNTIME_MODE_ON,
     RUNTIME_MODE_POWER,
     RUNTIME_MODES,
@@ -194,6 +198,14 @@ def _is_service_device(
 
     entry_type = getattr(device, "entry_type", None)
     return str(getattr(entry_type, "value", entry_type)) == "service"
+
+
+def _primary_device_id(asset: AssetData) -> str | None:
+    """Return the stored primary HA relationship without using it as identity."""
+    for reference in asset.get("ha_device_refs", []):
+        if reference.get("role") == "primary":
+            return str(reference.get("device_id") or "") or None
+    return None
 
 
 def _purchase_schema(
@@ -880,7 +892,11 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             "does not exist" in message or "not currently configured" in message
         ):
             return "invalid_purchase"
+        if "already linked to another asset" in message:
+            return "device_already_linked"
         if "relationship" in message or "conflict" in message:
+            if "primary ha relationship changed" in message:
+                return "ha_relationship_changed"
             return "purchase_conflict"
         if "deployment state" in message:
             return "invalid_deployment_state"
@@ -901,6 +917,83 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 f"Ei saatavilla (tallennettu tunnus: {area_id})",
             )
         return f"{area.name} ({area.id})"
+
+    def _ha_device_label(self, device_id: str | None) -> str:
+        """Describe a relationship without guessing a replacement device."""
+        if device_id is None:
+            return self._localized_label("No HA device", "Ei HA-laitetta")
+        device = dr.async_get(self.hass).async_get(device_id)
+        if device is None:
+            return self._localized_label(
+                f"Unavailable (stored ID: {device_id})",
+                f"Ei saatavilla (tallennettu tunnus: {device_id})",
+            )
+        name = (
+            getattr(device, "name_by_user", None)
+            or getattr(device, "name", None)
+            or getattr(device, "model", None)
+            or device_id
+        )
+        return f"{name} ({device_id})"
+
+    def _validate_ha_link_target(
+        self,
+        device_id: str,
+    ) -> tuple[dr.DeviceEntry | None, str | None]:
+        """Validate an existing operational device without claiming it."""
+        registry = dr.async_get(self.hass)
+        device = registry.async_get(device_id)
+        if device is None:
+            return None, "device_missing"
+        if _is_service_device(registry, device_id):
+            return None, "service_device_not_allowed"
+
+        config_entry_ids = set(getattr(device, "config_entries", set()))
+        if not config_entry_ids and getattr(device, "config_entry_id", None):
+            config_entry_ids.add(device.config_entry_id)
+        owner_entries = [
+            entry
+            for entry_id in config_entry_ids
+            if (entry := self.hass.config_entries.async_get_entry(entry_id))
+            is not None
+        ]
+        identifier_domains = {
+            str(identifier[0]) for identifier in device.identifiers
+        }
+        if (
+            self.config_entry.entry_id in config_entry_ids
+            or DOMAIN in identifier_domains
+            or any(entry.domain == DOMAIN for entry in owner_entries)
+        ):
+            return None, "device_lifecycle_device_not_allowed"
+        if not owner_entries:
+            return None, "device_missing"
+        if any(
+            entry.domain in DEVICE_EXCLUDED_INTEGRATIONS
+            for entry in owner_entries
+        ) or identifier_domains.intersection(DEVICE_EXCLUDED_INTEGRATIONS):
+            return None, "non_physical_device_not_allowed"
+        return device, None
+
+    def _ha_relationship_dependency_error(
+        self,
+        device_id: str,
+    ) -> str | None:
+        """Return the active subentry dependency blocking unlink/replacement."""
+        for subentry in self.config_entry.subentries.values():
+            if subentry.subentry_type != SUBENTRY_TYPE_PURCHASE:
+                continue
+            if device_id in {
+                str(value) for value in subentry.data.get(CONF_DEVICE_IDS, [])
+            }:
+                return "ha_device_purchase_dependency"
+        for subentry in self.config_entry.subentries.values():
+            if (
+                subentry.subentry_type == SUBENTRY_TYPE_RUNTIME
+                and str(subentry.data.get(CONF_DEVICE_ID) or "") == device_id
+            ):
+                return "ha_device_runtime_dependency"
+        return None
 
     def _finish_asset_action(
         self,
@@ -1037,6 +1130,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 "edit_asset_metadata",
                 "change_asset_purchase",
                 "asset_deployment",
+                "ha_relationship",
             ],
             description_placeholders={"asset": _asset_label(asset)},
         )
@@ -1342,6 +1436,177 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 "asset": _asset_label(asset),
                 "current_area": pending["area_label"],
             },
+        )
+
+    def _show_ha_relationship_form(
+        self,
+        asset: AssetData,
+        *,
+        user_input: dict[str, Any] | None = None,
+        errors: dict[str, str] | None = None,
+        owner_asset_id: str | None = None,
+    ) -> ConfigFlowResult:
+        """Show current primary relationship and safe link actions."""
+        current_device_id = _primary_device_id(asset)
+        fields: dict[Any, Any] = {}
+        if current_device_id is None:
+            fields[vol.Required(CONF_DEVICE_ID)] = _physical_device_selector(
+                self.hass,
+                multiple=False,
+            )
+        else:
+            fields[
+                vol.Required(
+                    CONF_HA_RELATIONSHIP_ACTION,
+                    default=HA_RELATIONSHIP_ACTION_REPLACE,
+                )
+            ] = selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=list(HA_RELATIONSHIP_ACTIONS),
+                    translation_key="ha_relationship_action",
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            )
+            fields[vol.Optional(CONF_DEVICE_ID)] = _physical_device_selector(
+                self.hass,
+                multiple=False,
+            )
+
+        schema = vol.Schema(fields)
+        if user_input is not None:
+            schema = self.add_suggested_values_to_schema(schema, user_input)
+        return self.async_show_form(
+            step_id="ha_relationship",
+            data_schema=schema,
+            errors=errors or {},
+            description_placeholders={
+                "asset": _asset_label(asset),
+                "current_device": self._ha_device_label(current_device_id),
+                "owner_asset_id": owner_asset_id
+                or self._localized_label("another Asset", "toinen Asset"),
+            },
+        )
+
+    async def async_step_ha_relationship(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Link, inspect, unlink, or atomically replace a primary HA reference."""
+        asset_uuid = getattr(self, "_selected_asset_uuid", None)
+        asset = self._manager.asset(asset_uuid)
+        if asset is None:
+            return self._show_asset_selection(errors={"base": "asset_missing"})
+        if user_input is None:
+            return self._show_ha_relationship_form(asset)
+
+        current_device_id = _primary_device_id(asset)
+        action = (
+            str(user_input.get(CONF_HA_RELATIONSHIP_ACTION) or "")
+            if current_device_id is not None
+            else HA_RELATIONSHIP_ACTION_REPLACE
+        )
+        if action not in HA_RELATIONSHIP_ACTIONS:
+            return self._show_ha_relationship_form(
+                asset,
+                user_input=user_input,
+                errors={"base": "invalid_ha_relationship_action"},
+            )
+
+        if action == HA_RELATIONSHIP_ACTION_UNLINK:
+            if current_device_id is None:
+                return self._show_ha_relationship_form(
+                    asset,
+                    user_input=user_input,
+                    errors={"base": "device_missing"},
+                )
+            if dependency_error := self._ha_relationship_dependency_error(
+                current_device_id
+            ):
+                return self._show_ha_relationship_form(
+                    asset,
+                    user_input=user_input,
+                    errors={"base": dependency_error},
+                )
+            try:
+                asset = await self._manager.async_unlink_asset_device(
+                    asset["asset_uuid"],
+                    expected_device_id=current_device_id,
+                )
+            except (AssetStoreError, OSError) as err:
+                return self._show_ha_relationship_form(
+                    asset,
+                    user_input=user_input,
+                    errors={"base": self._storage_error_key(err)},
+                )
+            return self._finish_asset_action(
+                asset,
+                "asset_ha_relationship_updated",
+            )
+
+        target_device_id = str(user_input.get(CONF_DEVICE_ID) or "")
+        if not target_device_id:
+            return self._show_ha_relationship_form(
+                asset,
+                user_input=user_input,
+                errors={"base": "device_missing"},
+            )
+        if (
+            current_device_id is not None
+            and target_device_id != current_device_id
+            and (
+                dependency_error := self._ha_relationship_dependency_error(
+                    current_device_id
+                )
+            )
+        ):
+            return self._show_ha_relationship_form(
+                asset,
+                user_input=user_input,
+                errors={"base": dependency_error},
+            )
+
+        device, validation_error = self._validate_ha_link_target(
+            target_device_id
+        )
+        if validation_error is not None:
+            return self._show_ha_relationship_form(
+                asset,
+                user_input=user_input,
+                errors={"base": validation_error},
+            )
+
+        existing_owner = self._manager.asset_for_device_id(target_device_id)
+        if (
+            existing_owner is not None
+            and existing_owner["asset_uuid"] != asset["asset_uuid"]
+        ):
+            return self._show_ha_relationship_form(
+                asset,
+                user_input=user_input,
+                errors={"base": "device_already_linked"},
+                owner_asset_id=existing_owner["asset_id"],
+            )
+
+        try:
+            asset = await self._manager.async_link_asset_device(
+                asset["asset_uuid"],
+                target_device_id,
+                replace=current_device_id is not None,
+                device=device,
+                expected_current_device_id=current_device_id,
+            )
+        except (AssetStoreError, OSError) as err:
+            error_key = self._storage_error_key(err)
+            owner = self._manager.asset_for_device_id(target_device_id)
+            return self._show_ha_relationship_form(
+                asset,
+                user_input=user_input,
+                errors={"base": error_key},
+                owner_asset_id=(owner or {}).get("asset_id"),
+            )
+        return self._finish_asset_action(
+            asset,
+            "asset_ha_relationship_updated",
         )
 
 
