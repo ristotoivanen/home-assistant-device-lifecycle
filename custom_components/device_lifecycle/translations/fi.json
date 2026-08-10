@@ -42,7 +42,7 @@
         },
         "reconfigure": {
           "title": "Muokkaa ostosta",
-          "description": "Muokkaa ostoksen tietoja tai sen Home Assistant -laitteita. Ostos säilyy ilman laitteitakin. Laitteen poistaminen poistaa tämän ostoksen Elinkaari-entiteetin, mutta laite ja sen elinkaaritunnus säilyvät.",
+          "description": "Ostokseen liitetyt elinkaarilaitteet:\n\n{linked_assets}\n\nYllä oleva luettelo on tässä näkymässä vain tiedoksi. Muokkaa ostoksen tietoja tai Home Assistantin laiterekisterin laitteita alla. Ostos säilyy ilman laitteitakin. Laiterekisterin laitteen poistaminen poistaa tämän ostoksen Elinkaari-entiteetin, mutta laite ja sen elinkaaritunnus säilyvät. Muuta manuaalisesti hallitun laitteen ostosta kohdasta Hallitse laitetta → Liitä ostokseen.",
           "data": {
             "device_ids": "Home Assistant -laitteet (valinnainen)",
             "purchase_name": "Ostoksen nimi",
@@ -57,7 +57,7 @@
             "notes": "Huomautukset"
           },
           "data_description": {
-            "device_ids": "Lisää tai poista fyysisiä Home Assistant -laitteita tai jätä valinta tyhjäksi. Selvät järjestelmä- ja ohjelmistolaitteet suodatetaan pois.",
+            "device_ids": "Tämä valitsin näyttää ja hallitsee vain Home Assistantin laiterekisterin fyysisiä laitteita. Manuaalisesti hallitut elinkaarilaitteet näkyvät erikseen yllä. Selvät järjestelmä- ja ohjelmistolaitteet suodatetaan pois.",
             "warranty_type": "1 v ja 2 v lasketaan automaattisesti ostopäivästä. Manuaalinen käyttää alla olevaa päivämäärää.",
             "warranty_until": "Käytetään vain, kun Takuu = Manuaalinen.",
             "purchase_price": "Koko ostoksen hinta, ei yhden laitteen kappalehinta. Ostos säilyttää luotaessa tallennetun valuutan.",

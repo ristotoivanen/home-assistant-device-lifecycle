@@ -127,6 +127,9 @@ def test_options_translation_structures_match_and_are_valid_json() -> None:
     finnish = _translation("fi")
 
     assert _key_shape(english["options"]) == _key_shape(finnish["options"])
+    assert _key_shape(english["config_subentries"]["purchase"]) == _key_shape(
+        finnish["config_subentries"]["purchase"]
+    )
 
 
 @pytest.mark.parametrize("language", LANGUAGES)
@@ -219,6 +222,27 @@ def test_purchase_creation_copy_explicitly_allows_zero_devices() -> None:
     assert "jätä tyhjäksi" in finnish_text
     assert "vaikka laitteita ei" in finnish_text
     assert "valitse vähintään yksi" not in finnish_text
+
+
+def test_purchase_reconfigure_copy_separates_assets_from_ha_devices() -> None:
+    """Both languages explain the read-only Asset and HA registry scopes."""
+    english = _translation("en")["config_subentries"]["purchase"]["step"][
+        "reconfigure"
+    ]
+    finnish = _translation("fi")["config_subentries"]["purchase"]["step"][
+        "reconfigure"
+    ]
+
+    assert "{linked_assets}" in english["description"]
+    assert "read-only" in english["description"]
+    assert "Device Registry devices only" in english["data_description"][
+        "device_ids"
+    ]
+    assert "{linked_assets}" in finnish["description"]
+    assert "vain tiedoksi" in finnish["description"]
+    assert "vain Home Assistantin laiterekisterin" in finnish[
+        "data_description"
+    ]["device_ids"]
 
 
 def test_finalized_english_and_finnish_lifecycle_terms() -> None:

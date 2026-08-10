@@ -530,6 +530,37 @@ def _asset_label(asset: AssetData) -> str:
     return f"{asset['asset_id']} — {asset['name']}"
 
 
+def _purchase_asset_summary(
+    entry: ConfigEntry,
+    subentry_id: str,
+    language: str,
+) -> str:
+    """Return canonical Purchase membership as localized read-only text."""
+    manager = getattr(entry, "runtime_data", None)
+    purchase = (
+        manager.purchase_for_subentry(subentry_id)
+        if isinstance(manager, AssetStoreManager)
+        else None
+    )
+    assets = []
+    if purchase is not None:
+        assets = [
+            asset
+            for asset_uuid in purchase.get("asset_uuids", [])
+            if (asset := manager.asset(asset_uuid)) is not None
+        ]
+
+    if assets:
+        return "\n".join(
+            f"- {_asset_label(asset)}"
+            for asset in sorted(assets, key=lambda item: item["asset_id"])
+        )
+
+    if language.lower().startswith("fi"):
+        return "Ei liitettyjä elinkaarilaitteita."
+    return "No Device Lifecycle Assets are linked."
+
+
 def _stored_purchase_label(purchase: PurchaseData) -> str:
     """Return a readable label for one stored Purchase relationship."""
     if purchase.get("name"):
@@ -1726,6 +1757,13 @@ class PurchaseSubentryFlow(ConfigSubentryFlow):
             step_id="reconfigure",
             data_schema=_purchase_schema(self.hass, defaults),
             errors=errors,
+            description_placeholders={
+                "linked_assets": _purchase_asset_summary(
+                    entry,
+                    subentry.subentry_id,
+                    self.hass.config.language,
+                )
+            },
         )
 
 

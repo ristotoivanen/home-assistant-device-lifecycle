@@ -180,8 +180,8 @@ def test_purchase_relationship_rejects_home_assistant_provenance(
         _validate_store_data(asset_store_data)
 
 
-def test_stage_2_versions_are_scoped_without_manifest_release_bump() -> None:
-    """Only the Store minor version changes during Stage 2."""
+def test_schema_versions_remain_stable_after_0_5_4_release() -> None:
+    """The released manifest retains the schema and config-entry versions."""
     manifest_path = (
         Path(__file__).parents[1]
         / "custom_components"
@@ -193,7 +193,7 @@ def test_stage_2_versions_are_scoped_without_manifest_release_bump() -> None:
     assert STORAGE_VERSION == 1
     assert STORAGE_MINOR_VERSION == 2
     assert CONFIG_ENTRY_VERSION == 4
-    assert manifest["version"] == "0.5.3"
+    assert manifest["version"] == "0.5.4"
 
 
 async def test_existing_device_purchase_creation_sets_purchase_provenance(

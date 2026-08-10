@@ -42,7 +42,7 @@
         },
         "reconfigure": {
           "title": "Edit purchase",
-          "description": "Edit Purchase details or its Home Assistant devices. A Purchase remains valid with no devices. Removing a device removes its Lifecycle entity from this Purchase but preserves its Asset and Asset ID.",
+          "description": "Device Lifecycle Assets linked to this Purchase:\n\n{linked_assets}\n\nThe list above is read-only here. Edit Purchase details or Home Assistant Device Registry devices below. A Purchase remains valid with no devices. Removing a registry device removes its Lifecycle entity from this Purchase but preserves its Asset and Asset ID. Change a manually managed Asset's Purchase from Manage Asset → Link to Purchase.",
           "data": {
             "device_ids": "Home Assistant devices (optional)",
             "purchase_name": "Purchase name",
@@ -57,7 +57,7 @@
             "notes": "Notes"
           },
           "data_description": {
-            "device_ids": "Add or remove physical Home Assistant devices, or leave empty. Obvious system and software devices are filtered out.",
+            "device_ids": "This selector shows and manages physical Home Assistant Device Registry devices only. Manually managed Device Lifecycle Assets are listed separately above. Obvious system and software devices are filtered out.",
             "warranty_type": "1 and 2 year warranties are calculated automatically from the purchase date. Manual uses the date below.",
             "warranty_until": "Used only when Warranty = Manual.",
             "purchase_price": "Total purchase price, not per-device price. The purchase keeps the currency captured when it was created.",
