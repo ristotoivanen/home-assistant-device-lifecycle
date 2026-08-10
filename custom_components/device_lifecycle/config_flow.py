@@ -15,11 +15,13 @@ from homeassistant.config_entries import (
     ConfigFlowResult,
     ConfigSubentryFlow,
     FlowType,
+    OptionsFlow,
     SOURCE_USER,
     SubentryFlowContext,
     SubentryFlowResult,
 )
 from homeassistant.core import HomeAssistant, State, callback
+from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
@@ -28,11 +30,23 @@ from homeassistant.util.unit_conversion import PowerConverter
 
 from .const import (
     CONFIG_ENTRY_VERSION,
+    CONF_ASSET_NAME,
     CONF_ASSET_UUID,
+    CONF_CATEGORY,
+    CONF_CLEAR_HA_AREA,
+    CONF_CLEAR_INSTALLED_DATE,
+    CONF_CONFIRM_AREA_CLEAR,
     CONF_CURRENCY,
+    CONF_DEPLOYMENT_STATE,
     CONF_DEVICE_ID,
     CONF_DEVICE_IDS,
+    CONF_HW_VERSION,
+    CONF_HA_AREA_ID,
+    CONF_HA_RELATIONSHIP_ACTION,
     CONF_INSTALLED_DATE,
+    CONF_MANUFACTURER,
+    CONF_MODEL,
+    CONF_MODEL_ID,
     CONF_NOTES,
     CONF_POWER_HYSTERESIS,
     CONF_POWER_THRESHOLD,
@@ -44,12 +58,19 @@ from .const import (
     CONF_RECEIPT_URL,
     CONF_RUNTIME_MODE,
     CONF_SELLER,
+    CONF_SERIAL_NUMBER,
     CONF_SOURCE_ENTITY_ID,
+    CONF_SW_VERSION,
     CONF_WARRANTY_TYPE,
     CONF_WARRANTY_UNTIL,
     DEFAULT_POWER_HYSTERESIS,
     DEFAULT_POWER_THRESHOLD,
+    DEPLOYMENT_STATES,
+    DEPLOYMENT_STATE_NOT_DEPLOYED,
     DOMAIN,
+    HA_RELATIONSHIP_ACTION_REPLACE,
+    HA_RELATIONSHIP_ACTION_UNLINK,
+    HA_RELATIONSHIP_ACTIONS,
     RUNTIME_MODE_ON,
     RUNTIME_MODE_POWER,
     RUNTIME_MODES,
@@ -61,8 +82,23 @@ from .const import (
     WARRANTY_TWO_YEARS,
     WARRANTY_TYPES,
 )
+from .models import AssetData, PurchaseData
+from .storage import AssetStoreError, AssetStoreManager
 
 MAIN_UNIQUE_ID = "device_lifecycle_main"
+NO_PURCHASE_SELECTION = "__no_purchase__"
+
+ASSET_METADATA_FIELDS = (
+    CONF_ASSET_NAME,
+    CONF_CATEGORY,
+    CONF_MANUFACTURER,
+    CONF_MODEL,
+    CONF_MODEL_ID,
+    CONF_SERIAL_NUMBER,
+    CONF_SW_VERSION,
+    CONF_HW_VERSION,
+    CONF_NOTES,
+)
 
 ON_STATE_SOURCE_DOMAINS = frozenset(
     {
@@ -164,6 +200,14 @@ def _is_service_device(
     return str(getattr(entry_type, "value", entry_type)) == "service"
 
 
+def _primary_device_id(asset: AssetData) -> str | None:
+    """Return the stored primary HA relationship without using it as identity."""
+    for reference in asset.get("ha_device_refs", []):
+        if reference.get("role") == "primary":
+            return str(reference.get("device_id") or "") or None
+    return None
+
+
 def _purchase_schema(
     hass: HomeAssistant,
     defaults: dict[str, Any] | None = None,
@@ -177,7 +221,7 @@ def _purchase_schema(
         return vol.Optional(key), sel
 
     fields: dict[Any, Any] = {
-        vol.Required(
+        vol.Optional(
             CONF_DEVICE_IDS,
             default=defaults.get(CONF_DEVICE_IDS, []),
         ): _physical_device_selector(hass, multiple=True),
@@ -237,6 +281,38 @@ def _purchase_schema(
 
     key, val = optional(CONF_NOTES, _text_selector(multiline=True))
     fields[key] = val
+
+    return vol.Schema(fields)
+
+
+def _asset_metadata_schema(
+    purchase_options: list[selector.SelectOptionDict] | None = None,
+) -> vol.Schema:
+    """Build the manual Asset create/edit metadata form."""
+    fields: dict[Any, Any] = {
+        vol.Required(CONF_ASSET_NAME): _text_selector(),
+        vol.Optional(CONF_CATEGORY): _text_selector(),
+        vol.Optional(CONF_MANUFACTURER): _text_selector(),
+        vol.Optional(CONF_MODEL): _text_selector(),
+        vol.Optional(CONF_MODEL_ID): _text_selector(),
+        vol.Optional(CONF_SERIAL_NUMBER): _text_selector(),
+        vol.Optional(CONF_SW_VERSION): _text_selector(),
+        vol.Optional(CONF_HW_VERSION): _text_selector(),
+        vol.Optional(CONF_NOTES): _text_selector(multiline=True),
+    }
+
+    if purchase_options is not None:
+        fields[
+            vol.Required(
+                CONF_PURCHASE_UUID,
+                default=NO_PURCHASE_SELECTION,
+            )
+        ] = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=purchase_options,
+                mode=selector.SelectSelectorMode.DROPDOWN,
+            )
+        )
 
     return vol.Schema(fields)
 
@@ -449,6 +525,22 @@ def _purchase_title(data: dict[str, Any]) -> str:
     return _compact_title(f"{seller} {purchase_date}".strip())
 
 
+def _asset_label(asset: AssetData) -> str:
+    """Return the stable Asset choice label shown in management flows."""
+    return f"{asset['asset_id']} — {asset['name']}"
+
+
+def _stored_purchase_label(purchase: PurchaseData) -> str:
+    """Return a readable label for one stored Purchase relationship."""
+    if purchase.get("name"):
+        return str(purchase["name"])
+
+    seller = str(purchase.get("seller") or "").strip()
+    purchase_date = str(purchase.get("purchase_date") or "").strip()
+    label = f"{seller} {purchase_date}".strip()
+    return label or purchase["purchase_uuid"]
+
+
 def _runtime_title(registry: dr.DeviceRegistry, device_id: str) -> str:
     """Return a compact runtime subentry title based on the target device."""
     device = registry.async_get(device_id)
@@ -537,6 +629,7 @@ def _prepare_purchase_data(
     # later change or clear the installation date independently.
     if (
         preserved_data is None
+        and data.get(CONF_DEVICE_IDS)
         and CONF_PURCHASE_DATE in data
         and CONF_INSTALLED_DATE not in data
     ):
@@ -668,6 +761,14 @@ class DeviceLifecycleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     VERSION = CONFIG_ENTRY_VERSION
 
+    @staticmethod
+    @callback
+    def async_get_options_flow(
+        config_entry: ConfigEntry,
+    ) -> DeviceLifecycleOptionsFlow:
+        """Return the parent integration Asset management flow."""
+        return DeviceLifecycleOptionsFlow()
+
     async def async_step_user(
         self,
         user_input: dict[str, Any] | None = None,
@@ -713,6 +814,806 @@ class DeviceLifecycleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         }
 
 
+class DeviceLifecycleOptionsFlow(OptionsFlow):
+    """Manage physical Assets through the single parent integration."""
+
+    @property
+    def _manager(self) -> AssetStoreManager:
+        """Return the loaded Asset Store manager for the parent entry."""
+        return self.config_entry.runtime_data
+
+    def _localized_label(self, english: str, finnish: str) -> str:
+        """Return a minimal localized dynamic selector label."""
+        if self.hass.config.language.lower().startswith("fi"):
+            return finnish
+        return english
+
+    def _asset_choices(self) -> list[selector.SelectOptionDict]:
+        """Return every Asset keyed by immutable UUID."""
+        return [
+            selector.SelectOptionDict(
+                value=asset["asset_uuid"],
+                label=_asset_label(asset),
+            )
+            for asset in sorted(
+                self._manager.assets(),
+                key=lambda item: item["asset_id"],
+            )
+        ]
+
+    def _purchase_choices(
+        self,
+        current_purchase_uuid: str | None = None,
+    ) -> list[selector.SelectOptionDict]:
+        """Return configured Purchases plus the current historical relationship."""
+        choices = [
+            selector.SelectOptionDict(
+                value=NO_PURCHASE_SELECTION,
+                label=self._localized_label("No Purchase", "Ei ostosta"),
+            )
+        ]
+        purchases = sorted(
+            self._manager.purchases(),
+            key=lambda item: (
+                _stored_purchase_label(item).casefold(),
+                item["purchase_uuid"],
+            ),
+        )
+        for purchase in purchases:
+            if (
+                not purchase.get("configured")
+                and purchase["purchase_uuid"] != current_purchase_uuid
+            ):
+                continue
+            label = _stored_purchase_label(purchase)
+            if not purchase.get("configured"):
+                label = self._localized_label(
+                    f"Historical — {label}",
+                    f"Historiallinen — {label}",
+                )
+            choices.append(
+                selector.SelectOptionDict(
+                    value=purchase["purchase_uuid"],
+                    label=label,
+                )
+            )
+        return choices
+
+    def _metadata_input(self, user_input: dict[str, Any]) -> dict[str, Any]:
+        """Return exactly the editable physical metadata fields."""
+        return {field: user_input.get(field) for field in ASSET_METADATA_FIELDS}
+
+    def _storage_error_key(self, err: Exception) -> str:
+        """Map storage failures to safe flow errors without fabricating data."""
+        message = str(err).lower()
+        if "asset" in message and "does not exist" in message:
+            return "asset_missing"
+        if "purchase" in message and (
+            "does not exist" in message or "not currently configured" in message
+        ):
+            return "invalid_purchase"
+        if "already linked to another asset" in message:
+            return "device_already_linked"
+        if "relationship" in message or "conflict" in message:
+            if "primary ha relationship changed" in message:
+                return "ha_relationship_changed"
+            return "purchase_conflict"
+        if "deployment state" in message:
+            return "invalid_deployment_state"
+        if "installed_date" in message:
+            return "invalid_installed_date"
+        if "ha area" in message:
+            return "invalid_area"
+        return "asset_store_error"
+
+    def _area_label(self, area_id: str | None) -> str:
+        """Describe a current Area without guessing from its name."""
+        if area_id is None:
+            return self._localized_label("No Area", "Ei aluetta")
+        area = ar.async_get(self.hass).async_get_area(area_id)
+        if area is None:
+            return self._localized_label(
+                f"Unavailable Home Assistant Area (stored ID: {area_id})",
+                f"Alue ei ole enää käytettävissä (tallennettu tunnus: {area_id})",
+            )
+        return f"{area.name} ({area.id})"
+
+    def _ha_device_label(self, device_id: str | None) -> str:
+        """Describe a relationship without guessing a replacement device."""
+        if device_id is None:
+            return self._localized_label(
+                "No linked Home Assistant device",
+                "Ei linkitettyä Home Assistant -laitetta",
+            )
+        device = dr.async_get(self.hass).async_get(device_id)
+        if device is None:
+            return self._localized_label(
+                f"Unavailable Home Assistant device (stored ID: {device_id})",
+                "Home Assistant -laite ei ole enää käytettävissä "
+                f"(tallennettu tunnus: {device_id})",
+            )
+        name = (
+            getattr(device, "name_by_user", None)
+            or getattr(device, "name", None)
+            or getattr(device, "model", None)
+            or device_id
+        )
+        return f"{name} ({device_id})"
+
+    def _validate_ha_link_target(
+        self,
+        device_id: str,
+    ) -> tuple[dr.DeviceEntry | None, str | None]:
+        """Validate an existing operational device without claiming it."""
+        registry = dr.async_get(self.hass)
+        device = registry.async_get(device_id)
+        if device is None:
+            return None, "device_missing"
+        if _is_service_device(registry, device_id):
+            return None, "service_device_not_allowed"
+
+        config_entry_ids = set(getattr(device, "config_entries", set()))
+        if not config_entry_ids and getattr(device, "config_entry_id", None):
+            config_entry_ids.add(device.config_entry_id)
+        owner_entries = [
+            entry
+            for entry_id in config_entry_ids
+            if (entry := self.hass.config_entries.async_get_entry(entry_id))
+            is not None
+        ]
+        identifier_domains = {
+            str(identifier[0]) for identifier in device.identifiers
+        }
+        if (
+            self.config_entry.entry_id in config_entry_ids
+            or DOMAIN in identifier_domains
+            or any(entry.domain == DOMAIN for entry in owner_entries)
+        ):
+            return None, "device_lifecycle_device_not_allowed"
+        if not owner_entries:
+            return None, "device_missing"
+        if any(
+            entry.domain in DEVICE_EXCLUDED_INTEGRATIONS
+            for entry in owner_entries
+        ) or identifier_domains.intersection(DEVICE_EXCLUDED_INTEGRATIONS):
+            return None, "non_physical_device_not_allowed"
+        return device, None
+
+    def _ha_relationship_dependency_error(
+        self,
+        device_id: str,
+    ) -> str | None:
+        """Return the active subentry dependency blocking unlink/replacement."""
+        for subentry in self.config_entry.subentries.values():
+            if subentry.subentry_type != SUBENTRY_TYPE_PURCHASE:
+                continue
+            if device_id in {
+                str(value) for value in subentry.data.get(CONF_DEVICE_IDS, [])
+            }:
+                return "ha_device_purchase_dependency"
+        for subentry in self.config_entry.subentries.values():
+            if (
+                subentry.subentry_type == SUBENTRY_TYPE_RUNTIME
+                and str(subentry.data.get(CONF_DEVICE_ID) or "") == device_id
+            ):
+                return "ha_device_runtime_dependency"
+        return None
+
+    def _finish_asset_action(
+        self,
+        asset: AssetData,
+        description: str,
+    ) -> ConfigFlowResult:
+        """Finish without changing parent config-entry options."""
+        return self.async_create_entry(
+            title="",
+            data=dict(self.config_entry.options),
+            description=description,
+            description_placeholders={
+                "asset_id": asset["asset_id"],
+                "asset_name": asset["name"],
+            },
+        )
+
+    def _show_asset_selection(
+        self,
+        *,
+        errors: dict[str, str] | None = None,
+    ) -> ConfigFlowResult:
+        """Show the all-Asset selector, including legacy and Runtime Assets."""
+        choices = self._asset_choices()
+        if not choices and not errors:
+            errors = {"base": "no_assets"}
+        return self.async_show_form(
+            step_id="manage_asset",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_ASSET_UUID): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=choices,
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    )
+                }
+            ),
+            errors=errors or {},
+        )
+
+    async def async_step_init(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Show the extensible Asset management entry menu."""
+        return self.async_show_menu(
+            step_id="init",
+            menu_options=["create_manual_asset", "manage_asset"],
+        )
+
+    async def async_step_create_manual_asset(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Create one ordinary Asset Core record without requiring an HA device."""
+        errors: dict[str, str] = {}
+        purchase_choices = self._purchase_choices()
+
+        if user_input is not None:
+            purchase_uuid = str(
+                user_input.get(CONF_PURCHASE_UUID) or NO_PURCHASE_SELECTION
+            )
+            valid_purchase_uuids = {
+                option["value"] for option in purchase_choices
+            }
+            if purchase_uuid not in valid_purchase_uuids:
+                errors["base"] = "invalid_purchase"
+            else:
+                pending_asset_uuid = getattr(
+                    self,
+                    "_pending_created_asset_uuid",
+                    None,
+                )
+                try:
+                    if pending_asset_uuid is None:
+                        asset = await self._manager.async_create_manual_asset(
+                            **self._metadata_input(user_input)
+                        )
+                        self._pending_created_asset_uuid = asset["asset_uuid"]
+                    else:
+                        asset = await self._manager.async_update_asset_metadata(
+                            pending_asset_uuid,
+                            **self._metadata_input(user_input),
+                        )
+
+                    if purchase_uuid != NO_PURCHASE_SELECTION:
+                        asset = await self._manager.async_set_asset_purchase(
+                            asset["asset_uuid"],
+                            purchase_uuid,
+                        )
+                except (AssetStoreError, OSError) as err:
+                    errors["base"] = self._storage_error_key(err)
+                else:
+                    return self._finish_asset_action(asset, "asset_created")
+
+        schema = _asset_metadata_schema(purchase_choices)
+        suggested = dict(user_input or {})
+        suggested.setdefault(CONF_PURCHASE_UUID, NO_PURCHASE_SELECTION)
+        return self.async_show_form(
+            step_id="create_manual_asset",
+            data_schema=self.add_suggested_values_to_schema(schema, suggested),
+            errors=errors,
+        )
+
+    async def async_step_manage_asset(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Select any existing Asset by UUID-backed DLxxxx label."""
+        if user_input is not None:
+            asset_uuid = str(user_input.get(CONF_ASSET_UUID) or "")
+            if self._manager.asset(asset_uuid) is None:
+                return self._show_asset_selection(
+                    errors={"base": "asset_missing"}
+                )
+            self._selected_asset_uuid = asset_uuid
+            return await self.async_step_manage_asset_menu()
+
+        return self._show_asset_selection()
+
+    async def async_step_manage_asset_menu(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Show actions for the selected Asset, ready for later extensions."""
+        asset_uuid = getattr(self, "_selected_asset_uuid", None)
+        asset = self._manager.asset(asset_uuid)
+        if asset is None:
+            return self._show_asset_selection(errors={"base": "asset_missing"})
+        return self.async_show_menu(
+            step_id="manage_asset_menu",
+            menu_options=[
+                "edit_asset_metadata",
+                "change_asset_purchase",
+                "asset_deployment",
+                "ha_relationship",
+            ],
+            description_placeholders={"asset": _asset_label(asset)},
+        )
+
+    async def async_step_edit_asset_metadata(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Edit physical metadata while preserving all Asset relationships."""
+        asset_uuid = getattr(self, "_selected_asset_uuid", None)
+        asset = self._manager.asset(asset_uuid)
+        if asset is None:
+            return self._show_asset_selection(errors={"base": "asset_missing"})
+
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            try:
+                asset = await self._manager.async_update_asset_metadata(
+                    asset["asset_uuid"],
+                    **self._metadata_input(user_input),
+                )
+            except (AssetStoreError, OSError) as err:
+                errors["base"] = self._storage_error_key(err)
+            else:
+                return self._finish_asset_action(asset, "asset_updated")
+
+        defaults = {
+            field: asset.get(field) or ""
+            for field in ASSET_METADATA_FIELDS
+        }
+        if user_input is not None:
+            defaults.update(user_input)
+        return self.async_show_form(
+            step_id="edit_asset_metadata",
+            data_schema=self.add_suggested_values_to_schema(
+                _asset_metadata_schema(),
+                defaults,
+            ),
+            errors=errors,
+            description_placeholders={"asset": _asset_label(asset)},
+        )
+
+    async def async_step_change_asset_purchase(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Assign, preserve, or clear the selected Asset's Purchase."""
+        asset_uuid = getattr(self, "_selected_asset_uuid", None)
+        asset = self._manager.asset(asset_uuid)
+        if asset is None:
+            return self._show_asset_selection(errors={"base": "asset_missing"})
+
+        current_purchase_uuid = asset.get("purchase_uuid")
+        purchase_choices = self._purchase_choices(current_purchase_uuid)
+        current_selection = current_purchase_uuid or NO_PURCHASE_SELECTION
+        current_label = next(
+            (
+                option["label"]
+                for option in purchase_choices
+                if option["value"] == current_selection
+            ),
+            current_selection,
+        )
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            selected = str(
+                user_input.get(CONF_PURCHASE_UUID) or NO_PURCHASE_SELECTION
+            )
+            valid_purchase_uuids = {
+                option["value"] for option in purchase_choices
+            }
+            if selected not in valid_purchase_uuids:
+                errors["base"] = "invalid_purchase"
+            else:
+                try:
+                    asset = await self._manager.async_set_asset_purchase(
+                        asset["asset_uuid"],
+                        None if selected == NO_PURCHASE_SELECTION else selected,
+                    )
+                except (AssetStoreError, OSError) as err:
+                    errors["base"] = self._storage_error_key(err)
+                else:
+                    return self._finish_asset_action(
+                        asset,
+                        "asset_purchase_updated",
+                    )
+
+        return self.async_show_form(
+            step_id="change_asset_purchase",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_PURCHASE_UUID,
+                        default=current_selection,
+                    ): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=purchase_choices,
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    )
+                }
+            ),
+            errors=errors,
+            description_placeholders={
+                "asset": _asset_label(asset),
+                "current_purchase": current_label,
+            },
+        )
+
+    def _show_asset_deployment_form(
+        self,
+        asset: AssetData,
+        *,
+        user_input: dict[str, Any] | None = None,
+        errors: dict[str, str] | None = None,
+    ) -> ConfigFlowResult:
+        """Show explicit deployment fields without inferring HA relationships."""
+        fields: dict[Any, Any] = {
+            vol.Required(
+                CONF_DEPLOYMENT_STATE,
+                default=asset[CONF_DEPLOYMENT_STATE],
+            ): selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=list(DEPLOYMENT_STATES),
+                    translation_key="deployment_state",
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            ),
+            vol.Optional(CONF_INSTALLED_DATE): selector.DateSelector(),
+            vol.Required(
+                CONF_CLEAR_INSTALLED_DATE,
+                default=False,
+            ): selector.BooleanSelector(),
+            vol.Optional(CONF_HA_AREA_ID): selector.AreaSelector(),
+            vol.Required(
+                CONF_CLEAR_HA_AREA,
+                default=False,
+            ): selector.BooleanSelector(),
+        }
+        suggested: dict[str, Any] = {
+            CONF_DEPLOYMENT_STATE: asset[CONF_DEPLOYMENT_STATE],
+            CONF_CLEAR_INSTALLED_DATE: False,
+            CONF_CLEAR_HA_AREA: False,
+        }
+        if installed_date := asset.get(CONF_INSTALLED_DATE):
+            suggested[CONF_INSTALLED_DATE] = installed_date
+        current_area_id = asset.get(CONF_HA_AREA_ID)
+        if (
+            current_area_id is not None
+            and ar.async_get(self.hass).async_get_area(current_area_id) is not None
+        ):
+            suggested[CONF_HA_AREA_ID] = current_area_id
+        if user_input is not None:
+            suggested.update(user_input)
+
+        return self.async_show_form(
+            step_id="asset_deployment",
+            data_schema=self.add_suggested_values_to_schema(
+                vol.Schema(fields),
+                suggested,
+            ),
+            errors=errors or {},
+            description_placeholders={
+                "asset": _asset_label(asset),
+                "current_area": self._area_label(current_area_id),
+            },
+        )
+
+    async def async_step_asset_deployment(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Edit explicit deployment state, date, and Asset Area metadata."""
+        asset_uuid = getattr(self, "_selected_asset_uuid", None)
+        asset = self._manager.asset(asset_uuid)
+        if asset is None:
+            return self._show_asset_selection(errors={"base": "asset_missing"})
+
+        if user_input is None:
+            return self._show_asset_deployment_form(asset)
+
+        errors: dict[str, str] = {}
+        deployment_state = str(user_input.get(CONF_DEPLOYMENT_STATE) or "")
+        updates: dict[str, str | None] = {}
+        if deployment_state not in DEPLOYMENT_STATES:
+            errors["base"] = "invalid_deployment_state"
+        elif deployment_state != asset[CONF_DEPLOYMENT_STATE]:
+            updates[CONF_DEPLOYMENT_STATE] = deployment_state
+
+        if user_input.get(CONF_CLEAR_INSTALLED_DATE):
+            if asset.get(CONF_INSTALLED_DATE) is not None:
+                updates[CONF_INSTALLED_DATE] = None
+        elif selected_date := user_input.get(CONF_INSTALLED_DATE):
+            try:
+                parsed_date = dt_util.parse_date(str(selected_date))
+            except (TypeError, ValueError):
+                parsed_date = None
+            if parsed_date is None:
+                errors["base"] = "invalid_installed_date"
+            elif parsed_date.isoformat() != asset.get(CONF_INSTALLED_DATE):
+                updates[CONF_INSTALLED_DATE] = parsed_date.isoformat()
+
+        current_area_id = asset.get(CONF_HA_AREA_ID)
+        if user_input.get(CONF_CLEAR_HA_AREA):
+            if current_area_id is not None:
+                updates[CONF_HA_AREA_ID] = None
+        elif selected_area := user_input.get(CONF_HA_AREA_ID):
+            selected_area = str(selected_area)
+            if selected_area != current_area_id:
+                if ar.async_get(self.hass).async_get_area(selected_area) is None:
+                    errors["base"] = "invalid_area"
+                else:
+                    updates[CONF_HA_AREA_ID] = selected_area
+
+        if (
+            deployment_state == DEPLOYMENT_STATE_NOT_DEPLOYED
+            and current_area_id is None
+            and updates.get(CONF_HA_AREA_ID) is not None
+        ):
+            errors["base"] = "invalid_area"
+
+        if errors:
+            return self._show_asset_deployment_form(
+                asset,
+                user_input=user_input,
+                errors=errors,
+            )
+
+        if (
+            current_area_id is not None
+            and asset[CONF_DEPLOYMENT_STATE] != DEPLOYMENT_STATE_NOT_DEPLOYED
+            and deployment_state == DEPLOYMENT_STATE_NOT_DEPLOYED
+        ):
+            updates[CONF_DEPLOYMENT_STATE] = DEPLOYMENT_STATE_NOT_DEPLOYED
+            updates[CONF_HA_AREA_ID] = None
+            self._pending_deployment_update = {
+                "asset_uuid": asset["asset_uuid"],
+                "updates": updates,
+                "area_label": self._area_label(current_area_id),
+            }
+            return await self.async_step_confirm_not_deployed()
+
+        try:
+            if updates:
+                asset = await self._manager.async_set_asset_deployment(
+                    asset["asset_uuid"],
+                    **updates,
+                )
+        except (AssetStoreError, OSError) as err:
+            return self._show_asset_deployment_form(
+                asset,
+                user_input=user_input,
+                errors={"base": self._storage_error_key(err)},
+            )
+        return self._finish_asset_action(asset, "asset_deployment_updated")
+
+    async def async_step_confirm_not_deployed(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Require confirmation before a not-deployed transition clears Area."""
+        pending = getattr(self, "_pending_deployment_update", None)
+        if pending is None:
+            return await self.async_step_asset_deployment()
+
+        asset = self._manager.asset(pending["asset_uuid"])
+        if asset is None:
+            del self._pending_deployment_update
+            return self._show_asset_selection(errors={"base": "asset_missing"})
+
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            if not user_input.get(CONF_CONFIRM_AREA_CLEAR):
+                del self._pending_deployment_update
+                return await self.async_step_asset_deployment()
+            try:
+                asset = await self._manager.async_set_asset_deployment(
+                    asset["asset_uuid"],
+                    **pending["updates"],
+                )
+            except (AssetStoreError, OSError) as err:
+                errors["base"] = self._storage_error_key(err)
+            else:
+                del self._pending_deployment_update
+                return self._finish_asset_action(
+                    asset,
+                    "asset_deployment_updated",
+                )
+
+        return self.async_show_form(
+            step_id="confirm_not_deployed",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_CONFIRM_AREA_CLEAR,
+                        default=False,
+                    ): selector.BooleanSelector()
+                }
+            ),
+            errors=errors,
+            description_placeholders={
+                "asset": _asset_label(asset),
+                "current_area": pending["area_label"],
+            },
+        )
+
+    def _show_ha_relationship_form(
+        self,
+        asset: AssetData,
+        *,
+        user_input: dict[str, Any] | None = None,
+        errors: dict[str, str] | None = None,
+        owner_asset_id: str | None = None,
+    ) -> ConfigFlowResult:
+        """Show current primary relationship and safe link actions."""
+        current_device_id = _primary_device_id(asset)
+        fields: dict[Any, Any] = {}
+        if current_device_id is None:
+            fields[vol.Required(CONF_DEVICE_ID)] = _physical_device_selector(
+                self.hass,
+                multiple=False,
+            )
+        else:
+            fields[
+                vol.Required(
+                    CONF_HA_RELATIONSHIP_ACTION,
+                    default=HA_RELATIONSHIP_ACTION_REPLACE,
+                )
+            ] = selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=list(HA_RELATIONSHIP_ACTIONS),
+                    translation_key="ha_relationship_action",
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            )
+            fields[vol.Optional(CONF_DEVICE_ID)] = _physical_device_selector(
+                self.hass,
+                multiple=False,
+            )
+
+        schema = vol.Schema(fields)
+        if user_input is not None:
+            schema = self.add_suggested_values_to_schema(schema, user_input)
+        return self.async_show_form(
+            step_id="ha_relationship",
+            data_schema=schema,
+            errors=errors or {},
+            description_placeholders={
+                "asset": _asset_label(asset),
+                "current_device": self._ha_device_label(current_device_id),
+                "owner_asset_id": owner_asset_id
+                or self._localized_label("another Asset", "toinen laite"),
+            },
+        )
+
+    async def async_step_ha_relationship(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Link, inspect, unlink, or atomically replace a primary HA reference."""
+        asset_uuid = getattr(self, "_selected_asset_uuid", None)
+        asset = self._manager.asset(asset_uuid)
+        if asset is None:
+            return self._show_asset_selection(errors={"base": "asset_missing"})
+        if user_input is None:
+            return self._show_ha_relationship_form(asset)
+
+        current_device_id = _primary_device_id(asset)
+        action = (
+            str(user_input.get(CONF_HA_RELATIONSHIP_ACTION) or "")
+            if current_device_id is not None
+            else HA_RELATIONSHIP_ACTION_REPLACE
+        )
+        if action not in HA_RELATIONSHIP_ACTIONS:
+            return self._show_ha_relationship_form(
+                asset,
+                user_input=user_input,
+                errors={"base": "invalid_ha_relationship_action"},
+            )
+
+        if action == HA_RELATIONSHIP_ACTION_UNLINK:
+            if current_device_id is None:
+                return self._show_ha_relationship_form(
+                    asset,
+                    user_input=user_input,
+                    errors={"base": "device_missing"},
+                )
+            if dependency_error := self._ha_relationship_dependency_error(
+                current_device_id
+            ):
+                return self._show_ha_relationship_form(
+                    asset,
+                    user_input=user_input,
+                    errors={"base": dependency_error},
+                )
+            try:
+                asset = await self._manager.async_unlink_asset_device(
+                    asset["asset_uuid"],
+                    expected_device_id=current_device_id,
+                )
+            except (AssetStoreError, OSError) as err:
+                return self._show_ha_relationship_form(
+                    asset,
+                    user_input=user_input,
+                    errors={"base": self._storage_error_key(err)},
+                )
+            return self._finish_asset_action(
+                asset,
+                "asset_ha_relationship_updated",
+            )
+
+        target_device_id = str(user_input.get(CONF_DEVICE_ID) or "")
+        if not target_device_id:
+            return self._show_ha_relationship_form(
+                asset,
+                user_input=user_input,
+                errors={"base": "device_missing"},
+            )
+        if (
+            current_device_id is not None
+            and target_device_id != current_device_id
+            and (
+                dependency_error := self._ha_relationship_dependency_error(
+                    current_device_id
+                )
+            )
+        ):
+            return self._show_ha_relationship_form(
+                asset,
+                user_input=user_input,
+                errors={"base": dependency_error},
+            )
+
+        device, validation_error = self._validate_ha_link_target(
+            target_device_id
+        )
+        if validation_error is not None:
+            return self._show_ha_relationship_form(
+                asset,
+                user_input=user_input,
+                errors={"base": validation_error},
+            )
+
+        existing_owner = self._manager.asset_for_device_id(target_device_id)
+        if (
+            existing_owner is not None
+            and existing_owner["asset_uuid"] != asset["asset_uuid"]
+        ):
+            return self._show_ha_relationship_form(
+                asset,
+                user_input=user_input,
+                errors={"base": "device_already_linked"},
+                owner_asset_id=existing_owner["asset_id"],
+            )
+
+        try:
+            asset = await self._manager.async_link_asset_device(
+                asset["asset_uuid"],
+                target_device_id,
+                replace=current_device_id is not None,
+                device=device,
+                expected_current_device_id=current_device_id,
+            )
+        except (AssetStoreError, OSError) as err:
+            error_key = self._storage_error_key(err)
+            owner = self._manager.asset_for_device_id(target_device_id)
+            return self._show_ha_relationship_form(
+                asset,
+                user_input=user_input,
+                errors={"base": error_key},
+                owner_asset_id=(owner or {}).get("asset_id"),
+            )
+        return self._finish_asset_action(
+            asset,
+            "asset_ha_relationship_updated",
+        )
+
+
 class PurchaseSubentryFlow(ConfigSubentryFlow):
     """Add and edit purchases under the single parent integration."""
 
@@ -725,14 +1626,18 @@ class PurchaseSubentryFlow(ConfigSubentryFlow):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            device_ids = [str(item) for item in user_input.get(CONF_DEVICE_IDS, [])]
+            device_ids = [
+                str(item)
+                for item in user_input.get(CONF_DEVICE_IDS, []) or []
+            ]
 
-            if not device_ids:
-                errors["base"] = "no_devices"
-            else:
+            if device_ids:
                 registry = dr.async_get(self.hass)
 
-                if any(registry.async_get(device_id) is None for device_id in device_ids):
+                if any(
+                    registry.async_get(device_id) is None
+                    for device_id in device_ids
+                ):
                     errors["base"] = "device_missing"
                 elif any(
                     _is_service_device(registry, device_id)
@@ -741,18 +1646,19 @@ class PurchaseSubentryFlow(ConfigSubentryFlow):
                     errors["base"] = "service_device_not_allowed"
                 elif _used_device_ids(entry).intersection(device_ids):
                     errors["base"] = "already_tracked"
-                else:
-                    clean, error = _prepare_purchase_data(
-                        user_input,
-                        default_currency=str(self.hass.config.currency),
+
+            if not errors:
+                clean, error = _prepare_purchase_data(
+                    user_input,
+                    default_currency=str(self.hass.config.currency),
+                )
+                if error:
+                    errors["base"] = error
+                elif clean is not None:
+                    return self.async_create_entry(
+                        title=_purchase_title(clean),
+                        data=clean,
                     )
-                    if error:
-                        errors["base"] = error
-                    elif clean is not None:
-                        return self.async_create_entry(
-                            title=_purchase_title(clean),
-                            data=clean,
-                        )
 
         return self.async_show_form(
             step_id="user",
@@ -770,14 +1676,18 @@ class PurchaseSubentryFlow(ConfigSubentryFlow):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            device_ids = [str(item) for item in user_input.get(CONF_DEVICE_IDS, [])]
+            device_ids = [
+                str(item)
+                for item in user_input.get(CONF_DEVICE_IDS, []) or []
+            ]
 
-            if not device_ids:
-                errors["base"] = "no_devices"
-            else:
+            if device_ids:
                 registry = dr.async_get(self.hass)
 
-                if any(registry.async_get(device_id) is None for device_id in device_ids):
+                if any(
+                    registry.async_get(device_id) is None
+                    for device_id in device_ids
+                ):
                     errors["base"] = "device_missing"
                 elif any(
                     _is_service_device(registry, device_id)
@@ -789,21 +1699,22 @@ class PurchaseSubentryFlow(ConfigSubentryFlow):
                     exclude_subentry_id=subentry.subentry_id,
                 ).intersection(device_ids):
                     errors["base"] = "already_tracked"
-                else:
-                    clean, error = _prepare_purchase_data(
-                        user_input,
-                        preserved_data=dict(subentry.data),
-                        default_currency=str(self.hass.config.currency),
+
+            if not errors:
+                clean, error = _prepare_purchase_data(
+                    user_input,
+                    preserved_data=dict(subentry.data),
+                    default_currency=str(self.hass.config.currency),
+                )
+                if error:
+                    errors["base"] = error
+                elif clean is not None:
+                    return self.async_update_and_abort(
+                        entry,
+                        subentry,
+                        title=_purchase_title(clean),
+                        data=clean,
                     )
-                    if error:
-                        errors["base"] = error
-                    elif clean is not None:
-                        return self.async_update_and_abort(
-                            entry,
-                            subentry,
-                            title=_purchase_title(clean),
-                            data=clean,
-                        )
 
         defaults = (
             user_input

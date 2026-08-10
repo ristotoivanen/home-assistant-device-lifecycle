@@ -11,6 +11,15 @@ SUBENTRY_TYPE_RUNTIME = "runtime"
 CONF_PURCHASE_UUID = "purchase_uuid"
 CONF_ASSET_UUID = "asset_uuid"
 
+CONF_ASSET_NAME = "name"
+CONF_CATEGORY = "category"
+CONF_MANUFACTURER = "manufacturer"
+CONF_MODEL = "model"
+CONF_MODEL_ID = "model_id"
+CONF_SERIAL_NUMBER = "serial_number"
+CONF_SW_VERSION = "sw_version"
+CONF_HW_VERSION = "hw_version"
+
 CONF_DEVICE_ID = "device_id"
 CONF_DEVICE_IDS = "device_ids"
 CONF_PURCHASE_NAME = "purchase_name"
@@ -24,6 +33,13 @@ CONF_CURRENCY = "currency"
 CONF_RECEIPT_REFERENCE = "receipt_reference"
 CONF_RECEIPT_URL = "receipt_url"
 CONF_NOTES = "notes"
+
+CONF_DEPLOYMENT_STATE = "deployment_state"
+CONF_HA_AREA_ID = "ha_area_id"
+CONF_HA_RELATIONSHIP_ACTION = "ha_relationship_action"
+CONF_CLEAR_INSTALLED_DATE = "clear_installed_date"
+CONF_CLEAR_HA_AREA = "clear_ha_area"
+CONF_CONFIRM_AREA_CLEAR = "confirm_area_clear"
 
 CONF_RUNTIME_MODE = "runtime_mode"
 CONF_SOURCE_ENTITY_ID = "source_entity_id"
@@ -52,3 +68,20 @@ RUNTIME_MODES = (
 
 DEFAULT_POWER_THRESHOLD = 1.0
 DEFAULT_POWER_HYSTERESIS = 0.0
+
+DEPLOYMENT_STATE_UNKNOWN = "unknown"
+DEPLOYMENT_STATE_NOT_DEPLOYED = "not_deployed"
+DEPLOYMENT_STATE_DEPLOYED = "deployed"
+
+DEPLOYMENT_STATES = (
+    DEPLOYMENT_STATE_UNKNOWN,
+    DEPLOYMENT_STATE_NOT_DEPLOYED,
+    DEPLOYMENT_STATE_DEPLOYED,
+)
+
+HA_RELATIONSHIP_ACTION_REPLACE = "replace"
+HA_RELATIONSHIP_ACTION_UNLINK = "unlink"
+HA_RELATIONSHIP_ACTIONS = (
+    HA_RELATIONSHIP_ACTION_REPLACE,
+    HA_RELATIONSHIP_ACTION_UNLINK,
+)
