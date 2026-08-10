@@ -17,20 +17,44 @@ Asset IDs are allocated monotonically and never recycled. The UUID and Asset ID 
 
 Asset Core uses Home Assistant's private, atomic, versioned storage. Its invariants and Store 2.1 schema are documented in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
-## What's new in 0.5.7
+## What's new in 0.6.0
 
-Device Lifecycle 0.5.7, **Asset Runtime**, moves cumulative Runtime ownership into canonical Asset Store data:
+Device Lifecycle 0.6.0, **Asset Exposure Core**, gives every existing canonical Asset a clean Home Assistant representation:
 
-- existing 0.5.6 native RestoreSensor totals import exactly once without changing entity IDs or unique IDs
-- cumulative seconds live on the immutable Asset as a decimal string
-- active Runtime is durably checkpointed every five minutes and on stop/unload/shutdown
-- monotonic elapsed measurement avoids wall-clock corrections
-- sealed elapsed remains visible and retryable during save failures
-- expected-total compare-and-set commits prevent duplicate counting
-- Store writes are directly read back before an in-memory mutation is published
-- Store schema moves to major version 2.1; config entry version remains 4
+- one Device Lifecycle-owned **Asset Device** per Asset
+- one **Lifecycle** entity for every Asset, even without a Purchase or external device
+- a new normal **Deployment** enum entity
+- a new enabled-by-default **Relationships** diagnostic entity
+- a new enabled-by-default **Asset ID** diagnostic entity
+- existing Runtime entities appear under the Asset Device while their configuration, unique ID, entity ID, calculations, and canonical totals remain unchanged
+- existing Lifecycle entities keep their unique ID, entity ID, user customization, and Recorder continuity while moving from Purchase-subentry ownership to parent/Asset ownership
 
-Asset identity, Purchase behavior, deployment behavior, Home Assistant relationship semantics, Runtime entity identity, and detection behavior remain unchanged.
+There is no new canonical data model. `asset_uuid` remains the only canonical technical Asset identity and `DLxxxx` remains its permanent human-facing identity. Store stays at 2.1 and the ConfigEntry stays at version 4.
+
+## Asset Device
+
+The Asset Device is a derived Home Assistant Device Registry projection. Its complete identity is based only on the immutable Asset UUID:
+
+```text
+identifiers = {("device_lifecycle", asset_uuid)}
+```
+
+It belongs to the parent Device Lifecycle ConfigEntry, never a Purchase or Runtime subentry. It uses the Asset's canonical name and supported physical metadata. It does not use Asset ID, Purchase, name, serial number, Area, an external device ID, identifiers, or connections as identity.
+
+The Asset Device's Home Assistant registry ID is not stored. If the projection is removed, a later setup can recreate it deterministically without changing or recreating the Asset, allocating a new `DLxxxx` value, or touching Purchase and Runtime history. Home Assistant device-name overrides remain registry customizations and are not written back to Asset Store.
+
+The Asset deployment Area is intentionally not synchronized to the Asset Device's Device Registry Area. The two concepts remain independent in 0.6.0.
+
+## Exposure entities
+
+Every valid Asset now has these entities on its Asset Device:
+
+- **Lifecycle** preserves the existing warranty/state behavior and compatibility attributes. No Purchase or warranty information is required; the entity uses the existing not-specified state in that case.
+- **Deployment** reports `unknown`, `not_deployed`, or `deployed`. Its attributes expose Installation date and the exact stored Asset Area as `not_set`, `present`, or `missing`. A stale Area ID is preserved and never repaired by name.
+- **Relationships** reports `none`, `present`, or `missing` from exact stored external Device Registry IDs. It shows primary and related states and current display names without persisting those names or treating registry presence as operational availability.
+- **Asset ID** reports the permanent `DLxxxx` value. In Finnish its name is **Elinkaaritunnus**.
+
+Relationships remain read-only references. A missing external device stays linked by its stored ID and is never automatically remapped. Related devices never refresh Asset metadata, alter Purchase or Deployment, or become Runtime targets or fallbacks.
 
 ## Purchase-first workflow
 
@@ -106,13 +130,13 @@ Supported Deployment statuses are:
 
 The **Installation date** is an explicit lifecycle value. It can be set, changed, or cleared, and a Deployment status change does not infer or automatically replace it.
 
-The optional **Home Assistant Area** represents the Asset's current deployment location. It is Asset metadata: Device Lifecycle does not move an external Home Assistant device or copy the external device's Area automatically.
+The optional **Home Assistant Area** represents the Asset's current deployment location. It is Asset metadata: Device Lifecycle does not move an external Home Assistant device, copy the external device's Area, or assign it to the Device Lifecycle Asset Device.
 
 Changing an Asset with an Area to **Not deployed** opens a separate confirmation step. The Area is cleared only after confirmation, while the Installation date is preserved unless the user explicitly changed or cleared it.
 
 If a stored Area has been deleted, setup and Asset management continue normally. The unavailable Area ID is displayed and preserved until the user explicitly clears it or selects an existing Area. Device Lifecycle never guesses a replacement Area by name.
 
-0.5.7 does not store deployment history.
+0.6.0 does not store deployment history.
 
 ## Home Assistant device relationships
 
@@ -158,9 +182,9 @@ Unlinking or replacing the primary device is blocked while an active:
 - Purchase configuration still includes that device, or
 - Runtime configuration still tracks that device
 
-Remove the active dependency first. Device Lifecycle does not rewrite dependent configurations automatically in 0.5.7. Related add/remove operations do not rewrite or depend on Purchase and Runtime subentries.
+Remove the active dependency first. Device Lifecycle does not rewrite dependent configurations automatically in 0.6.0. Related add/remove operations do not rewrite or depend on Purchase and Runtime subentries.
 
-Device Lifecycle validates new relationship targets using the Home Assistant 2026.8 single-config-entry Device Registry model. It never attaches its config entry to an external device or changes identifiers, connections, names, Area, config-entry ownership, or device topology.
+Device Lifecycle validates new relationship targets using the Home Assistant 2026.8 single-config-entry Device Registry model. It never attaches its config entry to an external device or changes external identifiers, connections, names, Area, config-entry ownership, or device topology. Its separately owned Asset Device is only a projection of canonical Asset data.
 
 ## Purchase relationships
 
@@ -170,7 +194,7 @@ Existing relationships to historical or no-longer-configured Purchases are prese
 
 ## Storage and migration impact
 
-0.5.7 retains the existing `ha_device_refs` structure in Store 2.1, where each reference contains only `device_id` and `role` (`primary` or `related`). Store migration is limited to adding canonical Runtime data; there is no config-entry version migration.
+0.6.0 retains Store 2.1 and the existing `ha_device_refs` structure, where each reference contains only `device_id` and `role` (`primary` or `related`). No Asset Device ID, exposure state, migration marker, or new relationship field is persisted, and there is no config-entry version migration.
 
 ## Warranty
 
@@ -181,7 +205,7 @@ Existing Purchase workflows support these warranty modes:
 - 2 years
 - Manual
 
-For 1- and 2-year warranties, the warranty end date is calculated from the Purchase date. Manual mode allows an arbitrary end date. Device Lifecycle 0.5.7 preserves existing warranty projection behavior and does not add a general Asset-level warranty editor.
+For 1- and 2-year warranties, the warranty end date is calculated from the Purchase date. Manual mode allows an arbitrary end date. Device Lifecycle 0.6.0 preserves existing warranty behavior and does not add a general Asset-level warranty editor.
 
 ## Runtime tracking
 
@@ -194,11 +218,19 @@ Available tracking methods are:
 
 Runtime setup first selects the target device and tracking method, then a suitable source entity. Power threshold and hysteresis are shown only in power mode. Supported power units such as `W` and `kW` are normalized to watts; energy, current, voltage, and frequency sensors are not valid power sources.
 
-The cumulative **Runtime hours** sensor is localized as **Käyttötunnit** in Finnish. Asset Store owns its cumulative seconds in 0.5.7. The sensor projects canonical committed time plus any sealed pending delta and current monotonic active interval. Time while Home Assistant is stopped is not observed or added.
+The cumulative **Runtime hours** sensor is localized as **Käyttötunnit** in Finnish. Asset Store owns its cumulative seconds. The sensor projects canonical committed time plus any sealed pending delta and current monotonic active interval. Time while Home Assistant is stopped is not observed or added.
 
 While active, Runtime checkpoints to Asset Store every five minutes. It also checkpoints when the source stops or becomes unavailable/unknown and during normal unload or shutdown. Under healthy Store operation, a hard crash therefore loses only time since the last successful checkpoint, normally less than five minutes. No crash-loss bound is claimed while persistence is failing. Runtime reconciliation and entity setup remain primary-only; related devices are never Runtime targets or fallbacks.
 
+Runtime configuration remains owned by its Runtime subentry, and the external primary relationship remains its configured target. In 0.6.0 only the entity's Device Registry placement changes to the owned Asset Device. Runtime unique ID, entity ID, subentry ID, total, source behavior, initialization, restore import, thresholds, hysteresis, units, precision, state class, checkpointing, and CAS behavior are unchanged.
+
 ## Upgrade notes
+
+### Upgrading from 0.5.7 to 0.6.0
+
+No Store or ConfigEntry schema migration runs. Setup first completes the existing legacy UUID-based entity migration, then validates the entire exposure registry plan before creating an Asset Device or moving an entity. Ambiguous Device or Entity Registry identity fails setup closed.
+
+Existing Lifecycle and Runtime entities keep their exact entity IDs and unique IDs. Lifecycle becomes parent-owned and Runtime keeps its Runtime subentry. Both move to the deterministic Asset Device. If a registry step fails, completed entity moves are rolled back in reverse order and only unreferenced Asset Devices proven new in that setup attempt are removed. A partial derived projection left by a rollback failure or crash is reconciled on the next reload from unchanged canonical Asset Store data.
 
 ### Upgrading from 0.5.6 to 0.5.7
 
@@ -246,6 +278,7 @@ Downgrading from Asset Core to 0.4.x is not supported. Restore a backup instead.
 - Rejection of service-type Home Assistant devices as physical targets
 - Runtime source validation and configurable power hysteresis
 - Stable Asset-based Lifecycle and Runtime entity unique IDs
+- Deterministic Asset Devices and parent-owned Deployment, Relationships, and Asset ID entities
 
 Example Lifecycle sensor attributes:
 
@@ -300,7 +333,9 @@ Existing Purchases remain editable, including Purchases with zero Assets. Removi
 
 Removing a Runtime tracking entry removes only that Runtime sensor and active configuration. The canonical Asset Runtime total remains available if tracking is recreated later. Other Purchases, Assets, Runtime configurations, and integrations are left untouched.
 
-Device Lifecycle 0.5.7 does not provide Asset archive/delete, restore, purge, merge, Runtime reset/manual editing, relationship history, automatic discovery, or stale-device rematching actions.
+Removing a Device Lifecycle Asset Device from Home Assistant does not delete or purge its canonical Asset. The projection can be recreated on reload.
+
+Device Lifecycle 0.6.0 does not provide Asset archive/delete, restore, purge, merge, Runtime reset/manual editing, relationship history, automatic discovery, or stale-device rematching actions.
 
 ## Roadmap
 
@@ -308,25 +343,11 @@ Device Lifecycle 0.5.7 does not provide Asset archive/delete, restore, purge, me
 - **0.5.5 — Purchase Asset membership follow-up**
 - **0.5.6 — HA Relationships**
 - **0.5.7 — Asset Runtime**
-- **0.6.x — Maintenance**
-- **Future — Data Safety follow-ups**
-- **0.7.x — Home Assistant Exposure / UI**
-  - expose Asset metadata for Home Assistant UI and dashboards
-  - Relationship Exposure
-    - expose primary and related Home Assistant relationships as read-only data
-    - expose relationship display names and stable references
-    - expose available / stale / missing relationship state
-    - never silently remap a missing relationship
-    - relationship-aware Asset detail views
-  - exposure does not:
-    - introduce new relationship roles
-    - change primary / related semantics
-    - perform automatic device matching
-    - modify the Home Assistant Device Registry
-    - change Asset identity
-    - use related devices as Runtime fallback
-- **0.8.x — Lifecycle & Replacement**
+- **0.6.x — Asset Exposure / UI**
+- **0.7.x — Lifecycle & Replacement**
+- **0.8.x — Maintenance**
 - **0.9.x — Portability & Hardening**
+- **Future — Documents**
 - **1.0 — Stable**
 
 ## License

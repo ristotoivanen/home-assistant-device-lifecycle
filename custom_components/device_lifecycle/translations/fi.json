@@ -331,6 +331,25 @@
       "lifecycle": {
         "name": "Elinkaari"
       },
+      "deployment": {
+        "name": "Käyttöönotto",
+        "state": {
+          "unknown": "Tuntematon",
+          "not_deployed": "Ei käytössä",
+          "deployed": "Käytössä"
+        }
+      },
+      "relationships": {
+        "name": "Laitelinkit",
+        "state": {
+          "none": "Ei linkkejä",
+          "present": "Kunnossa",
+          "missing": "Puuttuu"
+        }
+      },
+      "asset_id": {
+        "name": "Elinkaaritunnus"
+      },
       "runtime_hours": {
         "name": "Käyttötunnit"
       }

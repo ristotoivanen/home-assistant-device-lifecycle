@@ -38,7 +38,6 @@ from custom_components.device_lifecycle.const import (
     WARRANTY_NONE,
 )
 from custom_components.device_lifecycle.models import AssetStoreData
-from custom_components.device_lifecycle.storage import AssetStoreManager
 
 from .conftest import ASSET_UUID
 from .test_options_flow import _manager, _options_flow, _store_with_purchase

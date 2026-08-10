@@ -46,6 +46,7 @@ from custom_components.device_lifecycle.const import (
     RUNTIME_MODE_POWER,
     SUBENTRY_TYPE_RUNTIME,
 )
+from custom_components.device_lifecycle.exposure import asset_device_identifier
 from custom_components.device_lifecycle.migration import runtime_unique_id
 from custom_components.device_lifecycle.models import AssetStoreData
 from custom_components.device_lifecycle.sensor import (
@@ -154,6 +155,19 @@ def _register_device(
     )
 
 
+def _register_asset_device(
+    entry: ConfigEntry,
+    device_registry: dr.DeviceRegistry,
+) -> dr.DeviceEntry:
+    """Register the projection guaranteed before the sensor platform setup."""
+    return device_registry.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        config_subentry_id=None,
+        identifiers={asset_device_identifier(ASSET_UUID)},
+        name="Workshop Asset",
+    )
+
+
 def _register_runtime_entity(
     entry: ConfigEntry,
     entity_registry: er.EntityRegistry,
@@ -236,6 +250,7 @@ async def test_legacy_restore_import_is_exact_and_once(
     entry = _runtime_entry(device_id=device.id)
     entry.runtime_data = manager
     entry.add_to_hass(hass)
+    _register_asset_device(entry, device_registry)
     # Runtime fixtures refer to a stable test device ID; mirror that relation.
     manager._data["assets"][ASSET_UUID]["ha_device_refs"] = [
         {"device_id": device.id, "role": "primary"}
@@ -284,6 +299,7 @@ async def test_legacy_restore_import_survives_missing_primary_device(
     entry = _runtime_entry(device_id=device.id)
     entry.runtime_data = manager
     entry.add_to_hass(hass)
+    asset_device = _register_asset_device(entry, device_registry)
     entity_id = _register_runtime_entity(entry, entity_registry, device)
     _mock_native_restore(hass, entity_id, Decimal("1284.53"))
     initialize_runtime = AsyncMock(
@@ -297,7 +313,7 @@ async def test_legacy_restore_import_survives_missing_primary_device(
 
     assert manager.runtime_total_seconds(ASSET_UUID) == Decimal("4624308.00")
     initialize_runtime.assert_not_awaited()
-    missing_device_add.assert_not_called()
+    assert missing_device_add.call_count == 2
     registry_entry = entity_registry.async_get(entity_id)
     assert registry_entry is not None
     assert registry_entry.entity_id == entity_id
@@ -312,10 +328,10 @@ async def test_legacy_restore_import_survives_missing_primary_device(
     await async_setup_entry(hass, entry, available_device_add)
 
     manager._store.async_save.assert_not_awaited()
-    available_device_add.assert_called_once()
+    assert available_device_add.call_count == 2
     projected = available_device_add.call_args.args[0][0]
     assert projected.native_value == Decimal("1284.530000")
-    assert projected.device_entry.id == device.id
+    assert projected.device_entry.id == asset_device.id
     assert manager.runtime_total_seconds(ASSET_UUID) == Decimal("4624308.00")
     assert entity_registry.async_get(entity_id).entity_id == entity_id
     assert manager.asset(ASSET_UUID)["ha_device_refs"] == original_refs
@@ -341,6 +357,7 @@ async def test_missing_primary_device_preserves_unresolved_legacy_runtime(
     entry = _runtime_entry(device_id=device.id)
     entry.runtime_data = manager
     entry.add_to_hass(hass)
+    _register_asset_device(entry, device_registry)
     entity_id = _register_runtime_entity(entry, entity_registry, device)
     if restore_value is not None:
         _mock_native_restore(hass, entity_id, restore_value)
@@ -355,7 +372,11 @@ async def test_missing_primary_device_preserves_unresolved_legacy_runtime(
 
     assert manager.runtime_total_seconds(ASSET_UUID) is None
     initialize_runtime.assert_not_awaited()
-    add_entities.assert_not_called()
+    add_entities.assert_called_once()
+    assert not any(
+        isinstance(entity, DeviceRuntimeHoursSensor)
+        for entity in add_entities.call_args.args[0]
+    )
     registry_entry = entity_registry.async_get(entity_id)
     assert registry_entry is not None
     assert registry_entry.entity_id == entity_id
@@ -371,7 +392,7 @@ async def test_marked_runtime_initializes_with_missing_primary_device(
     entity_registry: er.EntityRegistry,
     asset_store_data: AssetStoreData,
 ) -> None:
-    """A marked Runtime initializes zero but stays hidden without its device."""
+    """A marked Runtime projects through the Asset despite a stale external device."""
     manager = _manager(hass, asset_store_data)
     device = _register_device(hass, device_registry)
     manager._data["assets"][ASSET_UUID]["ha_device_refs"] = [
@@ -380,6 +401,7 @@ async def test_marked_runtime_initializes_with_missing_primary_device(
     entry = _runtime_entry(device_id=device.id, marker=True)
     entry.runtime_data = manager
     entry.add_to_hass(hass)
+    _register_asset_device(entry, device_registry)
     entity_id = _register_runtime_entity(entry, entity_registry, device)
     add_entities = Mock()
 
@@ -388,7 +410,8 @@ async def test_marked_runtime_initializes_with_missing_primary_device(
 
     assert manager.runtime_total_seconds(ASSET_UUID) == Decimal(0)
     manager._store.async_save.assert_awaited_once()
-    add_entities.assert_not_called()
+    assert add_entities.call_count == 2
+    assert isinstance(add_entities.call_args.args[0][0], DeviceRuntimeHoursSensor)
     assert entity_registry.async_get(entity_id).entity_id == entity_id
     assert manager.asset(ASSET_UUID)["ha_device_refs"] == [
         {"device_id": device.id, "role": "primary"}
@@ -458,13 +481,18 @@ async def test_missing_restore_keeps_canonical_null_and_registry_identity(
     entry = _runtime_entry(device_id=device.id)
     entry.runtime_data = manager
     entry.add_to_hass(hass)
+    _register_asset_device(entry, device_registry)
     entity_id = _register_runtime_entity(entry, entity_registry, device)
     add_entities = Mock()
 
     await async_setup_entry(hass, entry, add_entities)
 
     assert manager.runtime_total_seconds(ASSET_UUID) is None
-    add_entities.assert_not_called()
+    add_entities.assert_called_once()
+    assert not any(
+        isinstance(entity, DeviceRuntimeHoursSensor)
+        for entity in add_entities.call_args.args[0]
+    )
     assert entity_registry.async_get(entity_id) is not None
     manager._store.async_save.assert_not_awaited()
 
@@ -482,6 +510,7 @@ async def test_failed_import_is_retryable_without_zero_or_entity_replacement(
     entry = _runtime_entry(device_id=device.id)
     entry.runtime_data = manager
     entry.add_to_hass(hass)
+    _register_asset_device(entry, device_registry)
     manager._data["assets"][ASSET_UUID]["ha_device_refs"] = [
         {"device_id": device.id, "role": "primary"}
     ]
@@ -492,7 +521,7 @@ async def test_failed_import_is_retryable_without_zero_or_entity_replacement(
     await async_setup_entry(hass, entry, first_add)
 
     assert manager.runtime_total_seconds(ASSET_UUID) is None
-    first_add.assert_not_called()
+    first_add.assert_called_once()
     assert entity_registry.async_get(entity_id) is not None
 
     manager._store.async_save = AsyncMock()
@@ -500,7 +529,7 @@ async def test_failed_import_is_retryable_without_zero_or_entity_replacement(
     await async_setup_entry(hass, entry, second_add)
 
     assert manager.runtime_total_seconds(ASSET_UUID) == Decimal("9000.0")
-    second_add.assert_called_once()
+    assert second_add.call_count == 2
     assert entity_registry.async_get(entity_id).entity_id == entity_id
 
 
@@ -538,12 +567,13 @@ async def test_marked_runtime_setup_initializes_zero_and_removal_keeps_total(
     entry = _runtime_entry(device_id=device.id, marker=True)
     entry.runtime_data = manager
     entry.add_to_hass(hass)
+    _register_asset_device(entry, device_registry)
     add_entities = Mock()
 
     await async_setup_entry(hass, entry, add_entities)
 
     assert manager.runtime_total_seconds(ASSET_UUID) == Decimal(0)
-    add_entities.assert_called_once()
+    assert add_entities.call_count == 2
     await manager.async_commit_runtime_delta(
         ASSET_UUID,
         expected_total=Decimal(0),
@@ -887,6 +917,7 @@ async def test_duplicate_runtime_writers_are_prevented(
     )
     entry.runtime_data = manager
     entry.add_to_hass(hass)
+    _register_asset_device(entry, device_registry)
     manager._data["assets"][ASSET_UUID]["ha_device_refs"] = [
         {"device_id": device.id, "role": "primary"}
     ]
@@ -894,7 +925,7 @@ async def test_duplicate_runtime_writers_are_prevented(
 
     await async_setup_entry(hass, entry, add_entities)
 
-    assert add_entities.call_count == 1
+    assert add_entities.call_count == 2
     assert len(add_entities.call_args.args[0]) == 1
 
 

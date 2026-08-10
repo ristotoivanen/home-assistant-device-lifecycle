@@ -25,6 +25,7 @@ from custom_components.device_lifecycle.migration import (
     lifecycle_unique_id,
     runtime_unique_id,
 )
+from custom_components.device_lifecycle.exposure import asset_device_identifier
 from custom_components.device_lifecycle.sensor import (
     DeviceRuntimeHoursSensor,
     async_setup_entry,
@@ -107,8 +108,18 @@ async def test_related_device_never_becomes_runtime_entity_target(
     )
     entry.runtime_data = manager
     entry.add_to_hass(hass)
+    device_registry.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        config_subentry_id=None,
+        identifiers={asset_device_identifier(asset["asset_uuid"])},
+        name="Related-only Asset",
+    )
     async_add_entities = Mock()
 
     await async_setup_entry(hass, entry, async_add_entities)
 
-    async_add_entities.assert_not_called()
+    async_add_entities.assert_called_once()
+    assert not any(
+        isinstance(entity, DeviceRuntimeHoursSensor)
+        for entity in async_add_entities.call_args.args[0]
+    )

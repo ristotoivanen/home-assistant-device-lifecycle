@@ -47,7 +47,7 @@ from custom_components.device_lifecycle.storage import (
     AssetStoreManager,
 )
 
-from .conftest import ASSET_UUID, DEVICE_ID, PURCHASE_UUID
+from .conftest import ASSET_UUID, PURCHASE_UUID
 
 MANUAL_ASSET_UUID = "33333333-3333-4333-8333-333333333333"
 RUNTIME_ASSET_UUID = "44444444-4444-4444-8444-444444444444"
