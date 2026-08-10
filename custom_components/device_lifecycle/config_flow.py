@@ -7,16 +7,15 @@ from math import isfinite
 from typing import Any
 
 import voluptuous as vol
-
 from homeassistant import config_entries
 from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.config_entries import (
+    SOURCE_USER,
     ConfigEntry,
     ConfigFlowResult,
     ConfigSubentryFlow,
     FlowType,
     OptionsFlow,
-    SOURCE_USER,
     SubentryFlowContext,
     SubentryFlowResult,
 )
@@ -29,7 +28,6 @@ from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_conversion import PowerConverter
 
 from .const import (
-    CONFIG_ENTRY_VERSION,
     CONF_ASSET_NAME,
     CONF_ASSET_UUID,
     CONF_CATEGORY,
@@ -40,9 +38,9 @@ from .const import (
     CONF_DEPLOYMENT_STATE,
     CONF_DEVICE_ID,
     CONF_DEVICE_IDS,
-    CONF_HW_VERSION,
     CONF_HA_AREA_ID,
     CONF_HA_RELATIONSHIP_ACTION,
+    CONF_HW_VERSION,
     CONF_INSTALLED_DATE,
     CONF_MANUFACTURER,
     CONF_MODEL,
@@ -56,6 +54,7 @@ from .const import (
     CONF_PURCHASE_UUID,
     CONF_RECEIPT_REFERENCE,
     CONF_RECEIPT_URL,
+    CONF_RUNTIME_DATA_VERSION,
     CONF_RUNTIME_MODE,
     CONF_SELLER,
     CONF_SERIAL_NUMBER,
@@ -63,14 +62,16 @@ from .const import (
     CONF_SW_VERSION,
     CONF_WARRANTY_TYPE,
     CONF_WARRANTY_UNTIL,
+    CONFIG_ENTRY_VERSION,
     DEFAULT_POWER_HYSTERESIS,
     DEFAULT_POWER_THRESHOLD,
-    DEPLOYMENT_STATES,
     DEPLOYMENT_STATE_NOT_DEPLOYED,
+    DEPLOYMENT_STATES,
     DOMAIN,
     HA_RELATIONSHIP_ACTION_REPLACE,
     HA_RELATIONSHIP_ACTION_UNLINK,
     HA_RELATIONSHIP_ACTIONS,
+    RUNTIME_DATA_VERSION,
     RUNTIME_MODE_ON,
     RUNTIME_MODE_POWER,
     RUNTIME_MODES,
@@ -759,9 +760,9 @@ def _prepare_runtime_data(
         except (TypeError, ValueError):
             return None, "invalid_power_threshold"
 
-        if threshold < 0:
+        if not isfinite(threshold) or threshold < 0:
             return None, "invalid_power_threshold"
-        if hysteresis < 0:
+        if not isfinite(hysteresis) or hysteresis < 0:
             return None, "invalid_power_hysteresis"
         if hysteresis > threshold:
             return None, "power_hysteresis_too_large"
@@ -2065,6 +2066,7 @@ class RuntimeSubentryFlow(ConfigSubentryFlow):
                 if error:
                     errors["base"] = error
                 elif clean is not None:
+                    clean[CONF_RUNTIME_DATA_VERSION] = RUNTIME_DATA_VERSION
                     registry = dr.async_get(self.hass)
                     return self.async_create_entry(
                         title=_runtime_title(registry, device_id),
@@ -2163,6 +2165,10 @@ class RuntimeSubentryFlow(ConfigSubentryFlow):
                 if error:
                     errors["base"] = error
                 elif clean is not None:
+                    if CONF_RUNTIME_DATA_VERSION in subentry.data:
+                        clean[CONF_RUNTIME_DATA_VERSION] = subentry.data[
+                            CONF_RUNTIME_DATA_VERSION
+                        ]
                     registry = dr.async_get(self.hass)
                     return self.async_update_and_abort(
                         entry,

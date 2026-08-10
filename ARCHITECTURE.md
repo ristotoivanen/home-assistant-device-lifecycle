@@ -1,6 +1,6 @@
 # Device Lifecycle architecture
 
-This document defines the Asset Core invariants through Device Lifecycle 0.5.6. Future releases must extend the model through explicit migrations instead of replacing Asset identity.
+This document defines the Asset Core invariants through Device Lifecycle 0.5.7. Future releases must extend the model through explicit migrations instead of replacing Asset identity.
 
 ## Core concepts
 
@@ -11,7 +11,8 @@ The model deliberately separates:
 - **Asset**: physical identity and lifecycle metadata
 - **Purchase**: an acquisition event shared by zero or more Assets
 - **Home Assistant relationship**: an instance-specific reference to an external Home Assistant device
-- **Runtime configuration**: an active measurement rule stored in a config subentry in 0.5.6
+- **Runtime configuration**: an active measurement rule stored in a config subentry
+- **Runtime total**: cumulative Asset-owned history stored in Asset Core
 - **Entity**: Home Assistant presentation of Asset data, never the sole source of Asset identity
 
 A Purchase is not the Asset identity. A Home Assistant Device Registry entry is not the Asset identity. Asset identity remains stable when either relationship changes.
@@ -32,7 +33,7 @@ Rules:
 5. A missing, linked, unlinked, replaced, or recreated Home Assistant device does not redefine Asset identity.
 6. Storage corruption must not silently restart Asset numbering; setup fails instead of risking ID reuse.
 
-## Asset Store schema 1.2
+## Asset Store schema 2.1
 
 Asset Core uses one private, atomic, versioned Home Assistant Store:
 
@@ -40,7 +41,7 @@ Asset Core uses one private, atomic, versioned Home Assistant Store:
 device_lifecycle.assets
 ```
 
-The Store major version remains `1`; Device Lifecycle 0.5.6 continues to use minor version `2`.
+Device Lifecycle 0.5.7 uses Store major version `2`, minor version `1`. The major-version boundary prevents 0.5.6 from permissively opening and rewriting canonical Runtime data it does not understand.
 
 Conceptual payload:
 
@@ -81,7 +82,7 @@ asset_uuids: []
 
 No Asset UUID, Asset ID, or `next_asset_number` increment is allocated merely because a Purchase exists.
 
-An Asset can point to at most one acquisition Purchase in Store 1.2.
+An Asset can point to at most one acquisition Purchase in Store 2.1.
 
 ### Asset
 
@@ -96,6 +97,7 @@ An Asset contains:
 - `installed_date`
 - `ha_area_id`
 - warranty object
+- Runtime object
 - manufacturer
 - model and model ID
 - serial number
@@ -103,6 +105,15 @@ An Asset contains:
 - notes
 - field provenance
 - zero or more `ha_device_refs`
+
+Runtime is represented as:
+
+```text
+runtime:
+  total_seconds: decimal string | null
+```
+
+The value is finite, non-negative cumulative seconds. `null` means canonical Runtime is not initialized yet; it never means zero. Persistent Runtime arithmetic uses `Decimal`, and normal operation never decreases the total.
 
 Dates are stored as ISO calendar dates (`YYYY-MM-DD`).
 
@@ -114,7 +125,7 @@ not_deployed
 deployed
 ```
 
-Store 1.2 explicitly supports a relationship-free physical Asset:
+Store 2.1 explicitly supports a relationship-free physical Asset:
 
 ```text
 purchase_uuid: null
@@ -122,6 +133,8 @@ ha_device_refs: []
 deployment_state: not_deployed
 installed_date: null
 ha_area_id: null
+runtime:
+  total_seconds: null
 ```
 
 This is the normal initial relationship state of a manually created Asset.
@@ -147,7 +160,7 @@ field_sources["purchase_uuid"] = "purchase" | "user"
 
 Reconciliation must not silently replace a user-managed Purchase relationship.
 
-Existing warranty data and Purchase projection behavior remain unchanged in 0.5.6. There is no general Asset-level warranty editor.
+Existing warranty data and Purchase projection behavior remain unchanged in 0.5.7. There is no general Asset-level warranty editor.
 
 ## Serialized mutation model
 
@@ -158,10 +171,13 @@ Existing warranty data and Purchase projection behavior remain unchanged in 0.5.
 3. Apply the mutation to the copy.
 4. Validate the complete resulting Store.
 5. Atomically save the complete Store.
-6. Publish the new in-memory snapshot.
-7. Release the lock.
+6. Read the Store file directly and verify the complete versioned envelope and payload.
+7. Publish the new in-memory snapshot only after verification.
+8. Release the lock.
 
-If mutation, validation, or save fails, the published Store remains unchanged. A failed write must not:
+Home Assistant 2026.8 may catch and log an underlying `WriteError` inside `Store.async_save()`. Device Lifecycle therefore does not treat a normal return as acknowledgement. Failed verification leaves the published snapshot unchanged. If read-back itself fails and persistence is ambiguous, the manager reloads and validates the direct Store snapshot before another mutation; Runtime compare-and-set semantics then recognize an already-landed delta without adding it twice.
+
+If mutation, validation, save, or verification fails, the published Store remains unchanged. A failed write must not:
 
 - advance `next_asset_number`
 - consume an Asset UUID or `DLxxxx` ID
@@ -210,11 +226,11 @@ No Deployment status is inferred from:
 
 Changing an Asset with an Area to `not_deployed` requires explicit confirmation before `ha_area_id` is cleared. `installed_date` remains unchanged unless the user explicitly edits it.
 
-Store 1.2 contains only current Deployment status, Installation date, and Area. There is no deployment history in 0.5.6.
+Store 2.1 contains only current Deployment status, Installation date, and Area. There is no deployment history in 0.5.7.
 
 ## Home Assistant relationships
 
-`ha_device_refs` stores relationships from an Asset to Home Assistant Device Registry devices. In 0.5.6, related relationships are explicitly user-managed. Primary relationships may be established through Asset management or the existing Purchase and Runtime reconciliation paths. The persisted Store 1.2 representation is unchanged:
+`ha_device_refs` stores relationships from an Asset to Home Assistant Device Registry devices. In 0.5.7, related relationships are explicitly user-managed. Primary relationships may be established through Asset management or the existing Purchase and Runtime reconciliation paths. The relationship representation in Store 2.1 remains:
 
 ```text
 ha_device_refs:
@@ -264,11 +280,11 @@ Unlink and replacement are allowed only when the current primary device is not r
 - Purchase subentry through `device_ids`, or
 - Runtime subentry through `device_id`
 
-Dependency conflicts are reported to the user. Device Lifecycle 0.5.6 does not rewrite dependent subentries automatically. Replacement removes the old primary and adds the validated new primary in one serialized Store mutation and one atomic save. Failed validation or save preserves the old relationship.
+Dependency conflicts are reported to the user. Device Lifecycle 0.5.7 does not rewrite dependent subentries automatically. Replacement removes the old primary and adds the validated new primary in one serialized Store mutation and one verified atomic save. Failed validation, save, or read-back preserves the published old relationship.
 
-## Runtime compatibility
+## Canonical Runtime ownership
 
-Runtime configuration remains a config subentry in 0.5.6. Reconciliation stores an `asset_uuid` reference in the Runtime subentry and resolves an existing matching primary relationship before considering a new Asset. Related relationships are ignored for Runtime reconciliation and entity setup.
+Runtime configuration remains a config subentry in 0.5.7. Reconciliation stores an `asset_uuid` reference and resolves the primary relationship only. Related relationships have no Runtime semantics.
 
 Runtime entity unique IDs are Asset-owned:
 
@@ -282,9 +298,17 @@ Lifecycle entity unique IDs use:
 <asset_uuid>_lifecycle
 ```
 
-Entity Registry migration preserves the existing `entity_id`, recorder identity, and restore continuity. The cumulative Runtime total remains RestoreSensor-owned in 0.5.6; it is not persisted in Asset Store.
+Entity Registry migration preserves the existing `entity_id`, recorder identity, and Recorder continuity. Asset Store is the canonical Runtime truth; the sensor is a projection and Recorder remains the displayed timeline.
 
-## Store 1.1 to 1.2 migration
+Store 1.1 and 1.2 migrations add `runtime.total_seconds: null` to every existing Asset. Legacy Runtime subentries have no `runtime_data_version`. Before their sensor is added, Device Lifecycle resolves the existing entity ID, reads native RestoreSensor data for that exact identity, requires a finite non-negative native value in hours, converts it with `Decimal` to seconds, and atomically compares-and-sets `null` to that value. A non-null canonical total always wins, so the import is exactly once. Missing, corrupt, unsafe-unit, or unpersistable restore data leaves the value null, preserves the entity-registry identity, adds no misleading zero sensor, and retries on reload.
+
+New Runtime subentries contain `runtime_data_version: 1`. Only that provenance permits a safe atomic `null` to `"0"` initialization. Reconfiguration preserves the marker, and removing or recreating Runtime tracking never removes or resets the Asset total.
+
+Elapsed Runtime uses a monotonic clock and three explicit components: committed canonical seconds, ordered sealed pending deltas, and the current active interval. The displayed value includes all three. Every five minutes while active, the entity seals elapsed time, advances its active baseline, and commits the delta. Stop, unavailable/unknown, unload, and normal shutdown also checkpoint. Inactive periodic callbacks retry pending deltas.
+
+Each delta carries its expected canonical total. Store equality with the expected value applies the delta; equality with expected plus delta is idempotent success; any other value fails closed. An entity-level lock serializes periodic, source, unload, and shutdown callbacks, while the Store manager mutation lock serializes canonical writes. Failed saves retain sealed pending deltas without leaving the active timer running. Under healthy persistence, a hard crash loses only time since the last successful checkpoint, normally less than the five-minute interval. That bound does not apply while Store writes are failing.
+
+## Store 1.1/1.2 to 2.1 migration
 
 The explicit migration preserves exactly:
 
@@ -295,18 +319,22 @@ The explicit migration preserves exactly:
 - Home Assistant device references
 - config-subentry references
 - Runtime relationships
-- entity unique IDs and restored totals
+- entity unique IDs and legacy restored totals pending import
 
 For every existing 0.5.3 Asset, migration adds:
 
 ```text
 deployment_state: unknown
 ha_area_id: null
+runtime:
+  total_seconds: null
 ```
 
 If `purchase_uuid` is non-null and `field_sources["purchase_uuid"]` is absent, the migration records `purchase` provenance. The migration is idempotent and does not infer deployment from any existing relationship or metadata.
 
-Downgrading Store 1.2 to Device Lifecycle 0.5.3 should not be treated as safe without restoring a backup made before the upgrade.
+Store 1.2 Assets also receive the null Runtime object directly. Migration works on a detached copy and validates the complete Store 2.1 result.
+
+After Store migration, downgrading 0.5.7 to 0.5.6 is unsupported. The 0.5.6 Store v1 reader rejects Store major version 2 and must not rewrite it. Restore a backup made before the upgrade for rollback.
 
 ## Reconciliation and persistence ordering
 
@@ -337,19 +365,19 @@ Examples from the existing roadmap include:
 
 Growing histories do not belong in ConfigSubentries. ConfigSubentries remain suitable for active user configuration; persistent history belongs in explicitly versioned Device Lifecycle storage.
 
-## 0.5.6 schema and migration impact
+## 0.5.7 schema and migration impact
 
-Device Lifecycle 0.5.6 changes management behavior, validation, and UI only. It does not change the persisted `ha_device_refs` shape. Therefore:
+Device Lifecycle 0.5.7 changes Runtime ownership and Store durability while retaining config-entry and entity identity. Therefore:
 
-- Store major/minor remains `1.2`
+- Store major/minor is `2.1`
 - config entry version remains `4`
-- no Store migration is added
+- Store 1.1 and 1.2 migrate explicitly to 2.1
 - no config-entry migration is added
-- existing valid Store 1.2 related references load directly
+- Runtime entity unique IDs and entity IDs remain unchanged
 
-## Explicit non-goals for 0.5.6
+## Explicit non-goals for 0.5.7
 
-Device Lifecycle 0.5.6 does not add:
+Device Lifecycle 0.5.7 does not add:
 
 - Asset archive or delete
 - Asset merge
@@ -362,9 +390,9 @@ Device Lifecycle 0.5.6 does not add:
 - deployment history
 - maintenance schedules or history
 - a general Asset-level warranty editor
-- Runtime total persistence in Asset Store
-- Runtime migration or history
+- Runtime reset or manual Runtime editing
+- Recorder/statistics migration
 - Asset-to-Asset or replacement relationships
 - export/import
 
-The 0.5.6 acceptance contract is: one optional primary and any number of related Home Assistant relationships per Asset; primary alone drives current operational compatibility; related references are non-exclusive and have no identity, metadata, Purchase, Runtime, entity-placement, deployment, or Device Registry ownership semantics; stale references persist until explicit repair; and every mutation remains validated and atomic.
+The 0.5.7 acceptance contract adds Asset-owned cumulative Runtime without changing relationship semantics: primary alone drives Runtime; related references remain non-exclusive and have no identity, metadata, Purchase, Runtime, entity-placement, deployment, or Device Registry ownership semantics; legacy totals import exactly once; elapsed commits are retryable and idempotent; and every mutation remains validated, durably verified, and atomic before publication.

@@ -4,24 +4,23 @@ from __future__ import annotations
 
 from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import Mock
 
-from homeassistant.components.sensor import RestoreSensor
+from homeassistant.components.sensor import RestoreSensor, SensorEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.device_lifecycle.const import (
-    CONFIG_ENTRY_VERSION,
     CONF_ASSET_UUID,
     CONF_DEVICE_ID,
     CONF_RUNTIME_MODE,
     CONF_SOURCE_ENTITY_ID,
+    CONFIG_ENTRY_VERSION,
     DOMAIN,
     RUNTIME_MODE_ON,
     SUBENTRY_TYPE_RUNTIME,
 )
-
 from custom_components.device_lifecycle.migration import (
     lifecycle_unique_id,
     runtime_unique_id,
@@ -41,48 +40,28 @@ def test_asset_owned_unique_ids_are_stable() -> None:
     assert runtime_unique_id(ASSET_UUID) == f"{ASSET_UUID}_runtime_hours"
 
 
-async def test_runtime_sensor_restores_existing_total(
+async def test_runtime_sensor_projects_canonical_total(
     hass: HomeAssistant,
     asset_store_data,
     runtime_subentry_data,
 ) -> None:
-    """Protect restored Runtime totals and their Asset-owned unique ID."""
+    """Canonical Asset Runtime replaces RestoreSensor ownership."""
     asset = asset_store_data["assets"][ASSET_UUID]
+    asset["runtime"]["total_seconds"] = "4624308.00"
     sensor = DeviceRuntimeHoursSensor(
         data=runtime_subentry_data,
         asset=asset,
         device_entry=SimpleNamespace(id=DEVICE_ID),
         unique_id=runtime_unique_id(ASSET_UUID),
+        manager=Mock(),
+        monotonic=lambda: 0.0,
     )
     sensor.hass = hass
-    restored = SimpleNamespace(native_value="1284.53")
-
-    with (
-        patch.object(
-            RestoreSensor,
-            "async_added_to_hass",
-            new=AsyncMock(),
-        ),
-        patch.object(
-            sensor,
-            "async_get_last_sensor_data",
-            new=AsyncMock(return_value=restored),
-        ),
-        patch.object(sensor, "async_on_remove", new=Mock()),
-        patch.object(sensor, "async_write_ha_state", new=Mock()),
-        patch(
-            "custom_components.device_lifecycle.sensor.async_track_state_change_event",
-            return_value=lambda: None,
-        ),
-        patch(
-            "custom_components.device_lifecycle.sensor.async_track_time_interval",
-            return_value=lambda: None,
-        ),
-    ):
-        await sensor.async_added_to_hass()
 
     assert sensor.unique_id == f"{ASSET_UUID}_runtime_hours"
     assert sensor.native_value == Decimal("1284.530000")
+    assert isinstance(sensor, SensorEntity)
+    assert not isinstance(sensor, RestoreSensor)
     assert sensor.extra_state_attributes["asset_uuid"] == ASSET_UUID
     assert sensor.extra_state_attributes["asset_id"] == "DL0007"
     assert sensor.extra_state_attributes["lahde_entiteetti"] == SOURCE_ENTITY_ID

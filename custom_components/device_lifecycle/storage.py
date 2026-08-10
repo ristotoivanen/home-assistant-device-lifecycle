@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import re
+from collections.abc import Callable
 from copy import deepcopy
 from datetime import date
 from decimal import Decimal, InvalidOperation
-import os
-import re
-from typing import Any, Callable, TypeVar, cast
+from typing import Any, TypeVar, cast
 from uuid import UUID, uuid4
 
 from homeassistant.config_entries import ConfigEntry
@@ -16,6 +17,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.storage import Store
+from homeassistant.util import json as json_util
 
 from .const import (
     CONF_ASSET_UUID,
@@ -35,9 +37,9 @@ from .const import (
     CONF_SELLER,
     CONF_WARRANTY_TYPE,
     CONF_WARRANTY_UNTIL,
-    DEPLOYMENT_STATES,
     DEPLOYMENT_STATE_NOT_DEPLOYED,
     DEPLOYMENT_STATE_UNKNOWN,
+    DEPLOYMENT_STATES,
     DOMAIN,
     SUBENTRY_TYPE_PURCHASE,
     SUBENTRY_TYPE_RUNTIME,
@@ -47,8 +49,8 @@ from .const import (
 )
 from .models import AssetData, AssetStoreData, HADeviceReference, PurchaseData
 
-STORAGE_VERSION = 1
-STORAGE_MINOR_VERSION = 2
+STORAGE_VERSION = 2
+STORAGE_MINOR_VERSION = 1
 STORAGE_KEY = f"{DOMAIN}.assets"
 
 ASSET_ID_PATTERN = re.compile(r"^DL([0-9]{4})$")
@@ -84,8 +86,17 @@ class AssetStoreError(HomeAssistantError):
     """Raised when Asset Core storage cannot be safely reconciled."""
 
 
+class AssetStorePersistenceError(AssetStoreError):
+    """Raised when Store persistence cannot be verified."""
+
+    def __init__(self, message: str, *, ambiguous: bool = False) -> None:
+        """Initialize a persistence error with acknowledgement certainty."""
+        super().__init__(message)
+        self.ambiguous = ambiguous
+
+
 class DeviceLifecycleStore(Store[AssetStoreData]):
-    """Home Assistant Store with an explicit migration hook from version one."""
+    """Home Assistant Store with explicit migration and verified persistence."""
 
     def __init__(self, hass: HomeAssistant) -> None:
         """Initialize private, atomic Asset Core storage."""
@@ -105,38 +116,115 @@ class DeviceLifecycleStore(Store[AssetStoreData]):
         old_data: AssetStoreData,
     ) -> AssetStoreData:
         """Migrate Asset Core storage without changing persistent identity."""
-        if old_major_version != STORAGE_VERSION:
-            raise NotImplementedError
+        data = deepcopy(old_data)
 
-        if old_minor_version == STORAGE_MINOR_VERSION:
-            return old_data
+        if old_major_version == STORAGE_VERSION:
+            if old_minor_version != STORAGE_MINOR_VERSION:
+                raise NotImplementedError
+            _validate_store_data(data)
+            return data
 
-        if old_minor_version == 1:
-            data = deepcopy(old_data)
+        if old_major_version == 1 and old_minor_version in (1, 2):
             assets = data.get("assets")
             if not isinstance(assets, dict):
+                _validate_store_data(data)
                 return data
 
             for asset in assets.values():
                 if not isinstance(asset, dict):
                     continue
 
-                asset.setdefault(CONF_DEPLOYMENT_STATE, DEPLOYMENT_STATE_UNKNOWN)
-                asset.setdefault(CONF_HA_AREA_ID, None)
+                if old_minor_version == 1:
+                    asset.setdefault(
+                        CONF_DEPLOYMENT_STATE,
+                        DEPLOYMENT_STATE_UNKNOWN,
+                    )
+                    asset.setdefault(CONF_HA_AREA_ID, None)
 
-                if asset.get("purchase_uuid") is None:
-                    continue
-                sources = asset.get("field_sources")
-                if isinstance(sources, dict):
-                    sources.setdefault("purchase_uuid", FIELD_SOURCE_PURCHASE)
+                    if asset.get("purchase_uuid") is not None:
+                        sources = asset.get("field_sources")
+                        if isinstance(sources, dict):
+                            sources.setdefault(
+                                "purchase_uuid",
+                                FIELD_SOURCE_PURCHASE,
+                            )
 
+                asset["runtime"] = {"total_seconds": None}
+
+            _validate_store_data(data)
             return data
 
         raise NotImplementedError
 
+    async def async_save(self, data: AssetStoreData) -> None:
+        """Save and verify the exact Store envelope from the persisted file."""
+        await super().async_save(data)
+
+        # Store defers writes once Home Assistant is stopping. Device Lifecycle
+        # must know whether a mutation reached disk before publishing it, so force
+        # a pending final write through the same Store write path now.
+        if self._data is not None:
+            await self._async_handle_write_data()
+
+        expected = {
+            "version": self.version,
+            "minor_version": self.minor_version,
+            "key": self.key,
+            "data": data,
+        }
+        try:
+            persisted = await self.hass.async_add_executor_job(
+                json_util.load_json,
+                self.path,
+            )
+        except HomeAssistantError as err:
+            raise AssetStorePersistenceError(
+                "Asset Core persistence could not be read back; the write "
+                "result is unknown",
+                ambiguous=True,
+            ) from err
+
+        if persisted != expected:
+            raise AssetStorePersistenceError(
+                "Asset Core persistence verification did not match the "
+                "requested snapshot"
+            )
+
+    async def async_load_persisted_snapshot(self) -> AssetStoreData | None:
+        """Read the current v2.1 payload directly, bypassing Store caches."""
+        try:
+            persisted = await self.hass.async_add_executor_job(
+                json_util.load_json,
+                self.path,
+            )
+        except HomeAssistantError as err:
+            raise AssetStorePersistenceError(
+                "Asset Core persistence could not be read for recovery",
+                ambiguous=True,
+            ) from err
+
+        if persisted == {} and not await self.hass.async_add_executor_job(
+            os.path.exists,
+            self.path,
+        ):
+            return None
+
+        if not isinstance(persisted, dict):
+            raise AssetStoreError("Asset Core Store envelope is invalid")
+        if (
+            persisted.get("version") != STORAGE_VERSION
+            or persisted.get("minor_version") != STORAGE_MINOR_VERSION
+            or persisted.get("key") != STORAGE_KEY
+            or not isinstance(persisted.get("data"), dict)
+        ):
+            raise AssetStoreError(
+                "Asset Core Store envelope changed during persistence recovery"
+            )
+        return cast(AssetStoreData, deepcopy(persisted["data"]))
+
 
 def _empty_store_data() -> AssetStoreData:
-    """Return an empty version-one Asset Core payload."""
+    """Return an empty version-two Asset Core payload."""
     return {
         "next_asset_number": 1,
         "purchases": {},
@@ -163,6 +251,15 @@ def _normalize_price(value: Any) -> str | None:
     if not amount.is_finite() or amount < 0:
         raise AssetStoreError("Purchase total price is invalid")
     return format(amount, "f")
+
+
+def _runtime_seconds(value: Decimal, *, allow_zero: bool = True) -> Decimal:
+    """Validate a Runtime seconds value without binary-float coercion."""
+    if not isinstance(value, Decimal) or not value.is_finite():
+        raise AssetStoreError("Runtime seconds must be a finite Decimal")
+    if value < 0 or (not allow_zero and value == 0):
+        raise AssetStoreError("Runtime seconds must be positive")
+    return value
 
 
 def _valid_uuid(value: Any) -> str | None:
@@ -278,6 +375,26 @@ def _validate_store_data(data: AssetStoreData) -> None:
         if warranty.get("type") not in WARRANTY_TYPES:
             raise AssetStoreError(f"Asset {asset_id} has an invalid warranty type")
         _validate_optional_date(warranty.get("until"), "warranty.until")
+
+        runtime = asset.get("runtime")
+        if not isinstance(runtime, dict) or set(runtime) != {"total_seconds"}:
+            raise AssetStoreError(f"Asset {asset_id} has invalid Runtime data")
+        runtime_total = runtime.get("total_seconds")
+        if runtime_total is not None:
+            if not isinstance(runtime_total, str):
+                raise AssetStoreError(
+                    f"Asset {asset_id} has an invalid Runtime total"
+                )
+            try:
+                runtime_seconds = Decimal(runtime_total)
+            except InvalidOperation as err:
+                raise AssetStoreError(
+                    f"Asset {asset_id} has an invalid Runtime total"
+                ) from err
+            if not runtime_seconds.is_finite() or runtime_seconds < 0:
+                raise AssetStoreError(
+                    f"Asset {asset_id} has an invalid Runtime total"
+                )
 
         sources = asset.get("field_sources")
         if not isinstance(sources, dict):
@@ -416,6 +533,7 @@ class AssetStoreManager:
         self._store = DeviceLifecycleStore(hass)
         self._data: AssetStoreData = _empty_store_data()
         self._mutation_lock = asyncio.Lock()
+        self._persistence_uncertain = False
 
     async def async_setup(self) -> None:
         """Load and validate persistent Asset Core data."""
@@ -454,17 +572,103 @@ class AssetStoreManager:
     ) -> _MutationResultT:
         """Apply one all-or-nothing mutation to a detached Store snapshot."""
         async with self._mutation_lock:
+            if self._persistence_uncertain:
+                persisted = await self._store.async_load_persisted_snapshot()
+                if persisted is None:
+                    if self._data != _empty_store_data():
+                        raise AssetStoreError(
+                            "Asset Core persistence disappeared during recovery"
+                        )
+                else:
+                    _validate_store_data(persisted)
+                    self._data = persisted
+                self._persistence_uncertain = False
+
             data = deepcopy(self._data)
             result = mutator(data)
             _validate_store_data(data)
 
             if data != self._data:
-                await self._store.async_save(data)
+                try:
+                    await self._store.async_save(data)
+                except AssetStorePersistenceError as err:
+                    self._persistence_uncertain = err.ambiguous
+                    raise
 
             # Publish only after the complete snapshot has been validated and
             # durably saved. A mutation or save exception leaves _data untouched.
             self._data = data
             return deepcopy(result)
+
+    async def async_initialize_new_runtime(self, asset_uuid: str) -> Decimal:
+        """Atomically initialize a new marked Runtime from null to zero."""
+
+        def _initialize(data: AssetStoreData) -> Decimal:
+            asset = self._require_asset(data, asset_uuid)
+            total = asset["runtime"]["total_seconds"]
+            if total is None:
+                asset["runtime"]["total_seconds"] = "0"
+                return Decimal(0)
+            return Decimal(total)
+
+        return await self._async_mutate(_initialize)
+
+    async def async_import_legacy_runtime(
+        self,
+        asset_uuid: str,
+        total_seconds: Decimal,
+    ) -> Decimal:
+        """Compare-and-set a validated legacy RestoreSensor total exactly once."""
+        normalized = _runtime_seconds(total_seconds)
+
+        def _initialize(data: AssetStoreData) -> Decimal:
+            asset = self._require_asset(data, asset_uuid)
+            current = asset["runtime"]["total_seconds"]
+            if current is not None:
+                return Decimal(current)
+            asset["runtime"]["total_seconds"] = format(normalized, "f")
+            return normalized
+
+        return await self._async_mutate(_initialize)
+
+    async def async_commit_runtime_delta(
+        self,
+        asset_uuid: str,
+        *,
+        expected_total: Decimal,
+        delta: Decimal,
+    ) -> Decimal:
+        """Commit one Runtime delta with compare-and-set idempotency."""
+        expected = _runtime_seconds(expected_total)
+        increment = _runtime_seconds(delta, allow_zero=False)
+        committed = expected + increment
+
+        def _commit(data: AssetStoreData) -> Decimal:
+            asset = self._require_asset(data, asset_uuid)
+            stored = asset["runtime"]["total_seconds"]
+            if stored is None:
+                raise AssetStoreError(
+                    f"Asset {asset_uuid} Runtime is not initialized"
+                )
+            current = Decimal(stored)
+            if current == expected:
+                asset["runtime"]["total_seconds"] = format(committed, "f")
+                return committed
+            if current == committed:
+                return committed
+            raise AssetStoreError(
+                f"Asset {asset_uuid} Runtime total changed unexpectedly"
+            )
+
+        return await self._async_mutate(_commit)
+
+    def runtime_total_seconds(self, asset_uuid: str) -> Decimal | None:
+        """Return one Asset's detached canonical Runtime total."""
+        asset = self.asset(asset_uuid)
+        if asset is None:
+            raise AssetStoreError(f"Asset {asset_uuid} does not exist")
+        total = asset["runtime"]["total_seconds"]
+        return None if total is None else Decimal(total)
 
     def _require_asset(
         self,
@@ -537,6 +741,7 @@ class AssetStoreManager:
             "installed_date": None,
             CONF_HA_AREA_ID: None,
             "warranty": {"type": WARRANTY_NONE, "until": None},
+            "runtime": {"total_seconds": None},
             "manufacturer": None,
             "model": None,
             "model_id": None,
@@ -617,6 +822,7 @@ class AssetStoreManager:
                 "installed_date": None,
                 CONF_HA_AREA_ID: None,
                 "warranty": {"type": WARRANTY_NONE, "until": None},
+                "runtime": {"total_seconds": None},
                 "manufacturer": metadata["manufacturer"],
                 "model": metadata["model"],
                 "model_id": metadata["model_id"],

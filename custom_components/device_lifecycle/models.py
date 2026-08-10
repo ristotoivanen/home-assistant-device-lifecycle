@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Literal, TypedDict
 
-
 DeploymentState = Literal["unknown", "not_deployed", "deployed"]
 HADeviceRole = Literal["primary", "related"]
 
@@ -23,6 +22,12 @@ class WarrantyData(TypedDict):
     until: str | None
 
 
+class RuntimeData(TypedDict):
+    """Asset-owned cumulative Runtime data."""
+
+    total_seconds: str | None
+
+
 class AssetData(TypedDict):
     """One real-world physical Asset.
 
@@ -39,6 +44,7 @@ class AssetData(TypedDict):
     installed_date: str | None
     ha_area_id: str | None
     warranty: WarrantyData
+    runtime: RuntimeData
     manufacturer: str | None
     model: str | None
     model_id: str | None

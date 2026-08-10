@@ -5,14 +5,16 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from homeassistant.core import HomeAssistant
+import pytest
 import voluptuous as vol
+from homeassistant.core import HomeAssistant
 
 from custom_components.device_lifecycle.config_flow import (
     PurchaseSubentryFlow,
+    RuntimeSubentryFlow,
     _prepare_purchase_data,
-    _purchase_schema,
     _prepare_runtime_data,
+    _purchase_schema,
     _used_device_ids,
     _used_runtime_device_ids,
 )
@@ -31,11 +33,13 @@ from custom_components.device_lifecycle.const import (
     CONF_PURCHASE_UUID,
     CONF_RECEIPT_REFERENCE,
     CONF_RECEIPT_URL,
+    CONF_RUNTIME_DATA_VERSION,
     CONF_RUNTIME_MODE,
     CONF_SELLER,
     CONF_SOURCE_ENTITY_ID,
     CONF_WARRANTY_TYPE,
     CONF_WARRANTY_UNTIL,
+    RUNTIME_DATA_VERSION,
     RUNTIME_MODE_POWER,
     SUBENTRY_TYPE_PURCHASE,
     SUBENTRY_TYPE_RUNTIME,
@@ -113,6 +117,120 @@ def test_runtime_reconfigure_preserves_target_asset_and_hysteresis() -> None:
     assert clean[CONF_ASSET_UUID] == ASSET_UUID
     assert clean[CONF_POWER_THRESHOLD] == 10.0
     assert clean[CONF_POWER_HYSTERESIS] == 2.0
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error_key"),
+    [
+        (CONF_POWER_THRESHOLD, float("nan"), "invalid_power_threshold"),
+        (CONF_POWER_THRESHOLD, float("inf"), "invalid_power_threshold"),
+        (CONF_POWER_HYSTERESIS, float("nan"), "invalid_power_hysteresis"),
+        (CONF_POWER_HYSTERESIS, float("inf"), "invalid_power_hysteresis"),
+    ],
+)
+def test_runtime_power_configuration_rejects_non_finite_values(
+    field: str,
+    value: float,
+    error_key: str,
+) -> None:
+    """POWER threshold and hysteresis cannot persist NaN or infinity."""
+    user_input = {
+        CONF_RUNTIME_MODE: RUNTIME_MODE_POWER,
+        CONF_SOURCE_ENTITY_ID: SOURCE_ENTITY_ID,
+        CONF_POWER_THRESHOLD: 10.0,
+        CONF_POWER_HYSTERESIS: 2.0,
+        field: value,
+    }
+
+    clean, error = _prepare_runtime_data(user_input)
+
+    assert clean is None
+    assert error == error_key
+
+
+async def test_new_runtime_flow_adds_provenance_marker(
+    hass: HomeAssistant,
+) -> None:
+    """Every newly created 0.5.7 Runtime declares safe-zero provenance."""
+    flow = RuntimeSubentryFlow()
+    flow.hass = hass
+    flow._set_runtime_context(
+        device_id=DEVICE_ID,
+        runtime_mode=RUNTIME_MODE_POWER,
+    )
+    create_result = {"type": "create_entry"}
+
+    with (
+        patch(
+            "custom_components.device_lifecycle.config_flow._runtime_source_error",
+            return_value=None,
+        ),
+        patch.object(
+            flow,
+            "async_create_entry",
+            new=Mock(return_value=create_result),
+        ) as create_entry,
+    ):
+        result = await flow.async_step_runtime_source(
+            {
+                CONF_SOURCE_ENTITY_ID: SOURCE_ENTITY_ID,
+                CONF_POWER_THRESHOLD: 10.0,
+                CONF_POWER_HYSTERESIS: 2.0,
+            }
+        )
+
+    assert result == create_result
+    assert create_entry.call_args.kwargs["data"][CONF_RUNTIME_DATA_VERSION] == (
+        RUNTIME_DATA_VERSION
+    )
+
+
+async def test_runtime_reconfigure_preserves_provenance_marker(
+    hass: HomeAssistant,
+) -> None:
+    """Reconfiguration retains Asset target and Runtime provenance."""
+    flow = RuntimeSubentryFlow()
+    flow.hass = hass
+    subentry = SimpleNamespace(
+        data={
+            CONF_DEVICE_ID: DEVICE_ID,
+            CONF_ASSET_UUID: ASSET_UUID,
+            CONF_RUNTIME_DATA_VERSION: RUNTIME_DATA_VERSION,
+        }
+    )
+    entry = SimpleNamespace()
+    flow._set_runtime_context(
+        device_id=DEVICE_ID,
+        runtime_mode=RUNTIME_MODE_POWER,
+        defaults=dict(subentry.data),
+    )
+    update_result = {"type": "abort"}
+
+    with (
+        patch.object(flow, "_get_entry", return_value=entry),
+        patch.object(flow, "_get_reconfigure_subentry", return_value=subentry),
+        patch(
+            "custom_components.device_lifecycle.config_flow._runtime_source_error",
+            return_value=None,
+        ),
+        patch.object(
+            flow,
+            "async_update_and_abort",
+            new=Mock(return_value=update_result),
+        ) as update,
+    ):
+        result = await flow.async_step_reconfigure_source(
+            {
+                CONF_SOURCE_ENTITY_ID: SOURCE_ENTITY_ID,
+                CONF_POWER_THRESHOLD: 12.0,
+                CONF_POWER_HYSTERESIS: 1.0,
+            }
+        )
+
+    assert result == update_result
+    stored = update.call_args.kwargs["data"]
+    assert stored[CONF_ASSET_UUID] == ASSET_UUID
+    assert stored[CONF_RUNTIME_DATA_VERSION] == RUNTIME_DATA_VERSION
 
 
 def test_used_device_helpers_keep_purchase_and_runtime_scopes_separate() -> None:
