@@ -244,4 +244,3 @@ def test_finalized_english_and_finnish_lifecycle_terms() -> None:
         "replace": "Vaihda linkitetty laite",
         "unlink": "Poista linkitys",
     }
-
