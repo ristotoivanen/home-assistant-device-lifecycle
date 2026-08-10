@@ -105,7 +105,7 @@ async def async_migrate_entity_registry(
         if subentry.subentry_type == SUBENTRY_TYPE_PURCHASE:
             for device_id_value in subentry.data.get(CONF_DEVICE_IDS, []):
                 device_id = str(device_id_value)
-                asset = manager.asset_for_device_id(device_id)
+                asset = manager.asset_for_primary_device_id(device_id)
                 if asset is None:
                     continue
 
@@ -125,8 +125,13 @@ async def async_migrate_entity_registry(
                 continue
 
             asset = manager.asset(str(subentry.data.get(CONF_ASSET_UUID) or ""))
-            if asset is None:
-                asset = manager.asset_for_device_id(device_id)
+            primary_asset = manager.asset_for_primary_device_id(device_id)
+            if (
+                asset is None
+                or primary_asset is None
+                or asset["asset_uuid"] != primary_asset["asset_uuid"]
+            ):
+                asset = primary_asset
             if asset is None:
                 continue
 

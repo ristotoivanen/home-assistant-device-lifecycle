@@ -17,21 +17,20 @@ Asset IDs are allocated monotonically and never recycled. The UUID and Asset ID 
 
 Asset Core uses Home Assistant's private, atomic, versioned storage. Its invariants and Store 1.2 schema are documented in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
-## What's new in 0.5.4
+## What's new in 0.5.6
 
-Device Lifecycle 0.5.4, **Manual Assets & Deployment**, adds:
+Device Lifecycle 0.5.6, **HA Relationships**, extends the existing Home Assistant relationship model:
 
-- Purchases that are valid before any Asset or Home Assistant device exists
-- manual Asset creation without a Purchase or Home Assistant device
-- management of manual, Purchase-created, and Runtime-created Assets
-- editable physical Asset metadata
-- explicit Purchase assignment and clearing
-- Deployment status, Installation date, and Home Assistant Area management
-- explicit linking, unlinking, and replacement of an existing Home Assistant device
-- dependency protection for active Purchase and Runtime configurations
-- English and Finnish UI text for the complete Asset-management workflow
+- each Asset may have zero or one primary Home Assistant device
+- each Asset may have any number of related Home Assistant devices
+- related relationships are non-exclusive and may be shared by multiple Assets
+- related devices can be added or removed explicitly, including removal of stale references
+- an existing related device can be promoted to primary atomically
+- primary remains the only relationship used by Purchase, Runtime, metadata refresh, and entity placement
+- Device Registry validation follows Home Assistant 2026.8 single-config-entry ownership
+- English and Finnish relationship-management UI
 
-Existing Purchase-based and Runtime-based workflows continue to work.
+Asset identity, Purchase behavior, Runtime totals, deployment behavior, Store schema 1.2, and config entry version 4 remain unchanged.
 
 ## Purchase-first workflow
 
@@ -88,7 +87,10 @@ Available actions are:
 - **Edit metadata**: change physical details such as name, category, manufacturer, model, serial number, and notes
 - **Change Purchase**: assign a configured Purchase or clear the current Purchase
 - **Deployment status**: edit status, Installation date, and Home Assistant Area
-- **Home Assistant device**: inspect, link, unlink, or replace the primary device relationship
+- **Home Assistant relationships**: inspect the primary and all related devices
+- **Manage primary device**: link, unlink, replace, or promote a related device
+- **Add related device**: add one non-exclusive relationship
+- **Remove related device**: remove one stored relationship, including a missing device ID
 
 Assets originally created through Purchase or Runtime reconciliation are managed through the same UI. Device Lifecycle does not introduce a separate manual-device model.
 
@@ -110,13 +112,22 @@ Changing an Asset with an Area to **Not deployed** opens a separate confirmation
 
 If a stored Area has been deleted, setup and Asset management continue normally. The unavailable Area ID is displayed and preserved until the user explicitly clears it or selects an existing Area. Device Lifecycle never guesses a replacement Area by name.
 
-0.5.4 does not store deployment history.
+0.5.6 does not store deployment history.
 
 ## Home Assistant device relationships
 
-A Home Assistant device reference is a relationship, not Asset identity. Each Asset can have at most one primary external Home Assistant device, and one Home Assistant device can be primary for at most one Asset.
+A Home Assistant device reference is a relationship, not Asset identity. Each Asset can have zero or one primary external Home Assistant device and zero or more related devices.
 
-Linking a device:
+The relationship rules are:
+
+- a Home Assistant device can be primary for at most one Asset
+- a related device can be linked to multiple Assets
+- a device can be primary for one Asset and related to other Assets
+- the same device cannot be both primary and related on one Asset
+- the same device cannot appear twice on one Asset
+- stale primary and related IDs remain stored until explicit repair
+
+Linking or replacing the primary device:
 
 - does not change the Asset UUID or Asset ID
 - does not attach the Device Lifecycle config entry to the external device
@@ -126,22 +137,40 @@ Linking a device:
 - may refresh non-user-owned Asset metadata from available device information
 - never overwrites metadata explicitly owned or cleared by the user
 
+Related relationships are reference-only. Adding or removing one:
+
+- does not refresh or aggregate Asset metadata
+- does not change the Asset UUID or Asset ID
+- does not affect Purchase membership or reconciliation
+- does not affect Runtime configuration, reconciliation, or totals
+- does not affect Deployment information
+- does not place or duplicate entities on the related device
+- does not modify or take ownership of the Home Assistant device
+
+When a related device is promoted to primary, its related reference is removed in the same atomic change. The old primary is removed rather than automatically becoming related. Existing dependency checks and primary-conflict validation still apply.
+
 Device Lifecycle does not automatically match devices by name, model, serial number, manufacturer, network address, or Area. It never automatically merges Assets.
 
-A missing stored device is shown as unavailable and is not silently replaced. It can be unlinked or replaced when dependency checks allow it.
+A missing stored device is shown as unavailable with its stored ID and is not silently replaced. A stale primary can be unlinked or replaced when dependency checks allow it. A stale related reference remains available in the Remove related device list.
 
 Unlinking or replacing the primary device is blocked while an active:
 
 - Purchase configuration still includes that device, or
 - Runtime configuration still tracks that device
 
-Remove the active dependency first. Device Lifecycle does not rewrite dependent configurations automatically in 0.5.4.
+Remove the active dependency first. Device Lifecycle does not rewrite dependent configurations automatically in 0.5.6. Related add/remove operations do not rewrite or depend on Purchase and Runtime subentries.
+
+Device Lifecycle validates new relationship targets using the Home Assistant 2026.8 single-config-entry Device Registry model. It never attaches its config entry to an external device or changes identifiers, connections, names, Area, config-entry ownership, or device topology.
 
 ## Purchase relationships
 
 An Asset may have no Purchase. A manual or existing eligible Asset can later be assigned to any currently configured Purchase, and the relationship can be cleared without recreating the Asset.
 
 Existing relationships to historical or no-longer-configured Purchases are preserved and displayed safely. Historical Purchases are not offered as targets for new relationships.
+
+## Storage and migration impact
+
+0.5.6 reuses the existing Store 1.2 `ha_device_refs` structure, where each reference contains only `device_id` and `role` (`primary` or `related`). There is no Store migration and no config-entry migration. The integration manifest version is intentionally not bumped until final release preparation.
 
 ## Warranty
 
@@ -152,7 +181,7 @@ Existing Purchase workflows support these warranty modes:
 - 2 years
 - Manual
 
-For 1- and 2-year warranties, the warranty end date is calculated from the Purchase date. Manual mode allows an arbitrary end date. Device Lifecycle 0.5.4 preserves existing warranty projection behavior and does not add a general Asset-level warranty editor.
+For 1- and 2-year warranties, the warranty end date is calculated from the Purchase date. Manual mode allows an arbitrary end date. Device Lifecycle 0.5.6 preserves existing warranty projection behavior and does not add a general Asset-level warranty editor.
 
 ## Runtime tracking
 
@@ -165,9 +194,9 @@ Available tracking methods are:
 
 Runtime setup first selects the target device and tracking method, then a suitable source entity. Power threshold and hysteresis are shown only in power mode. Supported power units such as `W` and `kW` are normalized to watts; energy, current, voltage, and frequency sensors are not valid power sources.
 
-The cumulative **Runtime hours** sensor is localized as **Käyttötunnit** in Finnish. Runtime totals continue to use Home Assistant restore state in 0.5.4 and are restored after restarts. Time while Home Assistant is stopped cannot be observed and is not added.
+The cumulative **Runtime hours** sensor is localized as **Käyttötunnit** in Finnish. Runtime totals continue to use Home Assistant restore state in 0.5.6 and are restored after restarts. Time while Home Assistant is stopped cannot be observed and is not added.
 
-Runtime configuration and accumulated totals are not persisted in Asset Store in 0.5.4.
+Runtime configuration and accumulated totals are not persisted in Asset Store in 0.5.6. Runtime reconciliation and entity setup use the primary relationship only; related devices are never Runtime targets or fallbacks.
 
 ## Upgrade notes
 
@@ -265,14 +294,14 @@ Existing Purchases remain editable, including Purchases with zero Assets. Removi
 
 Removing a Runtime tracking entry removes only that Runtime sensor. Other Purchases, Assets, Runtime configurations, and integrations are left untouched.
 
-Device Lifecycle 0.5.4 does not provide Asset archive/delete, restore, purge, or merge actions.
+Device Lifecycle 0.5.6 does not provide Asset archive/delete, restore, purge, merge, relationship history, automatic discovery, or stale-device rematching actions.
 
 ## Roadmap
 
 - **0.5.4 — Manual Assets & Deployment**
-- **0.5.5 — HA Relationships follow-up / relationship model evolution**, if needed
-- **0.5.6 — Asset Runtime**
-- **0.5.7 — Data Safety**
+- **0.5.5 — Purchase Asset membership follow-up**
+- **0.5.6 — HA Relationships**
+- **Future — Asset Runtime and Data Safety follow-ups**
 - **0.6.x — Maintenance**
 - **0.7.x — Home Assistant Exposure / UI**
 - **0.8.x — Lifecycle & Replacement**

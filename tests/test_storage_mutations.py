@@ -403,7 +403,7 @@ async def test_link_asset_device_changes_only_stored_relationship(
     assert linked["ha_device_refs"] == [
         {"device_id": "existing-ha-device", "role": "primary"}
     ]
-    assert manager.asset_for_device_id("existing-ha-device")["asset_uuid"] == created[
+    assert manager.asset_for_primary_device_id("existing-ha-device")["asset_uuid"] == created[
         "asset_uuid"
     ]
     manager._store.async_save.assert_awaited_once()

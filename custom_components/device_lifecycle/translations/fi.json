@@ -158,6 +158,8 @@
       "asset_deployment_updated": "Laitteen {asset_id} — {asset_name} käyttötila päivitettiin.",
       "asset_ha_relationship_updated": "Laitteen {asset_id} — {asset_name} Home Assistant -laitelinkki päivitettiin.",
       "asset_purchase_updated": "Laitteen {asset_id} — {asset_name} ostos päivitettiin.",
+      "asset_related_device_added": "Laitteeseen {asset_id} — {asset_name} lisättiin liittyvä Home Assistant -laite.",
+      "asset_related_device_removed": "Laitteesta {asset_id} — {asset_name} poistettiin liittyvä Home Assistant -laite.",
       "asset_updated": "Laite {asset_id} — {asset_name} päivitettiin."
     },
     "error": {
@@ -177,6 +179,8 @@
       "no_assets": "Hallittavia laitteita ei vielä ole.",
       "non_physical_device_not_allowed": "Valitse toisen integraation lisäämä fyysinen Home Assistant -laite.",
       "purchase_conflict": "Laite on jo liitetty toiseen ostokseen. Tarkista nykyinen ostos ja yritä uudelleen.",
+      "related_device_is_primary": "Valittu Home Assistant -laite on jo tämän laitteen ensisijainen laite.",
+      "related_device_not_found": "Valittua liittyvää laitelinkkiä ei enää ole. Tarkista nykyiset linkit ja yritä uudelleen.",
       "service_device_not_allowed": "Valittu kohde on Home Assistant -palvelu eikä fyysinen laite."
     },
     "step": {
@@ -237,12 +241,35 @@
         "title": "Muokkaa laitteen tietoja"
       },
       "ha_relationship": {
+        "description": "Laite: {asset}. Ensisijainen laite: {current_primary}. Liittyvät laitteet: {related_devices}. Liittyvät laitteet ovat vain viitteitä eivätkä vaikuta laitteen identiteettiin, tietoihin, ostoksiin, käyttötuntiseurantaan, entiteettien sijoitteluun tai Home Assistant -laitteen omistajuuteen.",
+        "menu_options": {
+          "add_related_device": "Lisää liittyvä laite",
+          "manage_primary_device": "Hallitse ensisijaista laitetta",
+          "remove_related_device": "Poista liittyvä laite"
+        },
+        "title": "Home Assistant -laitelinkit"
+      },
+      "manage_primary_device": {
         "data": {
           "device_id": "Home Assistant -laite",
           "ha_relationship_action": "Toiminto"
         },
-        "description": "Laite: {asset}. Nykyinen linkitetty laite: {current_device}. Home Assistant -laitteen linkittäminen, linkityksen poistaminen tai laitteen vaihtaminen ei muuta elinkaaritunnusta eikä Home Assistant -laitetta.",
-        "title": "Linkitä Home Assistant -laite"
+        "description": "Laite: {asset}. Nykyinen ensisijainen laite: {current_device}. Liittäminen, linkityksen poistaminen, vaihtaminen tai liittyvän laitteen muuttaminen ensisijaiseksi ei muuta elinkaaritunnusta eikä Home Assistant -laitetta.",
+        "title": "Hallitse ensisijaista laitetta"
+      },
+      "add_related_device": {
+        "data": {
+          "device_id": "Home Assistant -laite"
+        },
+        "description": "Laite: {asset}. Ensisijainen laite: {current_primary}. Nykyiset liittyvät laitteet: {related_devices}. Liittyvän viitteen lisääminen ei päivitä laitteen tietoja eikä vaikuta ostoksiin, käyttötuntiseurantaan, entiteettien sijoitteluun, käyttöönottoon tai Home Assistant -laitteeseen.",
+        "title": "Lisää liittyvä laite"
+      },
+      "remove_related_device": {
+        "data": {
+          "device_id": "Liittyvä Home Assistant -laite"
+        },
+        "description": "Laite: {asset}. Ensisijainen laite: {current_primary}. Nykyiset liittyvät laitteet: {related_devices}. Laiterekisteristä puuttuvat laitteet voi valita tästä tallennetun tunnuksen perusteella.",
+        "title": "Poista liittyvä laite"
       },
       "init": {
         "menu_options": {
@@ -264,7 +291,7 @@
           "asset_deployment": "Käyttötila",
           "change_asset_purchase": "Liitä ostokseen",
           "edit_asset_metadata": "Muokkaa tietoja",
-          "ha_relationship": "Home Assistant -laite"
+          "ha_relationship": "Home Assistant -laitelinkit"
         },
         "title": "Hallitse laitetta"
       }

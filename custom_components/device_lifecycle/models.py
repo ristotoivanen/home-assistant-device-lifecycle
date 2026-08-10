@@ -6,13 +6,14 @@ from typing import Literal, TypedDict
 
 
 DeploymentState = Literal["unknown", "not_deployed", "deployed"]
+HADeviceRole = Literal["primary", "related"]
 
 
 class HADeviceReference(TypedDict):
     """Relationship from one Asset to one Home Assistant device."""
 
     device_id: str
-    role: str
+    role: HADeviceRole
 
 
 class WarrantyData(TypedDict):
