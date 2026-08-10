@@ -25,6 +25,7 @@ TRANSLATION_DIRECTORY = (
     / "device_lifecycle"
     / "translations"
 )
+STRINGS_FILE = TRANSLATION_DIRECTORY.parent / "strings.json"
 LANGUAGES = ("en", "fi")
 
 
@@ -130,6 +131,35 @@ def test_options_translation_structures_match_and_are_valid_json() -> None:
     assert _key_shape(english["config_subentries"]["purchase"]) == _key_shape(
         finnish["config_subentries"]["purchase"]
     )
+    assert _key_shape(english["entity"]) == _key_shape(finnish["entity"])
+
+
+def test_strings_source_matches_english_translation() -> None:
+    """The primary strings source preserves the complete English UI surface."""
+    with STRINGS_FILE.open(encoding="utf-8") as strings_file:
+        strings = json.load(strings_file)
+
+    assert strings == _translation("en")
+
+
+def test_0_6_entity_names_and_enum_states_are_translated() -> None:
+    """Both supported languages expose the new translated entity contract."""
+    english = _translation("en")["entity"]["sensor"]
+    finnish = _translation("fi")["entity"]["sensor"]
+
+    assert english["asset_id"]["name"] == "Asset ID"
+    assert finnish["asset_id"]["name"] == "Elinkaaritunnus"
+    assert set(english["deployment"]["state"]) == {
+        "unknown",
+        "not_deployed",
+        "deployed",
+    }
+    assert set(english["relationships"]["state"]) == {
+        "none",
+        "present",
+        "missing",
+    }
+    assert _key_shape(english) == _key_shape(finnish)
 
 
 @pytest.mark.parametrize("language", LANGUAGES)

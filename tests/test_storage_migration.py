@@ -213,8 +213,8 @@ def test_purchase_relationship_rejects_home_assistant_provenance(
         _validate_store_data(asset_store_data)
 
 
-def test_schema_and_config_entry_versions_for_0_5_7() -> None:
-    """0.5.7 isolates canonical Runtime data in Store major version two."""
+def test_schema_and_config_entry_versions_for_0_6_0() -> None:
+    """0.6.0 adds exposure without changing Store or ConfigEntry schemas."""
     assert STORAGE_VERSION == 2
     assert STORAGE_MINOR_VERSION == 1
     assert CONFIG_ENTRY_VERSION == 4

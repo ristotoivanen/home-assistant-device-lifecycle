@@ -13,12 +13,14 @@ from math import isfinite
 from typing import Any
 
 from homeassistant.components.sensor import (
+    SensorDeviceClass,
     SensorEntity,
     SensorExtraStoredData,
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
+    EntityCategory,
     EVENT_HOMEASSISTANT_STOP,
     STATE_ON,
     STATE_UNAVAILABLE,
@@ -33,6 +35,7 @@ from homeassistant.core import (
     State,
     callback,
 )
+from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import restore_state as rs
@@ -48,7 +51,6 @@ from homeassistant.util.unit_conversion import PowerConverter
 from .const import (
     CONF_ASSET_UUID,
     CONF_DEVICE_ID,
-    CONF_DEVICE_IDS,
     CONF_POWER_HYSTERESIS,
     CONF_POWER_THRESHOLD,
     CONF_RUNTIME_DATA_VERSION,
@@ -65,6 +67,12 @@ from .const import (
     WARRANTY_NONE,
     WARRANTY_ONE_YEAR,
     WARRANTY_TWO_YEARS,
+)
+from .exposure import (
+    asset_device_entry,
+    asset_id_unique_id,
+    deployment_unique_id,
+    relationships_unique_id,
 )
 from .migration import lifecycle_unique_id, runtime_unique_id
 from .models import AssetData, PurchaseData
@@ -192,11 +200,26 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Set up lifecycle and runtime sensors from normalized Asset Core data."""
+    """Set up Asset exposure and Runtime from normalized Asset Core data."""
     device_registry = dr.async_get(hass)
     entity_registry = er.async_get(hass)
     manager: AssetStoreManager = entry.runtime_data
     runtime_asset_uuids: set[str] = set()
+
+    assets = sorted(manager.assets(), key=lambda item: item["asset_uuid"])
+    asset_devices: dict[str, dr.DeviceEntry] = {}
+    for asset in assets:
+        device = asset_device_entry(
+            device_registry,
+            config_entry_id=entry.entry_id,
+            asset_uuid=asset["asset_uuid"],
+        )
+        if device is None:
+            raise AssetStoreError(
+                f"Asset Device is missing for {asset['asset_uuid']} after "
+                "exposure registry migration"
+            )
+        asset_devices[asset["asset_uuid"]] = device
 
     valid_subentry_ids = {
         subentry.subentry_id
@@ -218,53 +241,92 @@ async def async_setup_entry(
         ):
             entity_registry.async_remove(registry_entry.entity_id)
 
+    # Lifecycle and the new static exposure entities are parent/Asset-owned.
+    # Purchase subentries must no longer retain any Device Lifecycle entities.
     for subentry in entry.subentries.values():
         if subentry.subentry_type == SUBENTRY_TYPE_PURCHASE:
-            purchase = manager.purchase_for_subentry(subentry.subentry_id)
-            entities: list[DeviceLifecycleSensor] = []
-            expected_unique_ids: set[str] = set()
-
-            if purchase is not None:
-                for device_id_value in subentry.data.get(CONF_DEVICE_IDS, []):
-                    device_id = str(device_id_value)
-                    device_entry = device_registry.async_get(device_id)
-                    asset = manager.asset_for_primary_device_id(device_id)
-                    if device_entry is None or asset is None:
-                        continue
-                    if asset.get("purchase_uuid") != purchase["purchase_uuid"]:
-                        continue
-
-                    unique_id = lifecycle_unique_id(asset["asset_uuid"])
-                    expected_unique_ids.add(unique_id)
-                    entities.append(
-                        DeviceLifecycleSensor(
-                            asset=asset,
-                            purchase=purchase,
-                            device_entry=device_entry,
-                            unique_id=unique_id,
-                            purchase_title=subentry.title,
-                        )
-                    )
-
             _remove_unexpected_subentry_entities(
                 entity_registry=entity_registry,
                 entry=entry,
                 subentry_id=subentry.subentry_id,
-                expected_unique_ids=expected_unique_ids,
+                expected_unique_ids=set(),
             )
 
-            if entities:
-                async_add_entities(
-                    entities,
-                    config_subentry_id=subentry.subentry_id,
-                )
+    parent_entities: list[SensorEntity] = []
+    deployment_entities: list[DeviceDeploymentSensor] = []
+    relationship_entities: list[DeviceRelationshipsSensor] = []
+    for asset in assets:
+        purchase = manager.purchase(asset.get("purchase_uuid"))
+        purchase_title: str | None = None
+        if purchase is not None:
+            purchase_subentry_id = purchase.get("config_subentry_id")
+            purchase_subentry = (
+                entry.subentries.get(purchase_subentry_id)
+                if purchase_subentry_id is not None
+                else None
+            )
+            purchase_title = (
+                purchase_subentry.title
+                if purchase_subentry is not None
+                else str(purchase.get("name") or purchase["purchase_uuid"])
+            )
+        device_entry = asset_devices[asset["asset_uuid"]]
+        deployment = DeviceDeploymentSensor(
+            asset=asset,
+            device_entry=device_entry,
+        )
+        parent_entities.extend(
+            (
+                DeviceLifecycleSensor(
+                    asset=asset,
+                    purchase=purchase,
+                    device_entry=device_entry,
+                    unique_id=lifecycle_unique_id(asset["asset_uuid"]),
+                    purchase_title=purchase_title,
+                ),
+                deployment,
+                DeviceAssetIdSensor(
+                    asset=asset,
+                    device_entry=device_entry,
+                ),
+            )
+        )
+        deployment_entities.append(deployment)
+        relationships = DeviceRelationshipsSensor(
+            asset=asset,
+            device_entry=device_entry,
+            device_registry=device_registry,
+        )
+        parent_entities.append(relationships)
+        relationship_entities.append(relationships)
 
-        elif subentry.subentry_type == SUBENTRY_TYPE_RUNTIME:
+    if parent_entities:
+        async_add_entities(parent_entities)
+
+    if deployment_entities:
+        coordinator = _DeploymentAreaRegistryCoordinator(
+            hass,
+            deployment_entities,
+        )
+        unsubscribe = coordinator.async_start()
+        if hasattr(entry, "async_on_unload"):
+            entry.async_on_unload(unsubscribe)
+
+    if relationship_entities:
+        coordinator = _RelationshipsRegistryCoordinator(
+            hass,
+            relationship_entities,
+        )
+        unsubscribe = coordinator.async_start()
+        if hasattr(entry, "async_on_unload"):
+            entry.async_on_unload(unsubscribe)
+
+    for subentry in entry.subentries.values():
+        if subentry.subentry_type == SUBENTRY_TYPE_RUNTIME:
             device_id = str(subentry.data.get(CONF_DEVICE_ID) or "")
             source_entity_id = str(
                 subentry.data.get(CONF_SOURCE_ENTITY_ID) or ""
             )
-            device_entry = device_registry.async_get(device_id)
 
             asset = manager.asset(str(subentry.data.get(CONF_ASSET_UUID) or ""))
             primary_asset = (
@@ -346,15 +408,12 @@ async def async_setup_entry(
 
                     if canonical_total is not None:
                         initialized_asset = manager.asset(asset_uuid)
-                        if (
-                            device_entry is not None
-                            and initialized_asset is not None
-                        ):
+                        if initialized_asset is not None:
                             runtime_entities.append(
                                 DeviceRuntimeHoursSensor(
                                     data=dict(subentry.data),
                                     asset=initialized_asset,
-                                    device_entry=device_entry,
+                                    device_entry=asset_devices[asset_uuid],
                                     unique_id=unique_id,
                                     manager=manager,
                                 )
@@ -405,10 +464,10 @@ class DeviceLifecycleSensor(SensorEntity):
         self,
         *,
         asset: AssetData,
-        purchase: PurchaseData,
+        purchase: PurchaseData | None,
         device_entry: dr.DeviceEntry,
         unique_id: str,
-        purchase_title: str,
+        purchase_title: str | None,
     ) -> None:
         """Initialize lifecycle sensor."""
         self._asset = asset
@@ -473,8 +532,6 @@ class DeviceLifecycleSensor(SensorEntity):
         attrs: dict[str, Any] = {
             "asset_id": asset["asset_id"],
             "asset_uuid": asset["asset_uuid"],
-            "purchase_uuid": purchase["purchase_uuid"],
-            "ostos": self._purchase_title,
             "takuun_tyyppi": _warranty_type_label(
                 warranty_type,
                 self.hass.config.language,
@@ -488,26 +545,30 @@ class DeviceLifecycleSensor(SensorEntity):
             ),
         }
 
-        purchase_mapping = {
-            "name": "ostoksen_nimi",
-            "purchase_date": "ostopaiva",
-            "seller": "myyja",
-            "total_price": "ostoksen_hinta",
-            "receipt_reference": "kuitti_tilausviite",
-            "receipt_url": "kuitti_url",
-            "notes": "huomautukset",
-        }
-        for key, attr_name in purchase_mapping.items():
-            value = purchase.get(key)  # type: ignore[literal-required]
-            if value in (None, ""):
-                continue
-            if key == "total_price":
-                attrs[attr_name] = float(str(value))
-            else:
-                attrs[attr_name] = value
+        if purchase is not None:
+            attrs["purchase_uuid"] = purchase["purchase_uuid"]
+            if self._purchase_title is not None:
+                attrs["ostos"] = self._purchase_title
+            purchase_mapping = {
+                "name": "ostoksen_nimi",
+                "purchase_date": "ostopaiva",
+                "seller": "myyja",
+                "total_price": "ostoksen_hinta",
+                "receipt_reference": "kuitti_tilausviite",
+                "receipt_url": "kuitti_url",
+                "notes": "huomautukset",
+            }
+            for key, attr_name in purchase_mapping.items():
+                value = purchase.get(key)  # type: ignore[literal-required]
+                if value in (None, ""):
+                    continue
+                if key == "total_price":
+                    attrs[attr_name] = float(str(value))
+                else:
+                    attrs[attr_name] = value
 
-        if purchase.get("total_price") is not None:
-            attrs["valuutta"] = purchase["currency"]
+            if purchase.get("total_price") is not None:
+                attrs["valuutta"] = purchase["currency"]
 
         if asset.get("installed_date"):
             attrs["kayttoonottopaiva"] = asset["installed_date"]
@@ -555,6 +616,268 @@ class DeviceLifecycleSensor(SensorEntity):
                 minute=0,
                 second=5,
             )
+        )
+
+
+def _device_display_name(device: dr.DeviceEntry | None) -> str | None:
+    """Return current read-only Device Registry display metadata."""
+    if device is None:
+        return None
+    value = device.name_by_user or device.name or device.model
+    return str(value) if value not in (None, "") else None
+
+
+class DeviceDeploymentSensor(SensorEntity):
+    """Projection of one Asset's canonical deployment state."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "deployment"
+    _attr_icon = "mdi:map-marker-radius-outline"
+    _attr_should_poll = False
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = ["unknown", "not_deployed", "deployed"]
+
+    def __init__(
+        self,
+        *,
+        asset: AssetData,
+        device_entry: dr.DeviceEntry,
+    ) -> None:
+        """Initialize a Deployment projection."""
+        self._asset = asset
+        self.device_entry = device_entry
+        self._attr_unique_id = deployment_unique_id(asset["asset_uuid"])
+
+    @property
+    def stored_area_id(self) -> str | None:
+        """Return the exact canonical Area Registry reference."""
+        return self._asset.get("ha_area_id")
+
+    @property
+    def native_value(self) -> str:
+        """Return the exact canonical Deployment state."""
+        return self._asset["deployment_state"]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return explicit deployment details without Area synchronization."""
+        area_id = self._asset.get("ha_area_id")
+        area = (
+            ar.async_get(self.hass).async_get_area(area_id)
+            if area_id is not None
+            else None
+        )
+        area_state = (
+            "not_set"
+            if area_id is None
+            else "present"
+            if area is not None
+            else "missing"
+        )
+        return {
+            "installed_date": self._asset.get("installed_date"),
+            "asset_area_id": area_id,
+            "asset_area_name": area.name if area is not None else None,
+            "asset_area_state": area_state,
+        }
+
+
+class _DeploymentAreaRegistryCoordinator:
+    """One Area Registry listener shared by all Deployment entities."""
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entities: list[DeviceDeploymentSensor],
+    ) -> None:
+        """Index Deployment entities by their exact stored Area IDs."""
+        self._hass = hass
+        self._entities_by_area_id: dict[
+            str,
+            list[DeviceDeploymentSensor],
+        ] = {}
+        for entity in entities:
+            if (area_id := entity.stored_area_id) is not None:
+                self._entities_by_area_id.setdefault(area_id, []).append(entity)
+
+    @callback
+    def _async_registry_updated(
+        self,
+        event: Event[ar.EventAreaRegistryUpdatedData],
+    ) -> None:
+        """Refresh only projections storing the exact changed Area ID."""
+        area_id = event.data["area_id"]
+        if area_id is None:
+            return
+        for entity in self._entities_by_area_id.get(area_id, ()):
+            entity.async_write_ha_state()
+
+    @callback
+    def async_start(self) -> Callable[[], None]:
+        """Subscribe once when at least one Asset stores an Area ID."""
+        if not self._entities_by_area_id:
+            return lambda: None
+        return self._hass.bus.async_listen(
+            ar.EVENT_AREA_REGISTRY_UPDATED,
+            self._async_registry_updated,
+        )
+
+
+class DeviceRelationshipsSensor(SensorEntity):
+    """Read-only projection of exact external Device Registry references."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "relationships"
+    _attr_icon = "mdi:devices"
+    _attr_should_poll = False
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = ["none", "present", "missing"]
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = True
+
+    def __init__(
+        self,
+        *,
+        asset: AssetData,
+        device_entry: dr.DeviceEntry,
+        device_registry: dr.DeviceRegistry,
+    ) -> None:
+        """Initialize a Relationships projection."""
+        self._asset = asset
+        self._device_registry = device_registry
+        self.device_entry = device_entry
+        self._attr_unique_id = relationships_unique_id(asset["asset_uuid"])
+        self.referenced_device_ids = frozenset(
+            str(reference["device_id"])
+            for reference in asset.get("ha_device_refs", [])
+        )
+
+    @property
+    def native_value(self) -> str:
+        """Return none, present, or missing from exact registry resolution."""
+        if not self.referenced_device_ids:
+            return "none"
+        if any(
+            self._device_registry.async_get(device_id) is None
+            for device_id in self.referenced_device_ids
+        ):
+            return "missing"
+        return "present"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return deterministic relationship state and derived display names."""
+        primary_id: str | None = None
+        related_ids: list[str] = []
+        for reference in self._asset.get("ha_device_refs", []):
+            device_id = str(reference["device_id"])
+            if reference["role"] == "primary":
+                primary_id = device_id
+            elif reference["role"] == "related":
+                related_ids.append(device_id)
+
+        primary_device = (
+            self._device_registry.async_get(primary_id)
+            if primary_id is not None
+            else None
+        )
+        primary_state = (
+            "not_linked"
+            if primary_id is None
+            else "present"
+            if primary_device is not None
+            else "missing"
+        )
+        related_devices: list[dict[str, str | None]] = []
+        missing_related_count = 0
+        for device_id in related_ids:
+            device = self._device_registry.async_get(device_id)
+            state = "present" if device is not None else "missing"
+            if device is None:
+                missing_related_count += 1
+            related_devices.append(
+                {
+                    "device_id": device_id,
+                    "name": _device_display_name(device),
+                    "state": state,
+                }
+            )
+
+        return {
+            "primary_state": primary_state,
+            "primary_device_id": primary_id,
+            "primary_device_name": _device_display_name(primary_device),
+            "related_devices": related_devices,
+            "related_device_count": len(related_ids),
+            "missing_related_device_count": missing_related_count,
+        }
+
+
+class DeviceAssetIdSensor(SensorEntity):
+    """Diagnostic projection of one permanent human-facing Asset ID."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "asset_id"
+    _attr_icon = "mdi:identifier"
+    _attr_should_poll = False
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = True
+
+    def __init__(
+        self,
+        *,
+        asset: AssetData,
+        device_entry: dr.DeviceEntry,
+    ) -> None:
+        """Initialize an Asset ID projection."""
+        self._asset_id = asset["asset_id"]
+        self.device_entry = device_entry
+        self._attr_unique_id = asset_id_unique_id(asset["asset_uuid"])
+
+    @property
+    def native_value(self) -> str:
+        """Return the permanent DLxxxx identity."""
+        return self._asset_id
+
+
+class _RelationshipsRegistryCoordinator:
+    """One Device Registry listener shared by all relationship entities."""
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entities: list[DeviceRelationshipsSensor],
+    ) -> None:
+        """Index relationship entities by their exact stored device IDs."""
+        self._hass = hass
+        self._entities_by_device_id: dict[
+            str,
+            list[DeviceRelationshipsSensor],
+        ] = {}
+        for entity in entities:
+            for device_id in entity.referenced_device_ids:
+                self._entities_by_device_id.setdefault(device_id, []).append(
+                    entity
+                )
+
+    @callback
+    def _async_registry_updated(
+        self,
+        event: Event[dr.EventDeviceRegistryUpdatedData],
+    ) -> None:
+        """Refresh only projections that store the exact changed registry ID."""
+        for entity in self._entities_by_device_id.get(
+            event.data["device_id"],
+            (),
+        ):
+            entity.async_write_ha_state()
+
+    @callback
+    def async_start(self) -> Callable[[], None]:
+        """Subscribe once to Device Registry changes."""
+        return self._hass.bus.async_listen(
+            dr.EVENT_DEVICE_REGISTRY_UPDATED,
+            self._async_registry_updated,
         )
 
 

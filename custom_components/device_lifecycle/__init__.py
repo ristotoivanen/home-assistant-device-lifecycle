@@ -9,6 +9,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 
 from .const import CONFIG_ENTRY_VERSION
+from .exposure import async_reconcile_exposure_registry
 from .migration import async_migrate_entity_registry
 from .storage import AssetStoreManager
 
@@ -21,11 +22,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     manager = AssetStoreManager(hass)
     await manager.async_setup()
     await manager.async_reconcile_entry(entry)
-    entry.runtime_data = manager
 
     # 0.5.0 changes entity ownership from purchase/device-derived unique IDs to
     # immutable Asset UUIDs while preserving the existing entity_id and history.
     await async_migrate_entity_registry(hass, entry, manager)
+
+    # 0.6.0 then performs a complete read-only exposure preflight before it
+    # creates deterministic Asset Devices or moves any existing entities.
+    await async_reconcile_exposure_registry(hass, entry, manager)
+
+    entry.runtime_data = manager
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
