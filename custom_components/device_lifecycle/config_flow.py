@@ -913,20 +913,24 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         area = ar.async_get(self.hass).async_get_area(area_id)
         if area is None:
             return self._localized_label(
-                f"Unavailable (stored ID: {area_id})",
-                f"Ei saatavilla (tallennettu tunnus: {area_id})",
+                f"Unavailable Home Assistant Area (stored ID: {area_id})",
+                f"Alue ei ole enää käytettävissä (tallennettu tunnus: {area_id})",
             )
         return f"{area.name} ({area.id})"
 
     def _ha_device_label(self, device_id: str | None) -> str:
         """Describe a relationship without guessing a replacement device."""
         if device_id is None:
-            return self._localized_label("No HA device", "Ei HA-laitetta")
+            return self._localized_label(
+                "No linked Home Assistant device",
+                "Ei linkitettyä Home Assistant -laitetta",
+            )
         device = dr.async_get(self.hass).async_get(device_id)
         if device is None:
             return self._localized_label(
-                f"Unavailable (stored ID: {device_id})",
-                f"Ei saatavilla (tallennettu tunnus: {device_id})",
+                f"Unavailable Home Assistant device (stored ID: {device_id})",
+                "Home Assistant -laite ei ole enää käytettävissä "
+                f"(tallennettu tunnus: {device_id})",
             )
         name = (
             getattr(device, "name_by_user", None)
@@ -1483,7 +1487,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 "asset": _asset_label(asset),
                 "current_device": self._ha_device_label(current_device_id),
                 "owner_asset_id": owner_asset_id
-                or self._localized_label("another Asset", "toinen Asset"),
+                or self._localized_label("another Asset", "toinen laite"),
             },
         )
 

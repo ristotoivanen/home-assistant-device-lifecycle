@@ -152,7 +152,9 @@ async def test_ha_relationship_action_is_visible_and_uses_device_selector(
     assert form["type"] is FlowResultType.FORM
     assert form["step_id"] == "ha_relationship"
     assert isinstance(_schema_validator(form, CONF_DEVICE_ID), selector.DeviceSelector)
-    assert form["description_placeholders"]["current_device"] == "No HA device"
+    assert form["description_placeholders"]["current_device"] == (
+        "No linked Home Assistant device"
+    )
 
 
 async def test_manual_asset_links_without_identity_or_registry_mutation(

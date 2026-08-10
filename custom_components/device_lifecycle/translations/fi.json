@@ -16,9 +16,9 @@
       "step": {
         "user": {
           "title": "Lisää ostos",
-          "description": "Valitse kaikki samaan ostokseen kuuluvat fyysiset laitteet ja syötä yhteiset tiedot vain kerran. Device Lifecycle luo jokaiselle fyysiselle laitteelle pysyvän elinkaaritunnisteen.",
+          "description": "Tallenna ostos, vaikka laitteita ei olisi vielä saapunut tai lisätty Home Assistantiin. Voit valita Home Assistant -laitteet nyt tai liittää laitteita ostokseen myöhemmin.",
           "data": {
-            "device_ids": "Ostokseen kuuluvat laitteet",
+            "device_ids": "Home Assistant -laitteet (valinnainen)",
             "purchase_name": "Ostoksen nimi",
             "purchase_date": "Ostopäivä",
             "installed_date": "Käyttöönottopäivä",
@@ -31,20 +31,20 @@
             "notes": "Huomautukset"
           },
           "data_description": {
-            "device_ids": "Valitse yksi tai useampi fyysinen Home Assistant -laite. Sama laite voi kuulua vain yhteen aktiiviseen ostokseen. Suodatus on tarkoituksella konservatiivinen: epäselvät laitteet jätetään näkyviin.",
+            "device_ids": "Jätä tyhjäksi, jos haluat tallentaa ostoksen ennen laitteiden lisäämistä. Valittu fyysinen Home Assistant -laite voi kuulua vain yhteen aktiiviseen ostokseen.",
             "purchase_name": "Esimerkiksi Hue-aloituspakkaus 8/2026.",
             "warranty_type": "1 v ja 2 v lasketaan automaattisesti ostopäivästä. Valitse Manuaalinen vain, jos haluat antaa muun päättymispäivän.",
             "warranty_until": "Käytetään vain, kun Takuu = Manuaalinen. Muissa vaihtoehdoissa integraatio laskee päivämäärän automaattisesti.",
             "purchase_price": "Koko ostoksen hinta, ei yhden laitteen kappalehinta. Ostoksen yhteyteen tallennetaan Home Assistantissa määritetty valuutta.",
             "receipt_url": "Valinnainen URL kuittiin, laskuun tai muuhun ostodokumenttiin.",
-            "installed_date": "Jätä tyhjäksi, niin uuden ostoksen käyttöönottopäiväksi tallennetaan ostopäivä. Päivän voi muuttaa myöhemmin."
+            "installed_date": "Valituille laitteille ostopäivä tallennetaan aluksi käyttöönottopäiväksi, jos jätät kentän tyhjäksi. Päivän voi muuttaa tai poistaa myöhemmin."
           }
         },
         "reconfigure": {
           "title": "Muokkaa ostosta",
-          "description": "Muokkaa ostoksen tietoja tai siihen kuuluvia laitteita. Laitteen poistaminen ostoksesta poistaa sen tämän ostoksen Elinkaari-entiteetin, mutta pysyvä elinkaaritunniste säilyy.",
+          "description": "Muokkaa ostoksen tietoja tai sen Home Assistant -laitteita. Ostos säilyy ilman laitteitakin. Laitteen poistaminen poistaa tämän ostoksen Elinkaari-entiteetin, mutta laite ja sen elinkaaritunnus säilyvät.",
           "data": {
-            "device_ids": "Ostokseen kuuluvat laitteet",
+            "device_ids": "Home Assistant -laitteet (valinnainen)",
             "purchase_name": "Ostoksen nimi",
             "purchase_date": "Ostopäivä",
             "installed_date": "Käyttöönottopäivä",
@@ -57,7 +57,7 @@
             "notes": "Huomautukset"
           },
           "data_description": {
-            "device_ids": "Voit lisätä tai poistaa tähän ostokseen kuuluvia fyysisiä laitteita. Selvästi järjestelmä- ja ohjelmistolaitteita suodatetaan pois, mutta epäselvät jätetään näkyviin.",
+            "device_ids": "Lisää tai poista fyysisiä Home Assistant -laitteita tai jätä valinta tyhjäksi. Selvät järjestelmä- ja ohjelmistolaitteet suodatetaan pois.",
             "warranty_type": "1 v ja 2 v lasketaan automaattisesti ostopäivästä. Manuaalinen käyttää alla olevaa päivämäärää.",
             "warranty_until": "Käytetään vain, kun Takuu = Manuaalinen.",
             "purchase_price": "Koko ostoksen hinta, ei yhden laitteen kappalehinta. Ostos säilyttää luotaessa tallennetun valuutan.",
@@ -67,7 +67,7 @@
         }
       },
       "error": {
-        "no_devices": "Valitse vähintään yksi laite.",
+        "no_devices": "Valitse kelvolliset Home Assistant -laitteet tai jätä laitevalinta tyhjäksi.",
         "device_missing": "Yhtä valituista laitteista ei enää löydy Home Assistantista.",
         "already_tracked": "Yksi tai useampi valituista laitteista kuuluu jo toiseen elinkaariseurannan ostokseen.",
         "purchase_date_required_for_warranty": "1 tai 2 vuoden takuu tarvitsee ostopäivän, jotta päättymispäivä voidaan laskea.",
@@ -93,7 +93,7 @@
             "runtime_mode": "Seurantatapa"
           },
           "data_description": {
-            "device_id": "Käyttötunnit-sensori liitetään tähän fyysiseen Home Assistant -laitteeseen ja sen pysyvään elinkaaritunnisteeseen. Service-tyyppisiä HA-palvelulaitteita ei hyväksytä.",
+            "device_id": "Käyttötunnit-sensori liitetään tähän fyysiseen Home Assistant -laitteeseen ja sen pysyvään elinkaaritunnukseen. Service-tyyppisiä HA-palvelulaitteita ei hyväksytä.",
             "runtime_mode": "Valitse tunnistetaanko käynti entiteetin päällä-tilasta vai mitatusta tehosta."
           }
         },
@@ -154,49 +154,49 @@
   },
   "options": {
     "create_entry": {
-      "asset_created": "Asset {asset_id} — {asset_name} luotiin.",
-      "asset_deployment_updated": "Assetin {asset_id} — {asset_name} käyttöönotto päivitettiin.",
-      "asset_ha_relationship_updated": "Assetin {asset_id} — {asset_name} Home Assistant -suhde päivitettiin.",
-      "asset_purchase_updated": "Assetin {asset_id} — {asset_name} ostossuhde päivitettiin.",
-      "asset_updated": "Asset {asset_id} — {asset_name} päivitettiin."
+      "asset_created": "Laite {asset_id} — {asset_name} luotiin.",
+      "asset_deployment_updated": "Laitteen {asset_id} — {asset_name} käyttötila päivitettiin.",
+      "asset_ha_relationship_updated": "Laitteen {asset_id} — {asset_name} Home Assistant -laitelinkki päivitettiin.",
+      "asset_purchase_updated": "Laitteen {asset_id} — {asset_name} ostos päivitettiin.",
+      "asset_updated": "Laite {asset_id} — {asset_name} päivitettiin."
     },
     "error": {
-      "asset_missing": "Valittua Assetia ei enää ole.",
-      "asset_store_error": "Asset Store hylkäsi muutoksen tai sitä ei voitu tallentaa. Korvaavaa Assetia ei luotu.",
-      "device_already_linked": "Valittu laite on jo Assetin {owner_asset_id} ensisijainen suhde.",
-      "device_lifecycle_device_not_allowed": "Device Lifecyclen omistamaa laitetta ei voi liittää ulkoiseksi suhteeksi.",
+      "asset_missing": "Valittua laitetta ei enää ole.",
+      "asset_store_error": "Muutosta ei voitu tallentaa. Mitään ei muutettu.",
+      "device_already_linked": "Valittu Home Assistant -laite on jo linkitetty laitteeseen {owner_asset_id}.",
+      "device_lifecycle_device_not_allowed": "Valittua laitetta ei voi linkittää ulkoiseksi Home Assistant -laitteeksi.",
       "device_missing": "Valittu Home Assistant -laite puuttuu tai ei ole saatavilla.",
-      "ha_device_purchase_dependency": "Nykyistä laitetta käyttää aktiivinen ostos. Poista riippuvuus ennen suhteen irrottamista tai korvaamista.",
-      "ha_device_runtime_dependency": "Nykyistä laitetta käyttää aktiivinen käyttötuntiseuranta. Poista riippuvuus ennen suhteen irrottamista tai korvaamista.",
-      "ha_relationship_changed": "Ensisijainen Home Assistant -suhde muuttui lomakkeen ollessa auki. Tarkista nykyinen suhde ja yritä uudelleen.",
-      "invalid_area": "Valitse olemassa oleva Home Assistant -alue tai tyhjennä nykyinen alue erikseen.",
-      "invalid_deployment_state": "Valittu käyttöönottotila ei ole kelvollinen.",
-      "invalid_ha_relationship_action": "Valitse kelvollinen Home Assistant -suhteen toiminto.",
-      "invalid_installed_date": "Anna kelvollinen asennuspäivä.",
-      "invalid_purchase": "Valittua ostosta ei voi käyttää uuteen suhteeseen.",
-      "no_assets": "Hallittavia Asseteja ei vielä ole.",
-      "non_physical_device_not_allowed": "Valittu Home Assistant -laite kuuluu poissuljettuun ei-fyysiseen integraatioon.",
-      "purchase_conflict": "Ostossuhde on ristiriidassa Asset Storen nykyisen omistajuuden kanssa.",
+      "ha_device_purchase_dependency": "Aktiivinen ostos käyttää linkitettyä laitetta. Poista laite ostoksesta ennen linkityksen poistamista tai laitteen vaihtamista.",
+      "ha_device_runtime_dependency": "Aktiivinen käyttötuntiseuranta käyttää linkitettyä laitetta. Poista seuranta ennen linkityksen poistamista tai laitteen vaihtamista.",
+      "ha_relationship_changed": "Linkitetty Home Assistant -laite muuttui lomakkeen ollessa auki. Tarkista nykyinen laite ja yritä uudelleen.",
+      "invalid_area": "Valitse käytettävissä oleva alue tai poista nykyinen alue.",
+      "invalid_deployment_state": "Valitse kelvollinen käyttötila.",
+      "invalid_ha_relationship_action": "Valitse Linkitä laite, Poista linkitys tai Vaihda linkitetty laite tilanteen mukaan.",
+      "invalid_installed_date": "Anna kelvollinen käyttöönottopäivä.",
+      "invalid_purchase": "Valittua ostosta ei voi liittää tähän laitteeseen.",
+      "no_assets": "Hallittavia laitteita ei vielä ole.",
+      "non_physical_device_not_allowed": "Valitse toisen integraation lisäämä fyysinen Home Assistant -laite.",
+      "purchase_conflict": "Laite on jo liitetty toiseen ostokseen. Tarkista nykyinen ostos ja yritä uudelleen.",
       "service_device_not_allowed": "Valittu kohde on Home Assistant -palvelu eikä fyysinen laite."
     },
     "step": {
       "asset_deployment": {
         "data": {
-          "clear_ha_area": "Tyhjennä nykyinen alue",
-          "clear_installed_date": "Tyhjennä asennuspäivä",
-          "deployment_state": "Käyttöönottotila",
-          "ha_area_id": "Nykyinen käyttöönottoalue",
-          "installed_date": "Asennuspäivä"
+          "clear_ha_area": "Poista nykyinen alue",
+          "clear_installed_date": "Poista käyttöönottopäivä",
+          "deployment_state": "Käyttötila",
+          "ha_area_id": "Alue",
+          "installed_date": "Käyttöönottopäivä"
         },
-        "description": "Asset: {asset}. Nykyinen alue: {current_area}. Arvo muuttuu vain, kun se valitaan erikseen. Poista päivämäärä tai alue tyhjennysvalinnalla. Vanhentunut aluetunnus säilyy, kunnes korjaat sen.",
-        "title": "Käyttöönotto"
+        "description": "Laite: {asset}. Nykyinen alue: {current_area}. Käyttötila ei riipu linkitetystä Home Assistant -laitteesta. Poista käyttöönottopäivä tai alue erillisellä poistovalinnalla. Alue, joka ei ole enää käytettävissä, säilyy kunnes poistat tai vaihdat sen.",
+        "title": "Käyttötila"
       },
       "change_asset_purchase": {
         "data": {
           "purchase_uuid": "Ostos"
         },
-        "description": "Asset: {asset}. Nykyinen suhde: {current_purchase}. Historiallinen ostos näytetään vain, jos se liittyy jo tähän Assetiin. Korvaa se valitsemalla jokin nykyinen ostos tai Ei ostosta.",
-        "title": "Vaihda ostossuhde"
+        "description": "Laite: {asset}. Nykyinen ostos: {current_purchase}. Aiempi ostos, joka ei ole enää käytettävissä, näytetään vain silloin, kun laite on jo liitetty siihen. Valitse käytettävissä oleva ostos tai Ei ostosta.",
+        "title": "Liitä ostokseen"
       },
       "create_manual_asset": {
         "data": {
@@ -211,15 +211,15 @@
           "serial_number": "Sarjanumero",
           "sw_version": "Ohjelmistoversio"
         },
-        "description": "Luo fyysinen Asset ilman Home Assistant -laitetta. UUID ja DL-tunnus luodaan automaattisesti, eikä niitä voi muokata.",
-        "title": "Luo manuaalinen Asset"
+        "description": "Luo fyysinen laite ilman Home Assistant -laitetta tai ostosta. Laite saa automaattisesti pysyvän elinkaaritunnuksen, joka ei muutu, vaikka linkittäisit Home Assistant -laitteen myöhemmin.",
+        "title": "Luo laite"
       },
       "confirm_not_deployed": {
         "data": {
-          "confirm_area_clear": "Vahvista alueen tyhjennys"
+          "confirm_area_clear": "Vahvista alueen poistaminen"
         },
-        "description": "Kun Asset {asset} merkitään tilaan Ei käytössä, sen nykyinen käyttöönottoalue tyhjennetään: {current_area}. Asennuspäivä säilyy, ellet muuttanut tai tyhjentänyt sitä edellisellä lomakkeella.",
-        "title": "Tyhjennetäänkö käyttöönottoalue?"
+        "description": "Kun laite {asset} merkitään tilaan Ei käytössä, sen nykyinen alue poistetaan: {current_area}. Käyttöönottopäivä säilyy, ellet muuttanut tai poistanut sitä edellisellä lomakkeella.",
+        "title": "Poistetaanko alue?"
       },
       "edit_asset_metadata": {
         "data": {
@@ -233,40 +233,40 @@
           "serial_number": "Sarjanumero",
           "sw_version": "Ohjelmistoversio"
         },
-        "description": "Muokkaa Assetin {asset} fyysisiä metatietoja. UUID, DL-tunnus, käyttöönotto, takuu ja Home Assistant -suhteet eivät ole muokattavissa tässä.",
-        "title": "Muokkaa Assetin metatietoja"
+        "description": "Muokkaa laitteen {asset} tietoja. Elinkaaritunnusta, käyttötilaa, takuuta, ostosta ja Home Assistant -laitelinkkiä hallitaan erikseen.",
+        "title": "Muokkaa laitteen tietoja"
       },
       "ha_relationship": {
         "data": {
           "device_id": "Home Assistant -laite",
           "ha_relationship_action": "Toiminto"
         },
-        "description": "Asset: {asset}. Nykyinen ensisijainen suhde: {current_device}. Linkitys muuttaa vain Asset Storen viitteitä; ulkoista laitetta ei oteta omistukseen, nimetä, siirretä tai muuteta.",
-        "title": "Home Assistant -suhde"
+        "description": "Laite: {asset}. Nykyinen linkitetty laite: {current_device}. Home Assistant -laitteen linkittäminen, linkityksen poistaminen tai laitteen vaihtaminen ei muuta elinkaaritunnusta eikä Home Assistant -laitetta.",
+        "title": "Linkitä Home Assistant -laite"
       },
       "init": {
         "menu_options": {
-          "create_manual_asset": "Luo manuaalinen Asset",
-          "manage_asset": "Hallitse Assetia"
+          "create_manual_asset": "Luo laite",
+          "manage_asset": "Hallitse laitetta"
         },
-        "title": "Assetien hallinta"
+        "title": "Laitteiden hallinta"
       },
       "manage_asset": {
         "data": {
-          "asset_uuid": "Asset"
+          "asset_uuid": "Laite"
         },
-        "description": "Valitse Asset pysyvän DL-tunnuksen ja näyttönimen perusteella.",
-        "title": "Hallitse Assetia"
+        "description": "Valitse laite pysyvän elinkaaritunnuksen ja näyttönimen perusteella.",
+        "title": "Hallitse laitetta"
       },
       "manage_asset_menu": {
-        "description": "Valittu Asset: {asset}",
+        "description": "Valittu laite: {asset}",
         "menu_options": {
-          "asset_deployment": "Käyttöönotto",
-          "change_asset_purchase": "Vaihda ostossuhde",
-          "edit_asset_metadata": "Muokkaa metatietoja",
-          "ha_relationship": "HA-suhde"
+          "asset_deployment": "Käyttötila",
+          "change_asset_purchase": "Liitä ostokseen",
+          "edit_asset_metadata": "Muokkaa tietoja",
+          "ha_relationship": "Home Assistant -laite"
         },
-        "title": "Hallitse Assetia"
+        "title": "Hallitse laitetta"
       }
     }
   },
@@ -280,8 +280,8 @@
     },
     "ha_relationship_action": {
       "options": {
-        "replace": "Korvaa ensisijainen laite",
-        "unlink": "Irrota ensisijainen laite"
+        "replace": "Vaihda linkitetty laite",
+        "unlink": "Poista linkitys"
       }
     },
     "runtime_mode": {
