@@ -1,0 +1,25 @@
+{
+  "entity": {
+    "sensor": {
+      "lifecycle_status": {
+        "default": "mdi:help-circle-outline",
+        "state": {
+          "active": "mdi:check-circle-outline",
+          "disposed": "mdi:delete-forever",
+          "lost": "mdi:map-marker-question",
+          "retired": "mdi:archive",
+          "unknown": "mdi:help-circle-outline"
+        }
+      },
+      "replacement": {
+        "default": "mdi:swap-horizontal",
+        "state": {
+          "chain_member": "mdi:link-variant",
+          "none": "mdi:link-variant-off",
+          "replaced_by": "mdi:arrow-right-bold",
+          "replaces": "mdi:arrow-left-bold"
+        }
+      }
+    }
+  }
+}

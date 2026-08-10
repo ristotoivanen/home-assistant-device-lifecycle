@@ -58,6 +58,7 @@ from .const import (
     CONF_SOURCE_ENTITY_ID,
     DEFAULT_POWER_HYSTERESIS,
     DOMAIN,
+    LIFECYCLE_STATUSES,
     RUNTIME_DATA_VERSION,
     RUNTIME_MODE_ON,
     RUNTIME_MODE_POWER,
@@ -73,10 +74,12 @@ from .exposure import (
     asset_id_unique_id,
     deployment_unique_id,
     installed_date_unique_id,
+    lifecycle_status_unique_id,
     relationships_unique_id,
+    replacement_unique_id,
 )
 from .migration import lifecycle_unique_id, runtime_unique_id
-from .models import AssetData, PurchaseData
+from .models import AssetData, LifecycleEventData, PurchaseData
 from .storage import AssetStoreError, AssetStoreManager
 
 RUNTIME_REFRESH_INTERVAL = timedelta(minutes=5)
@@ -291,6 +294,23 @@ async def async_setup_entry(
                 ),
                 DeviceAssetIdSensor(
                     asset=asset,
+                    device_entry=device_entry,
+                ),
+                DeviceLifecycleStatusSensor(
+                    asset=asset,
+                    current_event=manager.lifecycle_event(
+                        asset["lifecycle"]["current_event_uuid"]
+                    ),
+                    device_entry=device_entry,
+                ),
+                DeviceReplacementSensor(
+                    asset=asset,
+                    predecessor=manager.active_replacement_predecessor(
+                        asset["asset_uuid"]
+                    ),
+                    successor=manager.active_replacement_successor(
+                        asset["asset_uuid"]
+                    ),
                     device_entry=device_entry,
                 ),
             )
@@ -860,6 +880,91 @@ class DeviceAssetIdSensor(SensorEntity):
     def native_value(self) -> str:
         """Return the permanent DLxxxx identity."""
         return self._asset_id
+
+
+class DeviceLifecycleStatusSensor(SensorEntity):
+    """Projection of one Asset's canonical current lifecycle status."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "lifecycle_status"
+    _attr_should_poll = False
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = list(LIFECYCLE_STATUSES)
+    _attr_entity_registry_enabled_default = True
+
+    def __init__(
+        self,
+        *,
+        asset: AssetData,
+        current_event: LifecycleEventData | None,
+        device_entry: dr.DeviceEntry,
+    ) -> None:
+        """Initialize a Lifecycle Status projection."""
+        self._status = asset["lifecycle"]["status"]
+        self._effective_date = (
+            current_event["effective_date"] if current_event is not None else None
+        )
+        self.device_entry = device_entry
+        self._attr_unique_id = lifecycle_status_unique_id(asset["asset_uuid"])
+
+    @property
+    def native_value(self) -> str:
+        """Return the exact English canonical machine enum."""
+        return self._status
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Expose only the current transition's optional effective date."""
+        return {"effective_date": self._effective_date}
+
+
+class DeviceReplacementSensor(SensorEntity):
+    """Projection of one Asset's current active replacement graph context."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "replacement"
+    _attr_should_poll = False
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = ["none", "replaces", "replaced_by", "chain_member"]
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
+
+    def __init__(
+        self,
+        *,
+        asset: AssetData,
+        predecessor: AssetData | None,
+        successor: AssetData | None,
+        device_entry: dr.DeviceEntry,
+    ) -> None:
+        """Initialize a Replacement projection."""
+        self._predecessor_asset_ids = (
+            [predecessor["asset_id"]] if predecessor is not None else []
+        )
+        self._successor_asset_ids = (
+            [successor["asset_id"]] if successor is not None else []
+        )
+        self.device_entry = device_entry
+        self._attr_unique_id = replacement_unique_id(asset["asset_uuid"])
+
+    @property
+    def native_value(self) -> str:
+        """Describe whether this Asset has an active predecessor or successor."""
+        if self._predecessor_asset_ids and self._successor_asset_ids:
+            return "chain_member"
+        if self._predecessor_asset_ids:
+            return "replaces"
+        if self._successor_asset_ids:
+            return "replaced_by"
+        return "none"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Expose future-compatible lists of current active Asset IDs."""
+        return {
+            "predecessor_asset_ids": list(self._predecessor_asset_ids),
+            "successor_asset_ids": list(self._successor_asset_ids),
+        }
 
 
 class _RelationshipsRegistryCoordinator:

@@ -31,6 +31,8 @@ from custom_components.device_lifecycle.exposure import (
     build_exposure_migration_plan,
     deployment_unique_id,
     installed_date_unique_id,
+    lifecycle_status_unique_id,
+    replacement_unique_id,
 )
 from custom_components.device_lifecycle.migration import (
     async_migrate_entity_registry,
@@ -887,11 +889,43 @@ async def test_partial_migration_after_rollback_failure_recovers_on_reload(
     )
 
 
-def test_0_6_1_has_no_store_or_config_entry_schema_change() -> None:
-    """Asset exposure adds no canonical persistence or config migration flags."""
-    assert STORAGE_VERSION == 2
+def test_0_7_0_changes_only_the_store_schema() -> None:
+    """Lifecycle/replacement use Store 3.1 without a ConfigEntry migration."""
+    assert STORAGE_VERSION == 3
     assert STORAGE_MINOR_VERSION == 1
     assert CONFIG_ENTRY_VERSION == 4
+
+
+@pytest.mark.parametrize(
+    "unique_id_factory",
+    [lifecycle_status_unique_id, replacement_unique_id],
+)
+def test_new_entity_foreign_collision_fails_exposure_preflight(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+    entity_registry: er.EntityRegistry,
+    asset_store_data: AssetStoreData,
+    unique_id_factory,
+) -> None:
+    """New deterministic identities are preflighted before registry mutation."""
+    entry = _entry(hass)
+    foreign = MockConfigEntry(domain="test", title="Foreign", data={})
+    foreign.add_to_hass(hass)
+    entity_registry.async_get_or_create(
+        Platform.SENSOR,
+        DOMAIN,
+        unique_id_factory(ASSET_UUID),
+        config_entry=foreign,
+        suggested_object_id="foreign_collision",
+    )
+
+    with pytest.raises(AssetStoreError, match="not unambiguously owned"):
+        build_exposure_migration_plan(
+            entry=entry,
+            assets=list(asset_store_data["assets"].values()),
+            device_registry=device_registry,
+            entity_registry=entity_registry,
+        )
 
 
 async def test_full_setup_creates_parent_owned_entities_after_registry_gate(

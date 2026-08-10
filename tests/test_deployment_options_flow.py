@@ -87,6 +87,8 @@ async def test_deployment_action_and_migrated_unknown_are_visible(
         "edit_asset_metadata",
         "change_asset_purchase",
         "asset_deployment",
+        "asset_lifecycle",
+        "asset_replacement",
         "ha_relationship",
     ]
     assert form["type"] is FlowResultType.FORM

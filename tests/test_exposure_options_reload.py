@@ -44,7 +44,9 @@ from custom_components.device_lifecycle.exposure import (
     asset_id_unique_id,
     deployment_unique_id,
     installed_date_unique_id,
+    lifecycle_status_unique_id,
     relationships_unique_id,
+    replacement_unique_id,
 )
 from custom_components.device_lifecycle.migration import lifecycle_unique_id
 from custom_components.device_lifecycle.models import AssetStoreData
@@ -185,7 +187,13 @@ async def test_create_asset_flow_reload_exposes_device_and_five_entities(
     entry = await _setup_loaded_entry(
         hass,
         hass_storage,
-        {"next_asset_number": 1, "purchases": {}, "assets": {}},
+        {
+            "next_asset_number": 1,
+            "purchases": {},
+            "assets": {},
+            "lifecycle_events": {},
+            "replacement_records": {},
+        },
     )
     initial = await hass.config_entries.options.async_init(entry.entry_id)
     flow_id = initial["flow_id"]
@@ -229,6 +237,8 @@ async def test_create_asset_flow_reload_exposes_device_and_five_entities(
         installed_date_unique_id(asset_uuid),
         relationships_unique_id(asset_uuid),
         asset_id_unique_id(asset_uuid),
+        lifecycle_status_unique_id(asset_uuid),
+        replacement_unique_id(asset_uuid),
     }
     assert {
         item.unique_id
@@ -245,6 +255,21 @@ async def test_create_asset_flow_reload_exposes_device_and_five_entities(
     assert installed_date_entry.config_entry_id == entry.entry_id
     assert installed_date_entry.config_subentry_id is None
     assert installed_date_entry.device_id == device.id
+    for unique_id in (
+        lifecycle_status_unique_id(asset_uuid),
+        replacement_unique_id(asset_uuid),
+    ):
+        registry_entry = entity_registry.async_get(
+            _entity_id(entity_registry, unique_id)
+        )
+        assert registry_entry is not None
+        assert registry_entry.config_entry_id == entry.entry_id
+        assert registry_entry.config_subentry_id is None
+        assert registry_entry.device_id == device.id
+    replacement_entry = entity_registry.async_get(
+        _entity_id(entity_registry, replacement_unique_id(asset_uuid))
+    )
+    assert replacement_entry.disabled_by is er.RegistryEntryDisabler.INTEGRATION
     assert entry.options == {}
 
 

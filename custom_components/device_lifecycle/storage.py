@@ -5,9 +5,10 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import uuid
 from collections.abc import Callable
 from copy import deepcopy
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, TypeVar, cast
 from uuid import UUID, uuid4
@@ -18,6 +19,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.storage import Store
 from homeassistant.util import json as json_util
+from homeassistant.util import dt as dt_util
 
 from .const import (
     CONF_ASSET_UUID,
@@ -41,15 +43,28 @@ from .const import (
     DEPLOYMENT_STATE_UNKNOWN,
     DEPLOYMENT_STATES,
     DOMAIN,
+    LIFECYCLE_STATUSES,
+    LIFECYCLE_STATUS_ACTIVE,
+    LIFECYCLE_STATUS_UNKNOWN,
+    REPLACEMENT_REASONS,
     SUBENTRY_TYPE_PURCHASE,
     SUBENTRY_TYPE_RUNTIME,
     WARRANTY_MANUAL,
     WARRANTY_NONE,
     WARRANTY_TYPES,
 )
-from .models import AssetData, AssetStoreData, HADeviceReference, PurchaseData
+from .models import (
+    AssetData,
+    AssetStoreData,
+    HADeviceReference,
+    LifecycleEventData,
+    LifecycleStatus,
+    PurchaseData,
+    ReplacementReason,
+    ReplacementRecordData,
+)
 
-STORAGE_VERSION = 2
+STORAGE_VERSION = 3
 STORAGE_MINOR_VERSION = 1
 STORAGE_KEY = f"{DOMAIN}.assets"
 
@@ -85,13 +100,18 @@ _USER_EDITABLE_ASSET_FIELDS = (
 class AssetStoreError(HomeAssistantError):
     """Raised when Asset Core storage cannot be safely reconciled."""
 
+    def __init__(self, message: str, *, code: str = "asset_store_error") -> None:
+        """Initialize an error with a stable machine-readable code."""
+        super().__init__(message)
+        self.code = code
+
 
 class AssetStorePersistenceError(AssetStoreError):
     """Raised when Store persistence cannot be verified."""
 
     def __init__(self, message: str, *, ambiguous: bool = False) -> None:
         """Initialize a persistence error with acknowledgement certainty."""
-        super().__init__(message)
+        super().__init__(message, code="persistence_error")
         self.ambiguous = ambiguous
 
 
@@ -107,6 +127,7 @@ class DeviceLifecycleStore(Store[AssetStoreData]):
             private=True,
             atomic_writes=True,
             minor_version=STORAGE_MINOR_VERSION,
+            serialize_in_event_loop=False,
         )
 
     async def _async_migrate_func(
@@ -129,36 +150,19 @@ class DeviceLifecycleStore(Store[AssetStoreData]):
             return data
 
         if old_major_version == 1 and old_minor_version in (1, 2):
-            assets = data.get("assets")
-            if not isinstance(assets, dict):
-                _validate_store_data(data)
-                return data
+            data = _migrate_v1_to_v2_1(data, old_minor_version)
+        elif old_major_version == 2 and old_minor_version == 1:
+            pass
+        else:
+            raise AssetStoreError(
+                "Unsupported Asset Core Store version "
+                f"{old_major_version}.{old_minor_version}; expected one of "
+                "1.1, 1.2, 2.1, or 3.1"
+            )
 
-            for asset in assets.values():
-                if not isinstance(asset, dict):
-                    continue
-
-                if old_minor_version == 1:
-                    asset.setdefault(
-                        CONF_DEPLOYMENT_STATE,
-                        DEPLOYMENT_STATE_UNKNOWN,
-                    )
-                    asset.setdefault(CONF_HA_AREA_ID, None)
-
-                    if asset.get("purchase_uuid") is not None:
-                        sources = asset.get("field_sources")
-                        if isinstance(sources, dict):
-                            sources.setdefault(
-                                "purchase_uuid",
-                                FIELD_SOURCE_PURCHASE,
-                            )
-
-                asset["runtime"] = {"total_seconds": None}
-
-            _validate_store_data(data)
-            return data
-
-        raise NotImplementedError
+        data = _migrate_v2_1_to_v3_1(data)
+        _validate_store_data(data)
+        return data
 
     async def async_save(self, data: AssetStoreData) -> None:
         """Save and verify the exact Store envelope from the persisted file."""
@@ -195,7 +199,7 @@ class DeviceLifecycleStore(Store[AssetStoreData]):
             )
 
     async def async_load_persisted_snapshot(self) -> AssetStoreData | None:
-        """Read the current v2.1 payload directly, bypassing Store caches."""
+        """Read the current v3.1 payload directly, bypassing Store caches."""
         try:
             persisted = await self.hass.async_add_executor_job(
                 json_util.load_json,
@@ -228,12 +232,54 @@ class DeviceLifecycleStore(Store[AssetStoreData]):
 
 
 def _empty_store_data() -> AssetStoreData:
-    """Return an empty version-two Asset Core payload."""
+    """Return an empty Store 3.1 Asset Core payload."""
     return {
         "next_asset_number": 1,
         "purchases": {},
         "assets": {},
+        "lifecycle_events": {},
+        "replacement_records": {},
     }
+
+
+def _migrate_v1_to_v2_1(
+    old_data: AssetStoreData,
+    old_minor_version: int,
+) -> AssetStoreData:
+    """Normalize supported Store 1.x data into the existing 2.1 model."""
+    data = deepcopy(old_data)
+    assets = data.get("assets")
+    if not isinstance(assets, dict):
+        return data
+
+    for asset in assets.values():
+        if not isinstance(asset, dict):
+            continue
+        if old_minor_version == 1:
+            asset.setdefault(CONF_DEPLOYMENT_STATE, DEPLOYMENT_STATE_UNKNOWN)
+            asset.setdefault(CONF_HA_AREA_ID, None)
+            if asset.get("purchase_uuid") is not None:
+                sources = asset.get("field_sources")
+                if isinstance(sources, dict):
+                    sources.setdefault("purchase_uuid", FIELD_SOURCE_PURCHASE)
+        asset["runtime"] = {"total_seconds": None}
+    return data
+
+
+def _migrate_v2_1_to_v3_1(old_data: AssetStoreData) -> AssetStoreData:
+    """Add lifecycle and replacement structures without inventing history."""
+    data = deepcopy(old_data)
+    assets = data.get("assets")
+    if isinstance(assets, dict):
+        for asset in assets.values():
+            if isinstance(asset, dict):
+                asset["lifecycle"] = {
+                    "status": LIFECYCLE_STATUS_UNKNOWN,
+                    "current_event_uuid": None,
+                }
+    data["lifecycle_events"] = {}
+    data["replacement_records"] = {}
+    return data
 
 
 def _optional_text(value: Any) -> str | None:
@@ -318,10 +364,403 @@ def _validate_optional_date(value: Any, field: str) -> None:
         raise AssetStoreError(f"Asset Core {field} is not a valid ISO date") from err
 
 
+def _parse_utc_timestamp(value: Any, field: str, *, code: str) -> datetime:
+    """Return a valid aware UTC timestamp or fail closed."""
+    if not isinstance(value, str):
+        raise AssetStoreError(
+            f"Asset Core {field} must be an aware UTC timestamp",
+            code=code,
+        )
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as err:
+        raise AssetStoreError(
+            f"Asset Core {field} is not a valid timestamp",
+            code=code,
+        ) from err
+    if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
+        raise AssetStoreError(
+            f"Asset Core {field} must be an aware UTC timestamp",
+            code=code,
+        )
+    return parsed
+
+
+def _validate_lifecycle_graph(data: AssetStoreData) -> None:
+    """Validate every immutable event and complete per-Asset event chain."""
+    events = data["lifecycle_events"]
+    events_by_asset: dict[str, dict[str, LifecycleEventData]] = {
+        asset_uuid: {} for asset_uuid in data["assets"]
+    }
+
+    for event_uuid, event in events.items():
+        if not isinstance(event, dict):
+            raise AssetStoreError(
+                f"Lifecycle event {event_uuid} is not a mapping",
+                code="lifecycle_chain_invalid",
+            )
+        if set(event) != {
+            "event_uuid",
+            "asset_uuid",
+            "previous_event_uuid",
+            "from_status",
+            "to_status",
+            "effective_date",
+            "recorded_at",
+            "notes",
+        }:
+            raise AssetStoreError(
+                f"Lifecycle event {event_uuid} has an invalid structure",
+                code="lifecycle_chain_invalid",
+            )
+        if _valid_uuid(event_uuid) != event_uuid:
+            raise AssetStoreError(
+                f"Invalid lifecycle event UUID: {event_uuid}",
+                code="lifecycle_chain_invalid",
+            )
+        if event.get("event_uuid") != event_uuid:
+            raise AssetStoreError(
+                f"Lifecycle event UUID/key mismatch: {event_uuid}",
+                code="lifecycle_chain_invalid",
+            )
+        asset_uuid = event.get("asset_uuid")
+        if _valid_uuid(asset_uuid) != asset_uuid or asset_uuid not in data["assets"]:
+            raise AssetStoreError(
+                f"Lifecycle event {event_uuid} references a missing Asset",
+                code="lifecycle_chain_invalid",
+            )
+        if event.get("from_status") not in LIFECYCLE_STATUSES or event.get(
+            "to_status"
+        ) not in LIFECYCLE_STATUSES:
+            raise AssetStoreError(
+                f"Lifecycle event {event_uuid} has an invalid status",
+                code="invalid_lifecycle_status",
+            )
+        if event["from_status"] == event["to_status"]:
+            raise AssetStoreError(
+                f"Lifecycle event {event_uuid} does not change status",
+                code="lifecycle_chain_invalid",
+            )
+        previous_uuid = event.get("previous_event_uuid")
+        if previous_uuid is not None and _valid_uuid(previous_uuid) != previous_uuid:
+            raise AssetStoreError(
+                f"Lifecycle event {event_uuid} has an invalid previous UUID",
+                code="lifecycle_chain_invalid",
+            )
+        _validate_optional_date(event.get("effective_date"), "lifecycle effective_date")
+        if (
+            event.get("effective_date") is not None
+            and date.fromisoformat(event["effective_date"]) > dt_util.now().date()
+        ):
+            raise AssetStoreError(
+                f"Lifecycle event {event_uuid} has a future effective date",
+                code="lifecycle_date_in_future",
+            )
+        _parse_utc_timestamp(
+            event.get("recorded_at"),
+            "lifecycle recorded_at",
+            code="lifecycle_chain_invalid",
+        )
+        notes = event.get("notes")
+        if notes is not None and not isinstance(notes, str):
+            raise AssetStoreError(
+                f"Lifecycle event {event_uuid} has invalid notes",
+                code="lifecycle_chain_invalid",
+            )
+        events_by_asset[asset_uuid][event_uuid] = cast(LifecycleEventData, event)
+
+    for asset_uuid, asset in data["assets"].items():
+        lifecycle = asset.get("lifecycle")
+        if not isinstance(lifecycle, dict) or set(lifecycle) != {
+            "status",
+            "current_event_uuid",
+        }:
+            raise AssetStoreError(
+                f"Asset {asset_uuid} has invalid lifecycle data",
+                code="lifecycle_chain_invalid",
+            )
+        status = lifecycle.get("status")
+        if status not in LIFECYCLE_STATUSES:
+            raise AssetStoreError(
+                f"Asset {asset_uuid} has an invalid lifecycle status",
+                code="invalid_lifecycle_status",
+            )
+        current_uuid = lifecycle.get("current_event_uuid")
+        asset_events = events_by_asset[asset_uuid]
+        if not asset_events:
+            if current_uuid is not None or status != LIFECYCLE_STATUS_UNKNOWN:
+                raise AssetStoreError(
+                    f"Asset {asset_uuid} lifecycle state has no event chain",
+                    code="lifecycle_chain_invalid",
+                )
+            continue
+        if _valid_uuid(current_uuid) != current_uuid or current_uuid not in asset_events:
+            raise AssetStoreError(
+                f"Asset {asset_uuid} has an invalid current lifecycle event",
+                code="lifecycle_chain_invalid",
+            )
+
+        children: dict[str, str] = {}
+        roots: list[str] = []
+        for event_uuid, event in asset_events.items():
+            previous_uuid = event["previous_event_uuid"]
+            if previous_uuid is None:
+                roots.append(event_uuid)
+                if event["from_status"] != LIFECYCLE_STATUS_UNKNOWN:
+                    raise AssetStoreError(
+                        f"Asset {asset_uuid} lifecycle chain does not start unknown",
+                        code="lifecycle_chain_invalid",
+                    )
+                continue
+            previous = events.get(previous_uuid)
+            if previous is None or previous.get("asset_uuid") != asset_uuid:
+                raise AssetStoreError(
+                    f"Lifecycle event {event_uuid} has an invalid previous event",
+                    code="lifecycle_chain_invalid",
+                )
+            if previous.get("to_status") != event["from_status"]:
+                raise AssetStoreError(
+                    f"Lifecycle event {event_uuid} has discontinuous statuses",
+                    code="lifecycle_chain_invalid",
+                )
+            if previous_uuid in children:
+                raise AssetStoreError(
+                    f"Asset {asset_uuid} lifecycle history branches",
+                    code="lifecycle_chain_invalid",
+                )
+            children[previous_uuid] = event_uuid
+
+        if len(roots) != 1:
+            raise AssetStoreError(
+                f"Asset {asset_uuid} lifecycle events do not form one chain",
+                code="lifecycle_chain_invalid",
+            )
+
+        visited: set[str] = set()
+        event_uuid: str | None = roots[0]
+        previous_date: date | None = None
+        previous_recorded: datetime | None = None
+        last_uuid: str | None = None
+        while event_uuid is not None:
+            if event_uuid in visited:
+                raise AssetStoreError(
+                    f"Asset {asset_uuid} lifecycle chain contains a cycle",
+                    code="lifecycle_chain_invalid",
+                )
+            visited.add(event_uuid)
+            event = asset_events[event_uuid]
+            effective = (
+                date.fromisoformat(event["effective_date"])
+                if event["effective_date"] is not None
+                else None
+            )
+            recorded = _parse_utc_timestamp(
+                event["recorded_at"],
+                "lifecycle recorded_at",
+                code="lifecycle_chain_invalid",
+            )
+            if (
+                previous_date is not None
+                and effective is not None
+                and effective < previous_date
+            ):
+                raise AssetStoreError(
+                    f"Asset {asset_uuid} lifecycle effective dates decrease",
+                    code="lifecycle_chain_invalid",
+                )
+            if previous_recorded is not None and recorded < previous_recorded:
+                raise AssetStoreError(
+                    f"Asset {asset_uuid} lifecycle recorded timestamps decrease",
+                    code="lifecycle_chain_invalid",
+                )
+            previous_date = effective
+            previous_recorded = recorded
+            last_uuid = event_uuid
+            event_uuid = children.get(event_uuid)
+
+        if visited != set(asset_events) or last_uuid != current_uuid:
+            raise AssetStoreError(
+                f"Asset {asset_uuid} lifecycle events contain orphans",
+                code="lifecycle_chain_invalid",
+            )
+        if asset_events[current_uuid]["to_status"] != status:
+            raise AssetStoreError(
+                f"Asset {asset_uuid} current lifecycle status does not match its event",
+                code="lifecycle_chain_invalid",
+            )
+
+
+def _validate_replacement_graph(data: AssetStoreData) -> None:
+    """Validate permanent records and the complete active 1:1 replacement graph."""
+    records = data["replacement_records"]
+    outgoing: dict[str, ReplacementRecordData] = {}
+    incoming: dict[str, ReplacementRecordData] = {}
+    active_pairs: set[tuple[str, str]] = set()
+
+    for replacement_uuid, record in records.items():
+        if not isinstance(record, dict):
+            raise AssetStoreError(
+                f"Replacement record {replacement_uuid} is not a mapping",
+                code="replacement_missing",
+            )
+        if set(record) != {
+            "replacement_uuid",
+            "predecessor_asset_uuid",
+            "successor_asset_uuid",
+            "reason",
+            "effective_date",
+            "recorded_at",
+            "notes",
+            "voided_at",
+            "void_reason",
+        }:
+            raise AssetStoreError(
+                f"Replacement record {replacement_uuid} has an invalid structure",
+                code="replacement_graph_invalid",
+            )
+        if _valid_uuid(replacement_uuid) != replacement_uuid:
+            raise AssetStoreError(
+                f"Invalid replacement UUID: {replacement_uuid}",
+                code="replacement_missing",
+            )
+        if record.get("replacement_uuid") != replacement_uuid:
+            raise AssetStoreError(
+                f"Replacement UUID/key mismatch: {replacement_uuid}",
+                code="replacement_missing",
+            )
+        predecessor = record.get("predecessor_asset_uuid")
+        successor = record.get("successor_asset_uuid")
+        if _valid_uuid(predecessor) != predecessor or predecessor not in data["assets"]:
+            raise AssetStoreError(
+                f"Replacement {replacement_uuid} references a missing predecessor",
+                code="asset_missing",
+            )
+        if _valid_uuid(successor) != successor or successor not in data["assets"]:
+            raise AssetStoreError(
+                f"Replacement {replacement_uuid} references a missing successor",
+                code="asset_missing",
+            )
+        if predecessor == successor:
+            raise AssetStoreError(
+                f"Replacement {replacement_uuid} references the same Asset twice",
+                code="replacement_self_reference",
+            )
+        if record.get("reason") not in REPLACEMENT_REASONS:
+            raise AssetStoreError(
+                f"Replacement {replacement_uuid} has an invalid reason",
+                code="invalid_replacement_reason",
+            )
+        _validate_optional_date(
+            record.get("effective_date"), "replacement effective_date"
+        )
+        if (
+            record.get("effective_date") is not None
+            and date.fromisoformat(record["effective_date"]) > dt_util.now().date()
+        ):
+            raise AssetStoreError(
+                f"Replacement {replacement_uuid} has a future effective date",
+                code="replacement_date_in_future",
+            )
+        recorded_at = _parse_utc_timestamp(
+            record.get("recorded_at"),
+            "replacement recorded_at",
+            code="replacement_graph_invalid",
+        )
+        notes = record.get("notes")
+        if notes is not None and not isinstance(notes, str):
+            raise AssetStoreError(
+                f"Replacement {replacement_uuid} has invalid notes",
+                code="replacement_graph_invalid",
+            )
+        voided_at = record.get("voided_at")
+        void_reason = record.get("void_reason")
+        if voided_at is None:
+            if void_reason is not None:
+                raise AssetStoreError(
+                    f"Active replacement {replacement_uuid} has a void reason",
+                    code="replacement_graph_invalid",
+                )
+        else:
+            parsed_voided = _parse_utc_timestamp(
+                voided_at,
+                "replacement voided_at",
+                code="replacement_graph_invalid",
+            )
+            if parsed_voided < recorded_at or not isinstance(
+                void_reason, str
+            ) or not void_reason.strip():
+                raise AssetStoreError(
+                    f"Voided replacement {replacement_uuid} has invalid void data",
+                    code="replacement_graph_invalid",
+                )
+            continue
+
+        typed_record = cast(ReplacementRecordData, record)
+        pair = (predecessor, successor)
+        if pair in active_pairs:
+            raise AssetStoreError(
+                f"Duplicate active replacement {predecessor} -> {successor}",
+                code="replacement_predecessor_conflict",
+            )
+        active_pairs.add(pair)
+        if predecessor in outgoing:
+            raise AssetStoreError(
+                f"Asset {predecessor} has more than one active successor",
+                code="replacement_predecessor_conflict",
+            )
+        if successor in incoming:
+            raise AssetStoreError(
+                f"Asset {successor} has more than one active predecessor",
+                code="replacement_successor_conflict",
+            )
+        outgoing[predecessor] = typed_record
+        incoming[successor] = typed_record
+
+    visited: set[str] = set()
+    visiting: set[str] = set()
+
+    def _visit(asset_uuid: str) -> None:
+        if asset_uuid in visiting:
+            raise AssetStoreError(
+                "The active replacement graph contains a cycle",
+                code="replacement_cycle",
+            )
+        if asset_uuid in visited:
+            return
+        visiting.add(asset_uuid)
+        record = outgoing.get(asset_uuid)
+        if record is not None:
+            successor = record["successor_asset_uuid"]
+            next_record = outgoing.get(successor)
+            if (
+                next_record is not None
+                and record["effective_date"] is not None
+                and next_record["effective_date"] is not None
+                and date.fromisoformat(record["effective_date"])
+                > date.fromisoformat(next_record["effective_date"])
+            ):
+                raise AssetStoreError(
+                    "Replacement effective dates decrease along the active chain",
+                    code="replacement_graph_invalid",
+                )
+            _visit(successor)
+        visiting.remove(asset_uuid)
+        visited.add(asset_uuid)
+
+    for asset_uuid in data["assets"]:
+        _visit(asset_uuid)
+
+
 def _validate_store_data(data: AssetStoreData) -> None:
     """Validate invariants which must remain true across all future releases."""
-    if not isinstance(data.get("purchases"), dict) or not isinstance(
-        data.get("assets"), dict
+    if not all(
+        isinstance(data.get(key), dict)
+        for key in (
+            "purchases",
+            "assets",
+            "lifecycle_events",
+            "replacement_records",
+        )
     ):
         raise AssetStoreError("Asset Core storage has an invalid top-level structure")
 
@@ -527,6 +966,9 @@ def _validate_store_data(data: AssetStoreData) -> None:
                 f"Asset {asset_uuid} references an inconsistent Purchase"
             )
 
+    _validate_lifecycle_graph(data)
+    _validate_replacement_graph(data)
+
 
 class AssetStoreManager:
     """Own the normalized persistent Asset/Purchase model."""
@@ -563,7 +1005,16 @@ class AssetStoreManager:
 
         # Store is versioned, so a version-one payload is expected to contain all
         # top-level keys. Refuse to guess if the private store is malformed.
-        if not all(key in loaded for key in ("next_asset_number", "purchases", "assets")):
+        if not all(
+            key in loaded
+            for key in (
+                "next_asset_number",
+                "purchases",
+                "assets",
+                "lifecycle_events",
+                "replacement_records",
+            )
+        ):
             raise AssetStoreError("Asset Core storage payload is incomplete")
 
         data = cast(AssetStoreData, deepcopy(loaded))
@@ -603,6 +1054,20 @@ class AssetStoreManager:
             # durably saved. A mutation or save exception leaves _data untouched.
             self._data = data
             return deepcopy(result)
+
+    async def _async_mutate_history(
+        self,
+        mutator: Callable[[AssetStoreData], _MutationResultT],
+    ) -> _MutationResultT:
+        """Apply a lifecycle/replacement mutation with structured persistence errors."""
+        try:
+            return await self._async_mutate(mutator)
+        except AssetStoreError:
+            raise
+        except OSError as err:
+            raise AssetStorePersistenceError(
+                "Asset Core history mutation could not be persisted"
+            ) from err
 
     async def async_initialize_new_runtime(self, asset_uuid: str) -> Decimal:
         """Atomically initialize a new marked Runtime from null to zero."""
@@ -680,10 +1145,55 @@ class AssetStoreManager:
         asset_uuid: str,
     ) -> AssetData:
         """Return an Asset from a transaction snapshot or raise a stable error."""
+        if _valid_uuid(asset_uuid) != asset_uuid:
+            raise AssetStoreError(
+                f"Asset {asset_uuid} does not exist",
+                code="asset_missing",
+            )
         asset = data["assets"].get(asset_uuid)
         if asset is None:
-            raise AssetStoreError(f"Asset {asset_uuid} does not exist")
+            raise AssetStoreError(
+                f"Asset {asset_uuid} does not exist",
+                code="asset_missing",
+            )
         return asset
+
+    def _initialize_asset_lifecycle(
+        self,
+        data: AssetStoreData,
+        asset: AssetData,
+        status: LifecycleStatus,
+    ) -> None:
+        """Initialize one new Asset without fabricating same-state history."""
+        if status not in LIFECYCLE_STATUSES:
+            raise AssetStoreError(
+                f"Invalid initial lifecycle status: {status}",
+                code="invalid_lifecycle_status",
+            )
+        asset["lifecycle"] = {
+            "status": status,
+            "current_event_uuid": None,
+        }
+        if status == LIFECYCLE_STATUS_UNKNOWN:
+            return
+        event_uuid = str(uuid.uuid4())
+        if event_uuid in data["lifecycle_events"]:
+            raise AssetStoreError(
+                "Generated lifecycle event UUID is already in use",
+                code="lifecycle_chain_invalid",
+            )
+        event: LifecycleEventData = {
+            "event_uuid": event_uuid,
+            "asset_uuid": asset["asset_uuid"],
+            "previous_event_uuid": None,
+            "from_status": LIFECYCLE_STATUS_UNKNOWN,
+            "to_status": status,
+            "effective_date": None,
+            "recorded_at": datetime.now(UTC).isoformat(),
+            "notes": None,
+        }
+        data["lifecycle_events"][event_uuid] = event
+        asset["lifecycle"]["current_event_uuid"] = event_uuid
 
     def _normalize_user_asset_text(
         self,
@@ -746,6 +1256,10 @@ class AssetStoreManager:
             CONF_HA_AREA_ID: None,
             "warranty": {"type": WARRANTY_NONE, "until": None},
             "runtime": {"total_seconds": None},
+            "lifecycle": {
+                "status": LIFECYCLE_STATUS_UNKNOWN,
+                "current_event_uuid": None,
+            },
             "manufacturer": None,
             "model": None,
             "model_id": None,
@@ -758,8 +1272,9 @@ class AssetStoreManager:
                 {"device_id": device_id, "role": DEVICE_ROLE_PRIMARY}
             ],
         }
-        self._refresh_home_assistant_metadata(asset, device, device_id)
         data["assets"][asset_uuid] = asset
+        self._initialize_asset_lifecycle(data, asset, LIFECYCLE_STATUS_ACTIVE)
+        self._refresh_home_assistant_metadata(asset, device, device_id)
         return asset
 
     async def async_create_manual_asset(
@@ -774,6 +1289,7 @@ class AssetStoreManager:
         sw_version: str | None = None,
         hw_version: str | None = None,
         notes: str | None = None,
+        initial_lifecycle_status: LifecycleStatus = LIFECYCLE_STATUS_ACTIVE,
     ) -> AssetData:
         """Create a persistent physical Asset without Purchase or HA identity."""
         normalized_name = self._normalize_user_asset_text(
@@ -827,6 +1343,10 @@ class AssetStoreManager:
                 CONF_HA_AREA_ID: None,
                 "warranty": {"type": WARRANTY_NONE, "until": None},
                 "runtime": {"total_seconds": None},
+                "lifecycle": {
+                    "status": LIFECYCLE_STATUS_UNKNOWN,
+                    "current_event_uuid": None,
+                },
                 "manufacturer": metadata["manufacturer"],
                 "model": metadata["model"],
                 "model_id": metadata["model_id"],
@@ -838,9 +1358,349 @@ class AssetStoreManager:
                 "ha_device_refs": [],
             }
             data["assets"][asset_uuid] = asset
+            self._initialize_asset_lifecycle(
+                data,
+                asset,
+                initial_lifecycle_status,
+            )
             return asset
 
         return await self._async_mutate(_create)
+
+    def _normalize_effective_date(
+        self,
+        value: str | None,
+        *,
+        future_code: str,
+    ) -> str | None:
+        """Validate a user-entered canonical date against HA local today."""
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise AssetStoreError(
+                "Effective date must use YYYY-MM-DD",
+                code=future_code,
+            )
+        try:
+            parsed = date.fromisoformat(value)
+        except ValueError as err:
+            raise AssetStoreError(
+                "Effective date must use YYYY-MM-DD",
+                code=future_code,
+            ) from err
+        if parsed.isoformat() != value:
+            raise AssetStoreError(
+                "Effective date must use YYYY-MM-DD",
+                code=future_code,
+            )
+        if parsed > dt_util.now().date():
+            raise AssetStoreError(
+                "Effective date cannot be in the future",
+                code=future_code,
+            )
+        return value
+
+    def _normalize_history_notes(self, value: str | None) -> str | None:
+        """Normalize optional history notes without implicit coercion."""
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise AssetStoreError("History notes must be text")
+        return value if value else None
+
+    async def async_set_asset_lifecycle(
+        self,
+        asset_uuid: str,
+        status: LifecycleStatus,
+        *,
+        effective_date: str | None,
+        notes: str | None,
+    ) -> AssetData:
+        """Append one canonical lifecycle transition and update current state."""
+
+        def _set_lifecycle(data: AssetStoreData) -> AssetData:
+            asset = self._require_asset(data, asset_uuid)
+            if status not in LIFECYCLE_STATUSES:
+                raise AssetStoreError(
+                    f"Invalid lifecycle status: {status}",
+                    code="invalid_lifecycle_status",
+                )
+            normalized_date = self._normalize_effective_date(
+                effective_date,
+                future_code="lifecycle_date_in_future",
+            )
+            normalized_notes = self._normalize_history_notes(notes)
+            lifecycle = asset["lifecycle"]
+            if lifecycle["status"] == status:
+                return asset
+
+            event_uuid = str(uuid.uuid4())
+            if event_uuid in data["lifecycle_events"]:
+                raise AssetStoreError(
+                    "Generated lifecycle event UUID is already in use",
+                    code="lifecycle_chain_invalid",
+                )
+            event: LifecycleEventData = {
+                "event_uuid": event_uuid,
+                "asset_uuid": asset_uuid,
+                "previous_event_uuid": lifecycle["current_event_uuid"],
+                "from_status": lifecycle["status"],
+                "to_status": status,
+                "effective_date": normalized_date,
+                "recorded_at": datetime.now(UTC).isoformat(),
+                "notes": normalized_notes,
+            }
+            data["lifecycle_events"][event_uuid] = event
+            lifecycle["status"] = status
+            lifecycle["current_event_uuid"] = event_uuid
+            return asset
+
+        return await self._async_mutate_history(_set_lifecycle)
+
+    def lifecycle_event(self, event_uuid: str | None) -> LifecycleEventData | None:
+        """Return one detached immutable lifecycle event snapshot."""
+        if not event_uuid:
+            return None
+        event = self._data["lifecycle_events"].get(event_uuid)
+        return deepcopy(event) if event is not None else None
+
+    def lifecycle_events_for_asset(
+        self,
+        asset_uuid: str,
+    ) -> list[LifecycleEventData]:
+        """Return one Asset's detached event chain in recorded chain order."""
+        asset = self.asset(asset_uuid)
+        if asset is None:
+            raise AssetStoreError(
+                f"Asset {asset_uuid} does not exist",
+                code="asset_missing",
+            )
+        result: list[LifecycleEventData] = []
+        current_uuid = asset["lifecycle"]["current_event_uuid"]
+        while current_uuid is not None:
+            event = self._data["lifecycle_events"][current_uuid]
+            result.append(event)
+            current_uuid = event["previous_event_uuid"]
+        result.reverse()
+        return deepcopy(result)
+
+    def replacement_record(
+        self,
+        replacement_uuid: str | None,
+    ) -> ReplacementRecordData | None:
+        """Return one detached historical replacement record."""
+        if not replacement_uuid:
+            return None
+        record = self._data["replacement_records"].get(replacement_uuid)
+        return deepcopy(record) if record is not None else None
+
+    def replacement_records_for_asset(
+        self,
+        asset_uuid: str,
+        *,
+        include_voided: bool = False,
+    ) -> list[ReplacementRecordData]:
+        """Return detached replacement records mentioning one Asset."""
+        if self.asset(asset_uuid) is None:
+            raise AssetStoreError(
+                f"Asset {asset_uuid} does not exist",
+                code="asset_missing",
+            )
+        records = [
+            record
+            for record in self._data["replacement_records"].values()
+            if (
+                record["predecessor_asset_uuid"] == asset_uuid
+                or record["successor_asset_uuid"] == asset_uuid
+            )
+            and (include_voided or record["voided_at"] is None)
+        ]
+        records.sort(key=lambda item: (item["recorded_at"], item["replacement_uuid"]))
+        return deepcopy(records)
+
+    def active_replacement_predecessor(
+        self,
+        asset_uuid: str,
+    ) -> AssetData | None:
+        """Return the detached Asset actively replaced by this Asset."""
+        if self.asset(asset_uuid) is None:
+            raise AssetStoreError(
+                f"Asset {asset_uuid} does not exist",
+                code="asset_missing",
+            )
+        for record in self._data["replacement_records"].values():
+            if (
+                record["voided_at"] is None
+                and record["successor_asset_uuid"] == asset_uuid
+            ):
+                return self.asset(record["predecessor_asset_uuid"])
+        return None
+
+    def active_replacement_successor(
+        self,
+        asset_uuid: str,
+    ) -> AssetData | None:
+        """Return the detached Asset actively replacing this Asset."""
+        if self.asset(asset_uuid) is None:
+            raise AssetStoreError(
+                f"Asset {asset_uuid} does not exist",
+                code="asset_missing",
+            )
+        for record in self._data["replacement_records"].values():
+            if (
+                record["voided_at"] is None
+                and record["predecessor_asset_uuid"] == asset_uuid
+            ):
+                return self.asset(record["successor_asset_uuid"])
+        return None
+
+    def _create_replacement_record(
+        self,
+        data: AssetStoreData,
+        *,
+        predecessor_asset_uuid: str,
+        successor_asset_uuid: str,
+        reason: ReplacementReason,
+        effective_date: str | None,
+        notes: str | None,
+    ) -> ReplacementRecordData:
+        """Create one active record inside an existing atomic mutation."""
+        self._require_asset(data, predecessor_asset_uuid)
+        self._require_asset(data, successor_asset_uuid)
+        if predecessor_asset_uuid == successor_asset_uuid:
+            raise AssetStoreError(
+                "An Asset cannot replace itself",
+                code="replacement_self_reference",
+            )
+        if reason not in REPLACEMENT_REASONS:
+            raise AssetStoreError(
+                f"Invalid replacement reason: {reason}",
+                code="invalid_replacement_reason",
+            )
+        normalized_date = self._normalize_effective_date(
+            effective_date,
+            future_code="replacement_date_in_future",
+        )
+        normalized_notes = self._normalize_history_notes(notes)
+        replacement_uuid = str(uuid.uuid4())
+        if replacement_uuid in data["replacement_records"]:
+            raise AssetStoreError(
+                "Generated replacement UUID is already in use",
+                code="replacement_graph_invalid",
+            )
+        record: ReplacementRecordData = {
+            "replacement_uuid": replacement_uuid,
+            "predecessor_asset_uuid": predecessor_asset_uuid,
+            "successor_asset_uuid": successor_asset_uuid,
+            "reason": reason,
+            "effective_date": normalized_date,
+            "recorded_at": datetime.now(UTC).isoformat(),
+            "notes": normalized_notes,
+            "voided_at": None,
+            "void_reason": None,
+        }
+        data["replacement_records"][replacement_uuid] = record
+        return record
+
+    async def async_create_asset_replacement(
+        self,
+        predecessor_asset_uuid: str,
+        successor_asset_uuid: str,
+        *,
+        reason: ReplacementReason,
+        effective_date: str | None,
+        notes: str | None,
+    ) -> ReplacementRecordData:
+        """Atomically create one physical Asset replacement relationship."""
+        return await self._async_mutate_history(
+            lambda data: self._create_replacement_record(
+                data,
+                predecessor_asset_uuid=predecessor_asset_uuid,
+                successor_asset_uuid=successor_asset_uuid,
+                reason=reason,
+                effective_date=effective_date,
+                notes=notes,
+            )
+        )
+
+    async def async_void_asset_replacement(
+        self,
+        replacement_uuid: str,
+        *,
+        void_reason: str,
+    ) -> ReplacementRecordData:
+        """Atomically void an active relationship without deleting history."""
+
+        def _void(data: AssetStoreData) -> ReplacementRecordData:
+            if _valid_uuid(replacement_uuid) != replacement_uuid:
+                raise AssetStoreError(
+                    f"Replacement {replacement_uuid} does not exist",
+                    code="replacement_missing",
+                )
+            record = data["replacement_records"].get(replacement_uuid)
+            if record is None:
+                raise AssetStoreError(
+                    f"Replacement {replacement_uuid} does not exist",
+                    code="replacement_missing",
+                )
+            if record["voided_at"] is not None:
+                raise AssetStoreError(
+                    f"Active replacement {replacement_uuid} does not exist",
+                    code="replacement_missing",
+                )
+            if not isinstance(void_reason, str) or not void_reason.strip():
+                raise AssetStoreError(
+                    "A non-empty void reason is required",
+                    code="replacement_void_reason_required",
+                )
+            record["voided_at"] = datetime.now(UTC).isoformat()
+            record["void_reason"] = void_reason.strip()
+            return record
+
+        return await self._async_mutate_history(_void)
+
+    async def async_correct_asset_replacement(
+        self,
+        replacement_uuid: str,
+        *,
+        predecessor_asset_uuid: str,
+        successor_asset_uuid: str,
+        reason: ReplacementReason,
+        effective_date: str | None,
+        notes: str | None,
+        void_reason: str,
+    ) -> ReplacementRecordData:
+        """Atomically void one active record and create its correction."""
+
+        def _correct(data: AssetStoreData) -> ReplacementRecordData:
+            if _valid_uuid(replacement_uuid) != replacement_uuid:
+                raise AssetStoreError(
+                    f"Replacement {replacement_uuid} does not exist",
+                    code="replacement_missing",
+                )
+            old_record = data["replacement_records"].get(replacement_uuid)
+            if old_record is None or old_record["voided_at"] is not None:
+                raise AssetStoreError(
+                    f"Active replacement {replacement_uuid} does not exist",
+                    code="replacement_missing",
+                )
+            if not isinstance(void_reason, str) or not void_reason.strip():
+                raise AssetStoreError(
+                    "A non-empty void reason is required",
+                    code="replacement_void_reason_required",
+                )
+            old_record["voided_at"] = datetime.now(UTC).isoformat()
+            old_record["void_reason"] = void_reason.strip()
+            return self._create_replacement_record(
+                data,
+                predecessor_asset_uuid=predecessor_asset_uuid,
+                successor_asset_uuid=successor_asset_uuid,
+                reason=reason,
+                effective_date=effective_date,
+                notes=notes,
+            )
+
+        return await self._async_mutate_history(_correct)
 
     async def async_update_asset_metadata(
         self,

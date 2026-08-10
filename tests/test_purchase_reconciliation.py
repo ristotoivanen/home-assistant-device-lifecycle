@@ -258,7 +258,13 @@ async def test_empty_purchase_allocates_only_purchase_until_device_is_added(
     """Purchase-first storage defers Asset UUID and DL allocation until receipt."""
     manager = _manager(
         hass,
-        {"next_asset_number": 1, "purchases": {}, "assets": {}},
+        {
+            "next_asset_number": 1,
+            "purchases": {},
+            "assets": {},
+            "lifecycle_events": {},
+            "replacement_records": {},
+        },
     )
     uuid_factory = Mock(
         side_effect=[UUID(PURCHASE_UUID), UUID(ASSET_UUID)]

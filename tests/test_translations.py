@@ -129,15 +129,11 @@ def test_options_translation_structures_match_and_are_valid_json() -> None:
 
 
 def test_strings_source_matches_english_translation() -> None:
-    """Legacy strings remain unchanged while runtime translations add 0.6.1."""
+    """The canonical strings source matches the English translation."""
     with STRINGS_FILE.open(encoding="utf-8") as strings_file:
         strings = json.load(strings_file)
 
-    english = _translation("en")
-    installed_date = english["entity"]["sensor"].pop("installed_date")
-    assert installed_date == {"name": "Installation date"}
-    assert "installed_date" not in strings["entity"]["sensor"]
-    assert strings == english
+    assert strings == _translation("en")
 
 
 def test_exposure_entity_names_and_enum_states_are_translated() -> None:
@@ -158,6 +154,19 @@ def test_exposure_entity_names_and_enum_states_are_translated() -> None:
         "none",
         "present",
         "missing",
+    }
+    assert set(english["lifecycle_status"]["state"]) == {
+        "unknown",
+        "active",
+        "retired",
+        "disposed",
+        "lost",
+    }
+    assert set(english["replacement"]["state"]) == {
+        "none",
+        "replaces",
+        "replaced_by",
+        "chain_member",
     }
     assert _key_shape(english) == _key_shape(finnish)
 
@@ -181,6 +190,8 @@ def test_every_menu_action_and_step_has_translation(language: str) -> None:
     }
     assert set(steps["manage_asset_menu"]["menu_options"]) == {
         "asset_deployment",
+        "asset_lifecycle",
+        "asset_replacement",
         "change_asset_purchase",
         "edit_asset_metadata",
         "ha_relationship",
@@ -190,10 +201,16 @@ def test_every_menu_action_and_step_has_translation(language: str) -> None:
         "manage_primary_device",
         "remove_related_device",
     }
+    assert set(steps["asset_replacement"]["menu_options"]) == {
+        "manage_asset_replacement",
+        "replacement_replaced_by",
+        "replacement_replaces",
+    }
     menu_actions = {
         *steps["init"]["menu_options"],
         *steps["manage_asset_menu"]["menu_options"],
         *steps["ha_relationship"]["menu_options"],
+        *steps["asset_replacement"]["menu_options"],
     }
     assert menu_actions <= set(steps)
 
@@ -211,6 +228,21 @@ def test_deployment_relationship_confirmation_and_results_exist(
     assert set(translation["selector"]["ha_relationship_action"]["options"]) == set(
         HA_RELATIONSHIP_ACTIONS
     )
+    assert set(translation["selector"]["lifecycle_status"]["options"]) == {
+        "unknown",
+        "active",
+        "retired",
+        "disposed",
+        "lost",
+    }
+    assert set(translation["selector"]["replacement_reason"]["options"]) == {
+        "unknown",
+        "planned_refresh",
+        "upgrade",
+        "failure",
+        "warranty_rma",
+        "other",
+    }
     assert translation["options"]["step"]["confirm_not_deployed"]["title"]
     assert translation["options"]["step"]["confirm_not_deployed"]["description"]
     assert _completion_keys() <= set(translation["options"]["create_entry"])

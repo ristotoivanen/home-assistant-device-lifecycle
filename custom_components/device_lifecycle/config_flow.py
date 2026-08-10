@@ -33,19 +33,24 @@ from .const import (
     CONF_CATEGORY,
     CONF_CLEAR_HA_AREA,
     CONF_CLEAR_INSTALLED_DATE,
+    CONF_CONFIRM_DISPOSED,
     CONF_CONFIRM_AREA_CLEAR,
+    CONF_CONFIRM_VOID,
     CONF_CURRENCY,
     CONF_DEPLOYMENT_STATE,
     CONF_DEVICE_ID,
     CONF_DEVICE_IDS,
+    CONF_EFFECTIVE_DATE,
     CONF_HA_AREA_ID,
     CONF_HA_RELATIONSHIP_ACTION,
     CONF_HW_VERSION,
     CONF_INSTALLED_DATE,
+    CONF_LIFECYCLE_STATUS,
     CONF_MANUFACTURER,
     CONF_MODEL,
     CONF_MODEL_ID,
     CONF_NOTES,
+    CONF_PREDECESSOR_ASSET_UUID,
     CONF_POWER_HYSTERESIS,
     CONF_POWER_THRESHOLD,
     CONF_PURCHASE_DATE,
@@ -54,12 +59,18 @@ from .const import (
     CONF_PURCHASE_UUID,
     CONF_RECEIPT_REFERENCE,
     CONF_RECEIPT_URL,
+    CONF_REPLACEMENT_ACTION,
+    CONF_REPLACEMENT_REASON,
+    CONF_REPLACEMENT_TARGET_ASSET_UUID,
+    CONF_REPLACEMENT_UUID,
     CONF_RUNTIME_DATA_VERSION,
     CONF_RUNTIME_MODE,
     CONF_SELLER,
     CONF_SERIAL_NUMBER,
     CONF_SOURCE_ENTITY_ID,
     CONF_SW_VERSION,
+    CONF_SUCCESSOR_ASSET_UUID,
+    CONF_VOID_REASON,
     CONF_WARRANTY_TYPE,
     CONF_WARRANTY_UNTIL,
     CONFIG_ENTRY_VERSION,
@@ -71,6 +82,12 @@ from .const import (
     HA_RELATIONSHIP_ACTION_REPLACE,
     HA_RELATIONSHIP_ACTION_UNLINK,
     HA_RELATIONSHIP_ACTIONS,
+    LIFECYCLE_STATUSES,
+    LIFECYCLE_STATUS_DISPOSED,
+    REPLACEMENT_ACTION_CORRECT,
+    REPLACEMENT_ACTION_VOID,
+    REPLACEMENT_ACTIONS,
+    REPLACEMENT_REASONS,
     RUNTIME_DATA_VERSION,
     RUNTIME_MODE_ON,
     RUNTIME_MODE_POWER,
@@ -83,7 +100,7 @@ from .const import (
     WARRANTY_TWO_YEARS,
     WARRANTY_TYPES,
 )
-from .models import AssetData, PurchaseData
+from .models import AssetData, PurchaseData, ReplacementRecordData
 from .storage import AssetStoreError, AssetStoreManager
 
 MAIN_UNIQUE_ID = "device_lifecycle_main"
@@ -882,6 +899,27 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             )
         ]
 
+    def _replacement_target_choices(
+        self,
+        excluded_asset_uuid: str,
+    ) -> list[selector.SelectOptionDict]:
+        """Return UUID-backed physical Asset targets other than the current Asset."""
+        return [
+            option
+            for option in self._asset_choices()
+            if option["value"] != excluded_asset_uuid
+        ]
+
+    def _replacement_record_label(self, record: ReplacementRecordData) -> str:
+        """Return a stable Asset-ID label for one replacement record."""
+        predecessor = self._manager.asset(record["predecessor_asset_uuid"])
+        successor = self._manager.asset(record["successor_asset_uuid"])
+        predecessor_label = (
+            predecessor["asset_id"] if predecessor is not None else "?"
+        )
+        successor_label = successor["asset_id"] if successor is not None else "?"
+        return f"{predecessor_label} → {successor_label}"
+
     def _purchase_choices(
         self,
         current_purchase_uuid: str | None = None,
@@ -926,6 +964,25 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
 
     def _storage_error_key(self, err: Exception) -> str:
         """Map storage failures to safe flow errors without fabricating data."""
+        if isinstance(err, AssetStoreError):
+            structured_codes = {
+                "asset_missing",
+                "invalid_lifecycle_status",
+                "invalid_replacement_reason",
+                "lifecycle_chain_invalid",
+                "lifecycle_date_in_future",
+                "persistence_error",
+                "replacement_cycle",
+                "replacement_date_in_future",
+                "replacement_graph_invalid",
+                "replacement_missing",
+                "replacement_predecessor_conflict",
+                "replacement_self_reference",
+                "replacement_successor_conflict",
+                "replacement_void_reason_required",
+            }
+            if err.code in structured_codes:
+                return err.code
         message = str(err).lower()
         if "asset" in message and "does not exist" in message:
             return "asset_missing"
@@ -1201,6 +1258,8 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 "edit_asset_metadata",
                 "change_asset_purchase",
                 "asset_deployment",
+                "asset_lifecycle",
+                "asset_replacement",
                 "ha_relationship",
             ],
             description_placeholders={"asset": _asset_label(asset)},
@@ -1309,6 +1368,517 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             description_placeholders={
                 "asset": _asset_label(asset),
                 "current_purchase": current_label,
+            },
+        )
+
+    def _show_asset_lifecycle_form(
+        self,
+        asset: AssetData,
+        *,
+        user_input: dict[str, Any] | None = None,
+        errors: dict[str, str] | None = None,
+    ) -> ConfigFlowResult:
+        """Show translated canonical lifecycle choices for one Asset."""
+        schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_LIFECYCLE_STATUS,
+                    default=asset["lifecycle"]["status"],
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=list(LIFECYCLE_STATUSES),
+                        translation_key="lifecycle_status",
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+                vol.Optional(CONF_EFFECTIVE_DATE): selector.DateSelector(),
+                vol.Optional(CONF_NOTES): _text_selector(multiline=True),
+            }
+        )
+        suggested: dict[str, Any] = {
+            CONF_LIFECYCLE_STATUS: asset["lifecycle"]["status"],
+            CONF_EFFECTIVE_DATE: dt_util.now().date().isoformat(),
+        }
+        if user_input is not None:
+            suggested.update(user_input)
+        return self.async_show_form(
+            step_id="asset_lifecycle",
+            data_schema=self.add_suggested_values_to_schema(schema, suggested),
+            errors=errors or {},
+            description_placeholders={"asset": _asset_label(asset)},
+        )
+
+    async def async_step_asset_lifecycle(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Append an explicit lifecycle transition for the selected Asset."""
+        asset_uuid = getattr(self, "_selected_asset_uuid", None)
+        asset = self._manager.asset(asset_uuid)
+        if asset is None:
+            return self._show_asset_selection(errors={"base": "asset_missing"})
+        if user_input is None:
+            return self._show_asset_lifecycle_form(asset)
+
+        status = str(user_input.get(CONF_LIFECYCLE_STATUS) or "")
+        if status not in LIFECYCLE_STATUSES:
+            return self._show_asset_lifecycle_form(
+                asset,
+                user_input=user_input,
+                errors={"base": "invalid_lifecycle_status"},
+            )
+        if status == asset["lifecycle"]["status"]:
+            return self._show_asset_lifecycle_form(
+                asset,
+                user_input=user_input,
+                errors={"base": "lifecycle_no_change"},
+            )
+        if status == LIFECYCLE_STATUS_DISPOSED:
+            self._pending_lifecycle_update = {
+                "asset_uuid": asset["asset_uuid"],
+                "status": status,
+                "effective_date": user_input.get(CONF_EFFECTIVE_DATE),
+                "notes": user_input.get(CONF_NOTES),
+            }
+            return await self.async_step_confirm_disposed()
+
+        try:
+            asset = await self._manager.async_set_asset_lifecycle(
+                asset["asset_uuid"],
+                status,
+                effective_date=user_input.get(CONF_EFFECTIVE_DATE),
+                notes=user_input.get(CONF_NOTES),
+            )
+        except (AssetStoreError, OSError) as err:
+            return self._show_asset_lifecycle_form(
+                asset,
+                user_input=user_input,
+                errors={"base": self._storage_error_key(err)},
+            )
+        return self._finish_asset_action(asset, "asset_lifecycle_updated")
+
+    async def async_step_confirm_disposed(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Require a separate confirmation before recording disposed."""
+        pending = getattr(self, "_pending_lifecycle_update", None)
+        if pending is None:
+            return await self.async_step_asset_lifecycle()
+        asset = self._manager.asset(pending["asset_uuid"])
+        if asset is None:
+            del self._pending_lifecycle_update
+            return self._show_asset_selection(errors={"base": "asset_missing"})
+
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            if not user_input.get(CONF_CONFIRM_DISPOSED):
+                errors["base"] = "confirmation_required"
+            else:
+                try:
+                    asset = await self._manager.async_set_asset_lifecycle(
+                        asset["asset_uuid"],
+                        pending["status"],
+                        effective_date=pending["effective_date"],
+                        notes=pending["notes"],
+                    )
+                except (AssetStoreError, OSError) as err:
+                    errors["base"] = self._storage_error_key(err)
+                else:
+                    del self._pending_lifecycle_update
+                    return self._finish_asset_action(
+                        asset,
+                        "asset_lifecycle_updated",
+                    )
+        return self.async_show_form(
+            step_id="confirm_disposed",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_CONFIRM_DISPOSED,
+                        default=False,
+                    ): selector.BooleanSelector()
+                }
+            ),
+            errors=errors,
+            description_placeholders={"asset": _asset_label(asset)},
+        )
+
+    async def async_step_asset_replacement(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Show physical replacement operations for the selected Asset."""
+        asset_uuid = getattr(self, "_selected_asset_uuid", None)
+        asset = self._manager.asset(asset_uuid)
+        if asset is None:
+            return self._show_asset_selection(errors={"base": "asset_missing"})
+        menu_options = ["replacement_replaces", "replacement_replaced_by"]
+        if self._manager.replacement_records_for_asset(asset["asset_uuid"]):
+            menu_options.append("manage_asset_replacement")
+        return self.async_show_menu(
+            step_id="asset_replacement",
+            menu_options=menu_options,
+            description_placeholders={"asset": _asset_label(asset)},
+        )
+
+    def _show_replacement_create_form(
+        self,
+        asset: AssetData,
+        *,
+        step_id: str,
+        user_input: dict[str, Any] | None = None,
+        errors: dict[str, str] | None = None,
+    ) -> ConfigFlowResult:
+        """Show one UUID-backed replacement creation form."""
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_REPLACEMENT_TARGET_ASSET_UUID): (
+                    selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=self._replacement_target_choices(
+                                asset["asset_uuid"]
+                            ),
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    )
+                ),
+                vol.Required(CONF_REPLACEMENT_REASON, default="unknown"): (
+                    selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=list(REPLACEMENT_REASONS),
+                            translation_key="replacement_reason",
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    )
+                ),
+                vol.Optional(CONF_EFFECTIVE_DATE): selector.DateSelector(),
+                vol.Optional(CONF_NOTES): _text_selector(multiline=True),
+            }
+        )
+        suggested: dict[str, Any] = {
+            CONF_REPLACEMENT_REASON: "unknown",
+            CONF_EFFECTIVE_DATE: dt_util.now().date().isoformat(),
+        }
+        if user_input is not None:
+            suggested.update(user_input)
+        return self.async_show_form(
+            step_id=step_id,
+            data_schema=self.add_suggested_values_to_schema(schema, suggested),
+            errors=errors or {},
+            description_placeholders={"asset": _asset_label(asset)},
+        )
+
+    async def _async_replacement_create(
+        self,
+        *,
+        selected_is_successor: bool,
+        step_id: str,
+        user_input: dict[str, Any] | None,
+    ) -> ConfigFlowResult:
+        """Create one direction-specific relationship with Store authority."""
+        asset_uuid = getattr(self, "_selected_asset_uuid", None)
+        asset = self._manager.asset(asset_uuid)
+        if asset is None:
+            return self._show_asset_selection(errors={"base": "asset_missing"})
+        if user_input is None:
+            return self._show_replacement_create_form(asset, step_id=step_id)
+        target_uuid = str(
+            user_input.get(CONF_REPLACEMENT_TARGET_ASSET_UUID) or ""
+        )
+        if self._manager.asset(target_uuid) is None:
+            return self._show_replacement_create_form(
+                asset,
+                step_id=step_id,
+                user_input=user_input,
+                errors={"base": "asset_missing"},
+            )
+        predecessor_uuid = target_uuid if selected_is_successor else asset["asset_uuid"]
+        successor_uuid = asset["asset_uuid"] if selected_is_successor else target_uuid
+        try:
+            await self._manager.async_create_asset_replacement(
+                predecessor_uuid,
+                successor_uuid,
+                reason=str(user_input.get(CONF_REPLACEMENT_REASON) or ""),
+                effective_date=user_input.get(CONF_EFFECTIVE_DATE),
+                notes=user_input.get(CONF_NOTES),
+            )
+        except (AssetStoreError, OSError) as err:
+            return self._show_replacement_create_form(
+                asset,
+                step_id=step_id,
+                user_input=user_input,
+                errors={"base": self._storage_error_key(err)},
+            )
+        refreshed = self._manager.asset(asset["asset_uuid"])
+        if refreshed is None:
+            return self._show_asset_selection(errors={"base": "asset_missing"})
+        return self._finish_asset_action(refreshed, "asset_replacement_updated")
+
+    async def async_step_replacement_replaces(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Record that this Asset replaces a predecessor Asset."""
+        return await self._async_replacement_create(
+            selected_is_successor=True,
+            step_id="replacement_replaces",
+            user_input=user_input,
+        )
+
+    async def async_step_replacement_replaced_by(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Record that this Asset was replaced by a successor Asset."""
+        return await self._async_replacement_create(
+            selected_is_successor=False,
+            step_id="replacement_replaced_by",
+            user_input=user_input,
+        )
+
+    def _show_manage_replacement_form(
+        self,
+        asset: AssetData,
+        *,
+        user_input: dict[str, Any] | None = None,
+        errors: dict[str, str] | None = None,
+    ) -> ConfigFlowResult:
+        """Show active records only for correction or explicit voiding."""
+        options = [
+            selector.SelectOptionDict(
+                value=record["replacement_uuid"],
+                label=self._replacement_record_label(record),
+            )
+            for record in self._manager.replacement_records_for_asset(
+                asset["asset_uuid"]
+            )
+        ]
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_REPLACEMENT_UUID): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=options,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+                vol.Required(
+                    CONF_REPLACEMENT_ACTION,
+                    default=REPLACEMENT_ACTION_CORRECT,
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=list(REPLACEMENT_ACTIONS),
+                        translation_key="replacement_action",
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+            }
+        )
+        if user_input is not None:
+            schema = self.add_suggested_values_to_schema(schema, user_input)
+        return self.async_show_form(
+            step_id="manage_asset_replacement",
+            data_schema=schema,
+            errors=errors or {},
+            description_placeholders={"asset": _asset_label(asset)},
+        )
+
+    async def async_step_manage_asset_replacement(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Choose one current relationship for correction or voiding."""
+        asset_uuid = getattr(self, "_selected_asset_uuid", None)
+        asset = self._manager.asset(asset_uuid)
+        if asset is None:
+            return self._show_asset_selection(errors={"base": "asset_missing"})
+        active_records = self._manager.replacement_records_for_asset(
+            asset["asset_uuid"]
+        )
+        if not active_records:
+            return await self.async_step_asset_replacement()
+        if user_input is None:
+            return self._show_manage_replacement_form(asset)
+        replacement_uuid = str(user_input.get(CONF_REPLACEMENT_UUID) or "")
+        active_ids = {record["replacement_uuid"] for record in active_records}
+        if replacement_uuid not in active_ids:
+            return self._show_manage_replacement_form(
+                asset,
+                user_input=user_input,
+                errors={"base": "replacement_missing"},
+            )
+        action = str(user_input.get(CONF_REPLACEMENT_ACTION) or "")
+        if action not in REPLACEMENT_ACTIONS:
+            return self._show_manage_replacement_form(
+                asset,
+                user_input=user_input,
+                errors={"base": "replacement_missing"},
+            )
+        self._pending_replacement_uuid = replacement_uuid
+        if action == REPLACEMENT_ACTION_VOID:
+            return await self.async_step_confirm_void_replacement()
+        return await self.async_step_correct_asset_replacement()
+
+    def _show_correct_replacement_form(
+        self,
+        asset: AssetData,
+        record: ReplacementRecordData,
+        *,
+        user_input: dict[str, Any] | None = None,
+        errors: dict[str, str] | None = None,
+    ) -> ConfigFlowResult:
+        """Show both physical endpoints for one atomic correction."""
+        options = self._asset_choices()
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_PREDECESSOR_ASSET_UUID): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=options,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+                vol.Required(CONF_SUCCESSOR_ASSET_UUID): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=options,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+                vol.Required(CONF_REPLACEMENT_REASON): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=list(REPLACEMENT_REASONS),
+                        translation_key="replacement_reason",
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+                vol.Optional(CONF_EFFECTIVE_DATE): selector.DateSelector(),
+                vol.Optional(CONF_NOTES): _text_selector(multiline=True),
+                vol.Required(CONF_VOID_REASON): _text_selector(),
+            }
+        )
+        suggested: dict[str, Any] = {
+            CONF_PREDECESSOR_ASSET_UUID: record["predecessor_asset_uuid"],
+            CONF_SUCCESSOR_ASSET_UUID: record["successor_asset_uuid"],
+            CONF_REPLACEMENT_REASON: record["reason"],
+            CONF_NOTES: record["notes"] or "",
+        }
+        if record["effective_date"] is not None:
+            suggested[CONF_EFFECTIVE_DATE] = record["effective_date"]
+        if user_input is not None:
+            suggested.update(user_input)
+        return self.async_show_form(
+            step_id="correct_asset_replacement",
+            data_schema=self.add_suggested_values_to_schema(schema, suggested),
+            errors=errors or {},
+            description_placeholders={
+                "asset": _asset_label(asset),
+                "relationship": self._replacement_record_label(record),
+            },
+        )
+
+    async def async_step_correct_asset_replacement(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Invoke one atomic void-and-create correction mutation."""
+        asset_uuid = getattr(self, "_selected_asset_uuid", None)
+        asset = self._manager.asset(asset_uuid)
+        replacement_uuid = getattr(self, "_pending_replacement_uuid", None)
+        record = self._manager.replacement_record(replacement_uuid)
+        if asset is None:
+            return self._show_asset_selection(errors={"base": "asset_missing"})
+        if record is None or record["voided_at"] is not None:
+            return self._show_manage_replacement_form(
+                asset,
+                errors={"base": "replacement_missing"},
+            )
+        if user_input is None:
+            return self._show_correct_replacement_form(asset, record)
+        try:
+            await self._manager.async_correct_asset_replacement(
+                record["replacement_uuid"],
+                predecessor_asset_uuid=str(
+                    user_input.get(CONF_PREDECESSOR_ASSET_UUID) or ""
+                ),
+                successor_asset_uuid=str(
+                    user_input.get(CONF_SUCCESSOR_ASSET_UUID) or ""
+                ),
+                reason=str(user_input.get(CONF_REPLACEMENT_REASON) or ""),
+                effective_date=user_input.get(CONF_EFFECTIVE_DATE),
+                notes=user_input.get(CONF_NOTES),
+                void_reason=str(user_input.get(CONF_VOID_REASON) or ""),
+            )
+        except (AssetStoreError, OSError) as err:
+            return self._show_correct_replacement_form(
+                asset,
+                record,
+                user_input=user_input,
+                errors={"base": self._storage_error_key(err)},
+            )
+        refreshed = self._manager.asset(asset["asset_uuid"])
+        if refreshed is None:
+            return self._show_asset_selection(errors={"base": "asset_missing"})
+        return self._finish_asset_action(refreshed, "asset_replacement_updated")
+
+    async def async_step_confirm_void_replacement(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Require confirmation and a non-empty reason before voiding."""
+        asset_uuid = getattr(self, "_selected_asset_uuid", None)
+        asset = self._manager.asset(asset_uuid)
+        replacement_uuid = getattr(self, "_pending_replacement_uuid", None)
+        record = self._manager.replacement_record(replacement_uuid)
+        if asset is None:
+            return self._show_asset_selection(errors={"base": "asset_missing"})
+        if record is None or record["voided_at"] is not None:
+            return self._show_manage_replacement_form(
+                asset,
+                errors={"base": "replacement_missing"},
+            )
+
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            void_reason = str(user_input.get(CONF_VOID_REASON) or "")
+            if not user_input.get(CONF_CONFIRM_VOID):
+                errors["base"] = "confirmation_required"
+            elif not void_reason.strip():
+                errors["base"] = "replacement_void_reason_required"
+            else:
+                try:
+                    await self._manager.async_void_asset_replacement(
+                        record["replacement_uuid"],
+                        void_reason=void_reason,
+                    )
+                except (AssetStoreError, OSError) as err:
+                    errors["base"] = self._storage_error_key(err)
+                else:
+                    refreshed = self._manager.asset(asset["asset_uuid"])
+                    if refreshed is None:
+                        return self._show_asset_selection(
+                            errors={"base": "asset_missing"}
+                        )
+                    return self._finish_asset_action(
+                        refreshed,
+                        "asset_replacement_updated",
+                    )
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_VOID_REASON): _text_selector(),
+                vol.Required(
+                    CONF_CONFIRM_VOID,
+                    default=False,
+                ): selector.BooleanSelector(),
+            }
+        )
+        if user_input is not None:
+            schema = self.add_suggested_values_to_schema(schema, user_input)
+        return self.async_show_form(
+            step_id="confirm_void_replacement",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={
+                "asset": _asset_label(asset),
+                "relationship": self._replacement_record_label(record),
             },
         )
 

@@ -6,6 +6,7 @@ from copy import deepcopy
 from datetime import date
 from unittest.mock import AsyncMock, Mock
 
+import pytest
 from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
@@ -25,7 +26,9 @@ from custom_components.device_lifecycle.exposure import (
     asset_id_unique_id,
     deployment_unique_id,
     installed_date_unique_id,
+    lifecycle_status_unique_id,
     relationships_unique_id,
+    replacement_unique_id,
 )
 from custom_components.device_lifecycle.migration import lifecycle_unique_id
 from custom_components.device_lifecycle.models import AssetData
@@ -34,7 +37,9 @@ from custom_components.device_lifecycle.sensor import (
     DeviceDeploymentSensor,
     DeviceInstallationDateSensor,
     DeviceLifecycleSensor,
+    DeviceLifecycleStatusSensor,
     DeviceRelationshipsSensor,
+    DeviceReplacementSensor,
     _DeploymentAreaRegistryCoordinator,
     _RelationshipsRegistryCoordinator,
     async_setup_entry,
@@ -143,7 +148,114 @@ async def test_every_asset_gets_parent_owned_lifecycle_without_purchase(
         if isinstance(entity, DeviceInstallationDateSensor)
     )
     assert installation_date.device_entry.id == asset_device.id
-    assert len(entities) == 5
+    assert len(entities) == 7
+
+
+def test_lifecycle_status_entity_has_locked_identity_and_enum_behavior(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+    asset_store_data,
+) -> None:
+    entry = _entry(hass)
+    device = _asset_device(device_registry, entry)
+    asset = deepcopy(asset_store_data["assets"][ASSET_UUID])
+    sensor = DeviceLifecycleStatusSensor(
+        asset=asset,
+        current_event=None,
+        device_entry=device,
+    )
+
+    assert sensor.unique_id == lifecycle_status_unique_id(ASSET_UUID)
+    assert sensor.native_value == "unknown"
+    assert sensor.device_class == SensorDeviceClass.ENUM
+    assert sensor.options == ["unknown", "active", "retired", "disposed", "lost"]
+    assert sensor.has_entity_name is True
+    assert sensor.translation_key == "lifecycle_status"
+    assert sensor.entity_registry_enabled_default is True
+    assert sensor.entity_category is None
+    assert sensor.device_entry.id == device.id
+    assert sensor.extra_state_attributes == {"effective_date": None}
+
+
+def test_lifecycle_status_exposes_only_current_effective_date(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+    asset_store_data,
+) -> None:
+    entry = _entry(hass)
+    device = _asset_device(device_registry, entry)
+    asset = deepcopy(asset_store_data["assets"][ASSET_UUID])
+    asset["lifecycle"] = {
+        "status": "retired",
+        "current_event_uuid": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    }
+    event = {
+        "event_uuid": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "asset_uuid": ASSET_UUID,
+        "previous_event_uuid": None,
+        "from_status": "active",
+        "to_status": "retired",
+        "effective_date": "2026-08-09",
+        "recorded_at": "2026-08-09T10:00:00+00:00",
+        "notes": "Historical note must not become an attribute",
+    }
+
+    sensor = DeviceLifecycleStatusSensor(
+        asset=asset,
+        current_event=event,
+        device_entry=device,
+    )
+
+    assert sensor.native_value == "retired"
+    assert sensor.extra_state_attributes == {"effective_date": "2026-08-09"}
+
+
+@pytest.mark.parametrize(
+    ("predecessor", "successor", "state"),
+    [
+        (False, False, "none"),
+        (True, False, "replaces"),
+        (False, True, "replaced_by"),
+        (True, True, "chain_member"),
+    ],
+)
+def test_replacement_entity_has_locked_state_and_future_compatible_lists(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+    asset_store_data,
+    predecessor: bool,
+    successor: bool,
+    state: str,
+) -> None:
+    entry = _entry(hass)
+    device = _asset_device(device_registry, entry)
+    asset = deepcopy(asset_store_data["assets"][ASSET_UUID])
+    predecessor_asset = deepcopy(asset) if predecessor else None
+    successor_asset = deepcopy(asset) if successor else None
+    if predecessor_asset is not None:
+        predecessor_asset["asset_id"] = "DL0006"
+    if successor_asset is not None:
+        successor_asset["asset_id"] = "DL0008"
+
+    sensor = DeviceReplacementSensor(
+        asset=asset,
+        predecessor=predecessor_asset,
+        successor=successor_asset,
+        device_entry=device,
+    )
+
+    assert sensor.unique_id == replacement_unique_id(ASSET_UUID)
+    assert sensor.native_value == state
+    assert sensor.device_class == SensorDeviceClass.ENUM
+    assert sensor.options == ["none", "replaces", "replaced_by", "chain_member"]
+    assert sensor.entity_category == EntityCategory.DIAGNOSTIC
+    assert sensor.entity_registry_enabled_default is False
+    assert sensor.translation_key == "replacement"
+    assert sensor.device_entry.id == device.id
+    assert sensor.extra_state_attributes == {
+        "predecessor_asset_ids": ["DL0006"] if predecessor else [],
+        "successor_asset_ids": ["DL0008"] if successor else [],
+    }
 
 
 def test_installation_date_sensor_exposes_only_canonical_asset_date(

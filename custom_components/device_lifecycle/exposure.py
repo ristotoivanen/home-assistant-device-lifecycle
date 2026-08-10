@@ -31,6 +31,8 @@ ExposureEntityKind = Literal[
     "installed_date",
     "relationships",
     "asset_id",
+    "lifecycle_status",
+    "replacement",
 ]
 
 _ENTITY_KIND_ORDER: dict[ExposureEntityKind, int] = {
@@ -40,6 +42,8 @@ _ENTITY_KIND_ORDER: dict[ExposureEntityKind, int] = {
     "installed_date": 3,
     "relationships": 4,
     "asset_id": 5,
+    "lifecycle_status": 6,
+    "replacement": 7,
 }
 
 
@@ -66,6 +70,16 @@ def relationships_unique_id(asset_uuid: str) -> str:
 def asset_id_unique_id(asset_uuid: str) -> str:
     """Return the stable Asset-owned Asset ID entity unique ID."""
     return f"{asset_uuid}_asset_id"
+
+
+def lifecycle_status_unique_id(asset_uuid: str) -> str:
+    """Return the stable Asset-owned Lifecycle Status unique ID."""
+    return f"{asset_uuid}_lifecycle_status"
+
+
+def replacement_unique_id(asset_uuid: str) -> str:
+    """Return the stable Asset-owned Replacement unique ID."""
+    return f"{asset_uuid}_replacement"
 
 
 @dataclass(frozen=True)
@@ -274,6 +288,14 @@ def build_exposure_migration_plan(
         "asset_id": {
             asset_id_unique_id(asset_uuid): asset_uuid for asset_uuid in assets_by_uuid
         },
+        "lifecycle_status": {
+            lifecycle_status_unique_id(asset_uuid): asset_uuid
+            for asset_uuid in assets_by_uuid
+        },
+        "replacement": {
+            replacement_unique_id(asset_uuid): asset_uuid
+            for asset_uuid in assets_by_uuid
+        },
     }
 
     # Any current-entry lifecycle/runtime entry must already have converged to a
@@ -307,6 +329,8 @@ def build_exposure_migration_plan(
         "installed_date",
         "relationships",
         "asset_id",
+        "lifecycle_status",
+        "replacement",
     ):
         for unique_id, asset_uuid in sorted(unique_ids_by_kind[kind].items()):
             entity_id = entity_registry.async_get_entity_id(

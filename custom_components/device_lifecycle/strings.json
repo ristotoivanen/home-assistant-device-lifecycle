@@ -157,7 +157,9 @@
       "asset_created": "Asset {asset_id} — {asset_name} was created.",
       "asset_deployment_updated": "Deployment status for {asset_id} — {asset_name} was updated.",
       "asset_ha_relationship_updated": "The Home Assistant device link for {asset_id} — {asset_name} was updated.",
+      "asset_lifecycle_updated": "Lifecycle status for {asset_id} — {asset_name} was updated.",
       "asset_purchase_updated": "The Purchase for {asset_id} — {asset_name} was updated.",
+      "asset_replacement_updated": "The replacement relationship for {asset_id} — {asset_name} was updated.",
       "asset_related_device_added": "A related Home Assistant device was added to {asset_id} — {asset_name}.",
       "asset_related_device_removed": "A related Home Assistant device was removed from {asset_id} — {asset_name}.",
       "asset_updated": "Asset {asset_id} — {asset_name} was updated."
@@ -165,6 +167,7 @@
     "error": {
       "asset_missing": "The selected Asset no longer exists.",
       "asset_store_error": "The change could not be saved. Nothing was changed.",
+      "confirmation_required": "Confirm this operation to continue.",
       "device_already_linked": "The selected Home Assistant device is already linked to Asset {owner_asset_id}.",
       "device_lifecycle_device_not_allowed": "The selected device is not eligible to be linked as an external Home Assistant device.",
       "device_missing": "The selected Home Assistant device is missing or unavailable.",
@@ -175,12 +178,26 @@
       "invalid_deployment_state": "Select a valid Deployment status.",
       "invalid_ha_relationship_action": "Select Link device, Unlink device, or Replace device as appropriate.",
       "invalid_installed_date": "Enter a valid installation date.",
+      "invalid_lifecycle_status": "Select a valid Lifecycle status.",
       "invalid_purchase": "The selected Purchase cannot be linked to this Asset.",
+      "invalid_replacement_reason": "Select a valid replacement reason.",
+      "lifecycle_chain_invalid": "The Lifecycle history is inconsistent. Nothing was changed.",
+      "lifecycle_date_in_future": "The Lifecycle effective date cannot be in the future.",
+      "lifecycle_no_change": "The selected Lifecycle status is already current. Nothing was changed.",
       "no_assets": "There are no Assets to manage yet.",
       "non_physical_device_not_allowed": "Select a physical Home Assistant device provided by another integration.",
       "purchase_conflict": "This Asset is already linked to a different Purchase. Review its current Purchase and try again.",
+      "persistence_error": "The change could not be durably verified. Nothing was published.",
       "related_device_is_primary": "The selected Home Assistant device is already the primary device for this Asset.",
       "related_device_not_found": "The selected related relationship no longer exists. Review the current relationships and try again.",
+      "replacement_cycle": "This relationship would create a replacement cycle.",
+      "replacement_date_in_future": "The replacement effective date cannot be in the future.",
+      "replacement_graph_invalid": "The replacement graph is inconsistent. Nothing was changed.",
+      "replacement_missing": "The selected active replacement relationship no longer exists.",
+      "replacement_predecessor_conflict": "The predecessor Asset already has an active successor.",
+      "replacement_self_reference": "An Asset cannot replace itself.",
+      "replacement_successor_conflict": "The successor Asset already has an active predecessor.",
+      "replacement_void_reason_required": "Enter a non-empty reason for voiding the relationship.",
       "service_device_not_allowed": "The selected item is a Home Assistant service rather than a physical device."
     },
     "step": {
@@ -194,6 +211,28 @@
         },
         "description": "Asset: {asset}. Current Home Assistant Area: {current_area}. Deployment status is independent of any linked Home Assistant device. Use the clear controls to remove the Installation date or Area. An unavailable Area remains unchanged until you clear or replace it.",
         "title": "Deployment status"
+      },
+      "asset_lifecycle": {
+        "data": {
+          "effective_date": "Effective date",
+          "lifecycle_status": "New status",
+          "notes": "Notes"
+        },
+        "data_description": {
+          "effective_date": "Optional. Today is suggested, and you can clear it.",
+          "notes": "Optional note recorded only on this immutable transition."
+        },
+        "description": "Asset: {asset}. The current status is preselected. Lifecycle and Deployment are independent.",
+        "title": "Lifecycle status"
+      },
+      "asset_replacement": {
+        "description": "Asset: {asset}. Replacement connects physical Assets only and does not transfer Purchases, warranty, Deployment, Runtime, Areas, or Home Assistant relationships.",
+        "menu_options": {
+          "manage_asset_replacement": "Manage existing relationship",
+          "replacement_replaced_by": "This Asset was replaced by…",
+          "replacement_replaces": "This Asset replaces…"
+        },
+        "title": "Asset replacement"
       },
       "change_asset_purchase": {
         "data": {
@@ -224,6 +263,33 @@
         },
         "description": "Changing {asset} to Not deployed will clear its current Home Assistant Area: {current_area}. Its Installation date is preserved unless you explicitly changed or cleared it on the previous form.",
         "title": "Clear Home Assistant Area?"
+      },
+      "confirm_disposed": {
+        "data": {
+          "confirm_disposed": "Confirm disposed status"
+        },
+        "description": "Record {asset} as disposed? This does not delete the Asset or its history and can be corrected by a later explicit Lifecycle transition.",
+        "title": "Confirm disposed status"
+      },
+      "confirm_void_replacement": {
+        "data": {
+          "confirm_void": "Confirm voiding",
+          "void_reason": "Void reason"
+        },
+        "description": "Void relationship {relationship} for {asset}? The historical record remains stored permanently.",
+        "title": "Void replacement relationship"
+      },
+      "correct_asset_replacement": {
+        "data": {
+          "effective_date": "Effective date",
+          "notes": "Notes",
+          "predecessor_asset_uuid": "Predecessor Asset",
+          "replacement_reason": "Replacement reason",
+          "successor_asset_uuid": "Successor Asset",
+          "void_reason": "Reason for correcting the old relationship"
+        },
+        "description": "Correct {relationship} for {asset}. The old record is voided and the new relationship is created in one atomic save.",
+        "title": "Correct replacement relationship"
       },
       "edit_asset_metadata": {
         "data": {
@@ -289,11 +355,41 @@
         "description": "Selected Asset: {asset}",
         "menu_options": {
           "asset_deployment": "Deployment status",
+          "asset_lifecycle": "Lifecycle status",
+          "asset_replacement": "Asset replacement",
           "change_asset_purchase": "Change Purchase",
           "edit_asset_metadata": "Edit metadata",
           "ha_relationship": "Home Assistant relationships"
         },
         "title": "Manage Asset"
+      },
+      "manage_asset_replacement": {
+        "data": {
+          "replacement_action": "Action",
+          "replacement_uuid": "Active relationship"
+        },
+        "description": "Asset: {asset}. Select an active relationship to correct or void.",
+        "title": "Manage replacement relationship"
+      },
+      "replacement_replaced_by": {
+        "data": {
+          "effective_date": "Effective date",
+          "notes": "Notes",
+          "replacement_reason": "Replacement reason",
+          "replacement_target_asset_uuid": "Successor Asset"
+        },
+        "description": "Asset: {asset}. Select the physical Asset that replaced this Asset.",
+        "title": "This Asset was replaced by…"
+      },
+      "replacement_replaces": {
+        "data": {
+          "effective_date": "Effective date",
+          "notes": "Notes",
+          "replacement_reason": "Replacement reason",
+          "replacement_target_asset_uuid": "Predecessor Asset"
+        },
+        "description": "Asset: {asset}. Select the physical Asset that this Asset replaces.",
+        "title": "This Asset replaces…"
       }
     }
   },
@@ -309,6 +405,31 @@
       "options": {
         "replace": "Replace device",
         "unlink": "Unlink device"
+      }
+    },
+    "lifecycle_status": {
+      "options": {
+        "active": "Active",
+        "disposed": "Disposed",
+        "lost": "Lost",
+        "retired": "Retired",
+        "unknown": "Unknown"
+      }
+    },
+    "replacement_action": {
+      "options": {
+        "correct": "Correct relationship",
+        "void": "Void relationship"
+      }
+    },
+    "replacement_reason": {
+      "options": {
+        "failure": "Failure",
+        "other": "Other",
+        "planned_refresh": "Planned refresh",
+        "unknown": "Unknown",
+        "upgrade": "Upgrade",
+        "warranty_rma": "Warranty RMA"
       }
     },
     "runtime_mode": {
@@ -331,6 +452,16 @@
       "lifecycle": {
         "name": "Lifecycle"
       },
+      "lifecycle_status": {
+        "name": "Lifecycle status",
+        "state": {
+          "active": "Active",
+          "disposed": "Disposed",
+          "lost": "Lost",
+          "retired": "Retired",
+          "unknown": "Unknown"
+        }
+      },
       "deployment": {
         "name": "Deployment",
         "state": {
@@ -338,6 +469,9 @@
           "not_deployed": "Not deployed",
           "deployed": "Deployed"
         }
+      },
+      "installed_date": {
+        "name": "Installation date"
       },
       "relationships": {
         "name": "Relationships",
@@ -352,6 +486,15 @@
       },
       "runtime_hours": {
         "name": "Runtime hours"
+      },
+      "replacement": {
+        "name": "Replacement",
+        "state": {
+          "chain_member": "Chain member",
+          "none": "None",
+          "replaced_by": "Replaced by",
+          "replaces": "Replaces"
+        }
       }
     }
   }

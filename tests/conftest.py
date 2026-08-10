@@ -117,13 +117,19 @@ def asset_store_data_v1_1() -> AssetStoreData:
 
 @pytest.fixture
 def asset_store_data(asset_store_data_v1_1: AssetStoreData) -> AssetStoreData:
-    """Return the representative payload after migration to schema 2.1."""
+    """Return the representative payload after migration to schema 3.1."""
     data = deepcopy(asset_store_data_v1_1)
     asset = data["assets"][ASSET_UUID]
     asset[CONF_DEPLOYMENT_STATE] = DEPLOYMENT_STATE_UNKNOWN
     asset[CONF_HA_AREA_ID] = None
     asset["runtime"] = {"total_seconds": None}
+    asset["lifecycle"] = {
+        "status": "unknown",
+        "current_event_uuid": None,
+    }
     asset["field_sources"]["purchase_uuid"] = "purchase"
+    data["lifecycle_events"] = {}
+    data["replacement_records"] = {}
     return data
 
 
