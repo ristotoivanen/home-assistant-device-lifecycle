@@ -266,6 +266,135 @@ async def test_legacy_restore_import_is_exact_and_once(
     manager._store.async_save.assert_not_awaited()
 
 
+async def test_legacy_restore_import_survives_missing_primary_device(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+    entity_registry: er.EntityRegistry,
+    asset_store_data: AssetStoreData,
+) -> None:
+    """A stale primary device cannot erase or reset legacy Runtime."""
+    manager = _manager(hass, asset_store_data)
+    device = _register_device(hass, device_registry)
+    manager._data["assets"][ASSET_UUID]["ha_device_refs"] = [
+        {"device_id": device.id, "role": "primary"}
+    ]
+    original_refs = deepcopy(
+        manager._data["assets"][ASSET_UUID]["ha_device_refs"]
+    )
+    entry = _runtime_entry(device_id=device.id)
+    entry.runtime_data = manager
+    entry.add_to_hass(hass)
+    entity_id = _register_runtime_entity(entry, entity_registry, device)
+    _mock_native_restore(hass, entity_id, Decimal("1284.53"))
+    initialize_runtime = AsyncMock(
+        wraps=manager.async_initialize_new_runtime,
+    )
+    manager.async_initialize_new_runtime = initialize_runtime
+    missing_device_add = Mock()
+
+    with patch.object(device_registry, "async_get", return_value=None):
+        await async_setup_entry(hass, entry, missing_device_add)
+
+    assert manager.runtime_total_seconds(ASSET_UUID) == Decimal("4624308.00")
+    initialize_runtime.assert_not_awaited()
+    missing_device_add.assert_not_called()
+    registry_entry = entity_registry.async_get(entity_id)
+    assert registry_entry is not None
+    assert registry_entry.entity_id == entity_id
+    assert registry_entry.unique_id == runtime_unique_id(ASSET_UUID)
+    assert registry_entry.device_id == device.id
+    assert manager.asset(ASSET_UUID)["ha_device_refs"] == original_refs
+    manager._store.async_save.assert_awaited_once()
+
+    manager._store.async_save.reset_mock()
+    _mock_native_restore(hass, entity_id, Decimal(9999))
+    available_device_add = Mock()
+    await async_setup_entry(hass, entry, available_device_add)
+
+    manager._store.async_save.assert_not_awaited()
+    available_device_add.assert_called_once()
+    projected = available_device_add.call_args.args[0][0]
+    assert projected.native_value == Decimal("1284.530000")
+    assert projected.device_entry.id == device.id
+    assert manager.runtime_total_seconds(ASSET_UUID) == Decimal("4624308.00")
+    assert entity_registry.async_get(entity_id).entity_id == entity_id
+    assert manager.asset(ASSET_UUID)["ha_device_refs"] == original_refs
+
+
+@pytest.mark.parametrize("restore_value", [None, "not-a-number"])
+async def test_missing_primary_device_preserves_unresolved_legacy_runtime(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+    entity_registry: er.EntityRegistry,
+    asset_store_data: AssetStoreData,
+    restore_value: str | None,
+) -> None:
+    """Missing or invalid restore data stays null without losing identity."""
+    manager = _manager(hass, asset_store_data)
+    device = _register_device(hass, device_registry)
+    manager._data["assets"][ASSET_UUID]["ha_device_refs"] = [
+        {"device_id": device.id, "role": "primary"}
+    ]
+    original_refs = deepcopy(
+        manager._data["assets"][ASSET_UUID]["ha_device_refs"]
+    )
+    entry = _runtime_entry(device_id=device.id)
+    entry.runtime_data = manager
+    entry.add_to_hass(hass)
+    entity_id = _register_runtime_entity(entry, entity_registry, device)
+    if restore_value is not None:
+        _mock_native_restore(hass, entity_id, restore_value)
+    initialize_runtime = AsyncMock(
+        wraps=manager.async_initialize_new_runtime,
+    )
+    manager.async_initialize_new_runtime = initialize_runtime
+    add_entities = Mock()
+
+    with patch.object(device_registry, "async_get", return_value=None):
+        await async_setup_entry(hass, entry, add_entities)
+
+    assert manager.runtime_total_seconds(ASSET_UUID) is None
+    initialize_runtime.assert_not_awaited()
+    add_entities.assert_not_called()
+    registry_entry = entity_registry.async_get(entity_id)
+    assert registry_entry is not None
+    assert registry_entry.entity_id == entity_id
+    assert registry_entry.unique_id == runtime_unique_id(ASSET_UUID)
+    assert registry_entry.device_id == device.id
+    assert manager.asset(ASSET_UUID)["ha_device_refs"] == original_refs
+    manager._store.async_save.assert_not_awaited()
+
+
+async def test_marked_runtime_initializes_with_missing_primary_device(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+    entity_registry: er.EntityRegistry,
+    asset_store_data: AssetStoreData,
+) -> None:
+    """A marked Runtime initializes zero but stays hidden without its device."""
+    manager = _manager(hass, asset_store_data)
+    device = _register_device(hass, device_registry)
+    manager._data["assets"][ASSET_UUID]["ha_device_refs"] = [
+        {"device_id": device.id, "role": "primary"}
+    ]
+    entry = _runtime_entry(device_id=device.id, marker=True)
+    entry.runtime_data = manager
+    entry.add_to_hass(hass)
+    entity_id = _register_runtime_entity(entry, entity_registry, device)
+    add_entities = Mock()
+
+    with patch.object(device_registry, "async_get", return_value=None):
+        await async_setup_entry(hass, entry, add_entities)
+
+    assert manager.runtime_total_seconds(ASSET_UUID) == Decimal(0)
+    manager._store.async_save.assert_awaited_once()
+    add_entities.assert_not_called()
+    assert entity_registry.async_get(entity_id).entity_id == entity_id
+    assert manager.asset(ASSET_UUID)["ha_device_refs"] == [
+        {"device_id": device.id, "role": "primary"}
+    ]
+
+
 async def test_canonical_total_always_wins_over_restore(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
@@ -898,3 +1027,37 @@ async def test_v2_downgrade_is_rejected_without_rewrite(
     )
     assert STORAGE_VERSION == 2
     assert STORAGE_MINOR_VERSION == 1
+
+
+async def test_future_v2_minor_is_rejected_without_rewrite(
+    hass: HomeAssistant,
+    hass_storage: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+    asset_store_data: AssetStoreData,
+) -> None:
+    """A future same-major Store fails closed instead of HA fallback."""
+    hass_storage[STORAGE_KEY] = {
+        "version": 2,
+        "minor_version": 2,
+        "key": STORAGE_KEY,
+        "data": {
+            **deepcopy(asset_store_data),
+            "future_minor_only": {"opaque": True},
+        },
+    }
+    before = deepcopy(hass_storage[STORAGE_KEY])
+    monkeypatch.setattr(
+        "custom_components.device_lifecycle.storage.json_util.load_json",
+        lambda _path: deepcopy(hass_storage.get(STORAGE_KEY, {})),
+    )
+    store = DeviceLifecycleStore(hass)
+    store.async_save = AsyncMock(wraps=store.async_save)
+
+    with pytest.raises(
+        AssetStoreError,
+        match=r"Unsupported Asset Core Store version 2\.2; expected 2\.1",
+    ):
+        await store.async_load()
+
+    store.async_save.assert_not_awaited()
+    assert hass_storage[STORAGE_KEY] == before

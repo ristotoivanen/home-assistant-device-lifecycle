@@ -282,17 +282,17 @@ async def async_setup_entry(
             expected_unique_ids: set[str] = set()
             runtime_entities: list[DeviceRuntimeHoursSensor] = []
 
-            if device_entry is not None and source_entity_id and asset is not None:
+            if asset is not None:
                 unique_id = runtime_unique_id(asset["asset_uuid"])
                 expected_unique_ids.add(unique_id)
                 asset_uuid = asset["asset_uuid"]
 
-                if asset_uuid in runtime_asset_uuids:
+                if source_entity_id and asset_uuid in runtime_asset_uuids:
                     _LOGGER.error(
                         "Refusing a second active Runtime writer for Asset %s",
                         asset_uuid,
                     )
-                else:
+                elif source_entity_id:
                     runtime_asset_uuids.add(asset_uuid)
                     canonical_total = manager.runtime_total_seconds(asset_uuid)
 
@@ -346,7 +346,10 @@ async def async_setup_entry(
 
                     if canonical_total is not None:
                         initialized_asset = manager.asset(asset_uuid)
-                        if initialized_asset is not None:
+                        if (
+                            device_entry is not None
+                            and initialized_asset is not None
+                        ):
                             runtime_entities.append(
                                 DeviceRuntimeHoursSensor(
                                     data=dict(subentry.data),

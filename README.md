@@ -309,7 +309,22 @@ Device Lifecycle 0.5.7 does not provide Asset archive/delete, restore, purge, me
 - **0.5.6 — HA Relationships**
 - **0.5.7 — Asset Runtime**
 - **0.6.x — Maintenance**
+- **Future — Data Safety follow-ups**
 - **0.7.x — Home Assistant Exposure / UI**
+  - expose Asset metadata for Home Assistant UI and dashboards
+  - Relationship Exposure
+    - expose primary and related Home Assistant relationships as read-only data
+    - expose relationship display names and stable references
+    - expose available / stale / missing relationship state
+    - never silently remap a missing relationship
+    - relationship-aware Asset detail views
+  - exposure does not:
+    - introduce new relationship roles
+    - change primary / related semantics
+    - perform automatic device matching
+    - modify the Home Assistant Device Registry
+    - change Asset identity
+    - use related devices as Runtime fallback
 - **0.8.x — Lifecycle & Replacement**
 - **0.9.x — Portability & Hardening**
 - **1.0 — Stable**

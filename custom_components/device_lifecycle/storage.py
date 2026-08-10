@@ -120,7 +120,11 @@ class DeviceLifecycleStore(Store[AssetStoreData]):
 
         if old_major_version == STORAGE_VERSION:
             if old_minor_version != STORAGE_MINOR_VERSION:
-                raise NotImplementedError
+                raise AssetStoreError(
+                    "Unsupported Asset Core Store version "
+                    f"{old_major_version}.{old_minor_version}; "
+                    f"expected {STORAGE_VERSION}.{STORAGE_MINOR_VERSION}"
+                )
             _validate_store_data(data)
             return data
 
