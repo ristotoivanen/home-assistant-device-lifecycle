@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from copy import deepcopy
 from datetime import date
 from decimal import Decimal, InvalidOperation
 import os
 import re
-from typing import Any, cast
+from typing import Any, Callable, TypeVar, cast
 from uuid import UUID, uuid4
 
 from homeassistant.config_entries import ConfigEntry
@@ -35,6 +36,7 @@ from .const import (
     CONF_WARRANTY_TYPE,
     CONF_WARRANTY_UNTIL,
     DEPLOYMENT_STATES,
+    DEPLOYMENT_STATE_NOT_DEPLOYED,
     DEPLOYMENT_STATE_UNKNOWN,
     DOMAIN,
     SUBENTRY_TYPE_PURCHASE,
@@ -61,6 +63,20 @@ FIELD_SOURCE_PURCHASE = "purchase"
 FIELD_SOURCE_USER = "user"
 FIELD_SOURCES = frozenset(
     {FIELD_SOURCE_HOME_ASSISTANT, FIELD_SOURCE_PURCHASE, FIELD_SOURCE_USER}
+)
+
+_MutationResultT = TypeVar("_MutationResultT")
+_UNSET = object()
+_USER_EDITABLE_ASSET_FIELDS = (
+    "name",
+    "category",
+    "manufacturer",
+    "model",
+    "model_id",
+    "serial_number",
+    "sw_version",
+    "hw_version",
+    "notes",
 )
 
 
@@ -399,6 +415,7 @@ class AssetStoreManager:
         self.hass = hass
         self._store = DeviceLifecycleStore(hass)
         self._data: AssetStoreData = _empty_store_data()
+        self._mutation_lock = asyncio.Lock()
 
     async def async_setup(self) -> None:
         """Load and validate persistent Asset Core data."""
@@ -430,6 +447,56 @@ class AssetStoreManager:
         data = cast(AssetStoreData, deepcopy(loaded))
         _validate_store_data(data)
         self._data = data
+
+    async def _async_mutate(
+        self,
+        mutator: Callable[[AssetStoreData], _MutationResultT],
+    ) -> _MutationResultT:
+        """Apply one all-or-nothing mutation to a detached Store snapshot."""
+        async with self._mutation_lock:
+            data = deepcopy(self._data)
+            result = mutator(data)
+            _validate_store_data(data)
+
+            if data != self._data:
+                await self._store.async_save(data)
+
+            # Publish only after the complete snapshot has been validated and
+            # durably saved. A mutation or save exception leaves _data untouched.
+            self._data = data
+            return deepcopy(result)
+
+    def _require_asset(
+        self,
+        data: AssetStoreData,
+        asset_uuid: str,
+    ) -> AssetData:
+        """Return an Asset from a transaction snapshot or raise a stable error."""
+        asset = data["assets"].get(asset_uuid)
+        if asset is None:
+            raise AssetStoreError(f"Asset {asset_uuid} does not exist")
+        return asset
+
+    def _normalize_user_asset_text(
+        self,
+        value: Any,
+        field: str,
+        *,
+        required: bool = False,
+    ) -> str | None:
+        """Normalize user-owned Asset text without accepting implicit coercion."""
+        if value is None:
+            if required:
+                raise AssetStoreError(f"Asset {field} is required")
+            return None
+        if not isinstance(value, str):
+            raise AssetStoreError(f"Asset {field} must be text")
+        if required:
+            value = value.strip()
+            if not value:
+                raise AssetStoreError(f"Asset {field} is required")
+            return value
+        return value if value else None
 
     def _allocate_asset_id(self, data: AssetStoreData) -> str:
         """Allocate a permanent short Asset ID without ever recycling it."""
@@ -486,12 +553,239 @@ class AssetStoreManager:
         data["assets"][asset_uuid] = asset
         return asset
 
+    async def async_create_manual_asset(
+        self,
+        *,
+        name: str,
+        category: str | None = None,
+        manufacturer: str | None = None,
+        model: str | None = None,
+        model_id: str | None = None,
+        serial_number: str | None = None,
+        sw_version: str | None = None,
+        hw_version: str | None = None,
+        notes: str | None = None,
+    ) -> AssetData:
+        """Create a persistent physical Asset without Purchase or HA identity."""
+        normalized_name = self._normalize_user_asset_text(
+            name,
+            "name",
+            required=True,
+        )
+        metadata = {
+            "category": self._normalize_user_asset_text(category, "category"),
+            "manufacturer": self._normalize_user_asset_text(
+                manufacturer,
+                "manufacturer",
+            ),
+            "model": self._normalize_user_asset_text(model, "model"),
+            "model_id": self._normalize_user_asset_text(model_id, "model_id"),
+            "serial_number": self._normalize_user_asset_text(
+                serial_number,
+                "serial_number",
+            ),
+            "sw_version": self._normalize_user_asset_text(
+                sw_version,
+                "sw_version",
+            ),
+            "hw_version": self._normalize_user_asset_text(
+                hw_version,
+                "hw_version",
+            ),
+            "notes": self._normalize_user_asset_text(notes, "notes"),
+        }
+
+        def _create(data: AssetStoreData) -> AssetData:
+            asset_uuid = str(uuid4())
+            if asset_uuid in data["assets"]:
+                raise AssetStoreError("Generated Asset UUID is already in use")
+            sources = {"name": FIELD_SOURCE_USER}
+            sources.update(
+                {
+                    field: FIELD_SOURCE_USER
+                    for field, value in metadata.items()
+                    if value is not None
+                }
+            )
+            asset: AssetData = {
+                "asset_uuid": asset_uuid,
+                "asset_id": self._allocate_asset_id(data),
+                "name": cast(str, normalized_name),
+                "category": metadata["category"],
+                "purchase_uuid": None,
+                CONF_DEPLOYMENT_STATE: DEPLOYMENT_STATE_NOT_DEPLOYED,
+                "installed_date": None,
+                CONF_HA_AREA_ID: None,
+                "warranty": {"type": WARRANTY_NONE, "until": None},
+                "manufacturer": metadata["manufacturer"],
+                "model": metadata["model"],
+                "model_id": metadata["model_id"],
+                "serial_number": metadata["serial_number"],
+                "sw_version": metadata["sw_version"],
+                "hw_version": metadata["hw_version"],
+                "notes": metadata["notes"],
+                "field_sources": sources,
+                "ha_device_refs": [],
+            }
+            data["assets"][asset_uuid] = asset
+            return asset
+
+        return await self._async_mutate(_create)
+
+    async def async_update_asset_metadata(
+        self,
+        asset_uuid: str,
+        *,
+        name: str | object = _UNSET,
+        category: str | None | object = _UNSET,
+        manufacturer: str | None | object = _UNSET,
+        model: str | None | object = _UNSET,
+        model_id: str | None | object = _UNSET,
+        serial_number: str | None | object = _UNSET,
+        sw_version: str | None | object = _UNSET,
+        hw_version: str | None | object = _UNSET,
+        notes: str | None | object = _UNSET,
+    ) -> AssetData:
+        """Apply user-owned physical metadata without changing Asset identity."""
+        values = {
+            "name": name,
+            "category": category,
+            "manufacturer": manufacturer,
+            "model": model,
+            "model_id": model_id,
+            "serial_number": serial_number,
+            "sw_version": sw_version,
+            "hw_version": hw_version,
+            "notes": notes,
+        }
+        normalized: dict[str, str | None] = {}
+        for field in _USER_EDITABLE_ASSET_FIELDS:
+            value = values[field]
+            if value is _UNSET:
+                continue
+            normalized[field] = self._normalize_user_asset_text(
+                value,
+                field,
+                required=field == "name",
+            )
+
+        def _update(data: AssetStoreData) -> AssetData:
+            asset = self._require_asset(data, asset_uuid)
+            sources = asset.setdefault("field_sources", {})
+            for field, value in normalized.items():
+                asset[field] = value  # type: ignore[literal-required]
+                sources[field] = FIELD_SOURCE_USER
+            return asset
+
+        return await self._async_mutate(_update)
+
+    async def async_set_asset_purchase(
+        self,
+        asset_uuid: str,
+        purchase_uuid: str | None,
+    ) -> AssetData:
+        """Atomically assign or clear both sides of a Purchase relationship."""
+
+        def _set_purchase(data: AssetStoreData) -> AssetData:
+            asset = self._require_asset(data, asset_uuid)
+            old_purchase_uuid = asset.get("purchase_uuid")
+            target: PurchaseData | None = None
+
+            if purchase_uuid is not None:
+                target = data["purchases"].get(purchase_uuid)
+                if target is None:
+                    raise AssetStoreError(f"Purchase {purchase_uuid} does not exist")
+                if not target.get("configured") and old_purchase_uuid != purchase_uuid:
+                    raise AssetStoreError(
+                        f"Purchase {purchase_uuid} is not currently configured"
+                    )
+
+            if old_purchase_uuid is not None and old_purchase_uuid != purchase_uuid:
+                old_purchase = data["purchases"].get(old_purchase_uuid)
+                if old_purchase is not None:
+                    old_purchase["asset_uuids"] = [
+                        member_uuid
+                        for member_uuid in old_purchase.get("asset_uuids", [])
+                        if member_uuid != asset_uuid
+                    ]
+
+            asset["purchase_uuid"] = purchase_uuid
+            asset.setdefault("field_sources", {})[
+                "purchase_uuid"
+            ] = FIELD_SOURCE_USER
+
+            if target is not None and asset_uuid not in target["asset_uuids"]:
+                target["asset_uuids"].append(asset_uuid)
+
+            return asset
+
+        return await self._async_mutate(_set_purchase)
+
+    async def async_set_asset_deployment(
+        self,
+        asset_uuid: str,
+        *,
+        deployment_state: str | object = _UNSET,
+        installed_date: str | None | object = _UNSET,
+        ha_area_id: str | None | object = _UNSET,
+    ) -> AssetData:
+        """Set explicit deployment metadata without inference or HA writes."""
+        updates = {
+            CONF_DEPLOYMENT_STATE: deployment_state,
+            CONF_INSTALLED_DATE: installed_date,
+            CONF_HA_AREA_ID: ha_area_id,
+        }
+
+        def _set_deployment(data: AssetStoreData) -> AssetData:
+            asset = self._require_asset(data, asset_uuid)
+            sources = asset.setdefault("field_sources", {})
+            for field, value in updates.items():
+                if value is _UNSET:
+                    continue
+                asset[field] = value  # type: ignore[literal-required]
+                sources[field] = FIELD_SOURCE_USER
+            return asset
+
+        return await self._async_mutate(_set_deployment)
+
+    async def async_link_asset_device(
+        self,
+        asset_uuid: str,
+        device_id: str,
+        *,
+        replace: bool = False,
+    ) -> AssetData:
+        """Set a stored primary HA reference without touching the HA registry."""
+        if not isinstance(device_id, str) or not device_id.strip():
+            raise AssetStoreError("Home Assistant device ID is required")
+        device_id = device_id.strip()
+
+        def _link(data: AssetStoreData) -> AssetData:
+            asset = self._require_asset(data, asset_uuid)
+            current = _primary_device_id(asset)
+            if current not in (None, device_id) and not replace:
+                raise AssetStoreError(
+                    f"Asset {asset_uuid} is already linked to HA device {current}"
+                )
+
+            existing = self._find_asset_by_primary_device(data, device_id)
+            if existing is not None and existing["asset_uuid"] != asset_uuid:
+                raise AssetStoreError(
+                    f"HA device {device_id} is already linked to another Asset"
+                )
+
+            self._ensure_primary_reference(asset, device_id)
+            return asset
+
+        return await self._async_mutate(_link)
+
     def _ensure_primary_reference(self, asset: AssetData, device_id: str) -> None:
         """Set a primary HA relationship while preserving future related links."""
         related: list[HADeviceReference] = [
             reference
             for reference in asset.get("ha_device_refs", [])
             if reference.get("role") != DEVICE_ROLE_PRIMARY
+            and reference.get("device_id") != device_id
         ]
         asset["ha_device_refs"] = [
             {"device_id": device_id, "role": DEVICE_ROLE_PRIMARY},
@@ -637,16 +931,13 @@ class AssetStoreManager:
                 if asset_uuid != asset["asset_uuid"]
             ]
 
-    async def async_reconcile_entry(self, entry: ConfigEntry) -> None:
-        """Normalize current 0.4.x/0.5.x subentries into Asset Core storage.
-
-        Storage is written before adding the generated UUID references back to
-        config subentries. If a later config-entry write fails, the next setup can
-        recover the same objects by subentry/device relationship instead of
-        allocating new Asset IDs.
-        """
-        data = deepcopy(self._data)
-        device_registry = dr.async_get(self.hass)
+    def _reconcile_entry_data(
+        self,
+        data: AssetStoreData,
+        entry: ConfigEntry,
+        device_registry: dr.DeviceRegistry,
+    ) -> dict[str, dict[str, Any]]:
+        """Reconcile config subentries into one transaction snapshot."""
         subentry_updates: dict[str, dict[str, Any]] = {}
         touched_purchase_uuids: set[str] = set()
 
@@ -777,11 +1068,24 @@ class AssetStoreManager:
             if updated_raw != raw:
                 subentry_updates[subentry.subentry_id] = updated_raw
 
-        _validate_store_data(data)
+        return subentry_updates
 
-        if data != self._data:
-            await self._store.async_save(data)
-        self._data = data
+    async def async_reconcile_entry(self, entry: ConfigEntry) -> None:
+        """Normalize current 0.4.x/0.5.x subentries into Asset Core storage.
+
+        Storage is written before adding the generated UUID references back to
+        config subentries. If a later config-entry write fails, the next setup can
+        recover the same objects by subentry/device relationship instead of
+        allocating new Asset IDs.
+        """
+        device_registry = dr.async_get(self.hass)
+        subentry_updates = await self._async_mutate(
+            lambda data: self._reconcile_entry_data(
+                data,
+                entry,
+                device_registry,
+            )
+        )
 
         # Only after the normalized private store is safely written do we persist
         # the generated stable references into HA config subentries.
