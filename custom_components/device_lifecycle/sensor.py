@@ -253,6 +253,7 @@ async def async_setup_entry(
             )
 
     parent_entities: list[SensorEntity] = []
+    deployment_entities: list[DeviceDeploymentSensor] = []
     relationship_entities: list[DeviceRelationshipsSensor] = []
     for asset in assets:
         purchase = manager.purchase(asset.get("purchase_uuid"))
@@ -270,6 +271,10 @@ async def async_setup_entry(
                 else str(purchase.get("name") or purchase["purchase_uuid"])
             )
         device_entry = asset_devices[asset["asset_uuid"]]
+        deployment = DeviceDeploymentSensor(
+            asset=asset,
+            device_entry=device_entry,
+        )
         parent_entities.extend(
             (
                 DeviceLifecycleSensor(
@@ -279,16 +284,14 @@ async def async_setup_entry(
                     unique_id=lifecycle_unique_id(asset["asset_uuid"]),
                     purchase_title=purchase_title,
                 ),
-                DeviceDeploymentSensor(
-                    asset=asset,
-                    device_entry=device_entry,
-                ),
+                deployment,
                 DeviceAssetIdSensor(
                     asset=asset,
                     device_entry=device_entry,
                 ),
             )
         )
+        deployment_entities.append(deployment)
         relationships = DeviceRelationshipsSensor(
             asset=asset,
             device_entry=device_entry,
@@ -299,6 +302,15 @@ async def async_setup_entry(
 
     if parent_entities:
         async_add_entities(parent_entities)
+
+    if deployment_entities:
+        coordinator = _DeploymentAreaRegistryCoordinator(
+            hass,
+            deployment_entities,
+        )
+        unsubscribe = coordinator.async_start()
+        if hasattr(entry, "async_on_unload"):
+            entry.async_on_unload(unsubscribe)
 
     if relationship_entities:
         coordinator = _RelationshipsRegistryCoordinator(
@@ -637,6 +649,11 @@ class DeviceDeploymentSensor(SensorEntity):
         self._attr_unique_id = deployment_unique_id(asset["asset_uuid"])
 
     @property
+    def stored_area_id(self) -> str | None:
+        """Return the exact canonical Area Registry reference."""
+        return self._asset.get("ha_area_id")
+
+    @property
     def native_value(self) -> str:
         """Return the exact canonical Deployment state."""
         return self._asset["deployment_state"]
@@ -663,6 +680,47 @@ class DeviceDeploymentSensor(SensorEntity):
             "asset_area_name": area.name if area is not None else None,
             "asset_area_state": area_state,
         }
+
+
+class _DeploymentAreaRegistryCoordinator:
+    """One Area Registry listener shared by all Deployment entities."""
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        entities: list[DeviceDeploymentSensor],
+    ) -> None:
+        """Index Deployment entities by their exact stored Area IDs."""
+        self._hass = hass
+        self._entities_by_area_id: dict[
+            str,
+            list[DeviceDeploymentSensor],
+        ] = {}
+        for entity in entities:
+            if (area_id := entity.stored_area_id) is not None:
+                self._entities_by_area_id.setdefault(area_id, []).append(entity)
+
+    @callback
+    def _async_registry_updated(
+        self,
+        event: Event[ar.EventAreaRegistryUpdatedData],
+    ) -> None:
+        """Refresh only projections storing the exact changed Area ID."""
+        area_id = event.data["area_id"]
+        if area_id is None:
+            return
+        for entity in self._entities_by_area_id.get(area_id, ()):
+            entity.async_write_ha_state()
+
+    @callback
+    def async_start(self) -> Callable[[], None]:
+        """Subscribe once when at least one Asset stores an Area ID."""
+        if not self._entities_by_area_id:
+            return lambda: None
+        return self._hass.bus.async_listen(
+            ar.EVENT_AREA_REGISTRY_UPDATED,
+            self._async_registry_updated,
+        )
 
 
 class DeviceRelationshipsSensor(SensorEntity):

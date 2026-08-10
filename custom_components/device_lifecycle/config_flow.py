@@ -1069,8 +1069,8 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         asset: AssetData,
         description: str,
     ) -> ConfigFlowResult:
-        """Finish without changing parent config-entry options."""
-        return self.async_create_entry(
+        """Finish and reload exposure without changing config-entry options."""
+        result = self.async_create_entry(
             title="",
             data=dict(self.config_entry.options),
             description=description,
@@ -1079,6 +1079,8 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 "asset_name": asset["name"],
             },
         )
+        self.hass.config_entries.async_schedule_reload(self.config_entry.entry_id)
+        return result
 
     def _show_asset_selection(
         self,

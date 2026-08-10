@@ -32,6 +32,7 @@ from custom_components.device_lifecycle.sensor import (
     DeviceDeploymentSensor,
     DeviceLifecycleSensor,
     DeviceRelationshipsSensor,
+    _DeploymentAreaRegistryCoordinator,
     _RelationshipsRegistryCoordinator,
     async_setup_entry,
 )
@@ -177,6 +178,78 @@ async def test_deployment_states_and_area_resolution_are_exact(
     assert stale["asset_area_id"] == "stale-workshop-id"
     assert stale["asset_area_name"] is None
     assert asset["ha_area_id"] == "stale-workshop-id"
+
+
+async def test_area_events_refresh_only_exact_deployment_projection(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+    area_registry: ar.AreaRegistry,
+    asset_store_data,
+) -> None:
+    """Rename and removal refresh the exact stored ID without remapping it."""
+    entry = _entry(hass)
+    device = _asset_device(device_registry, entry)
+    area = area_registry.async_create("Workshop")
+    unrelated = area_registry.async_create("Office")
+    asset = deepcopy(asset_store_data["assets"][ASSET_UUID])
+    asset["ha_area_id"] = area.id
+    stored_area_id = asset["ha_area_id"]
+    sensor = DeviceDeploymentSensor(asset=asset, device_entry=device)
+    sensor.hass = hass
+    sensor.async_write_ha_state = Mock()
+    coordinator = _DeploymentAreaRegistryCoordinator(hass, [sensor])
+    unsubscribe = coordinator.async_start()
+
+    area_registry.async_update(unrelated.id, name="Unrelated rename")
+    await hass.async_block_till_done()
+    sensor.async_write_ha_state.assert_not_called()
+
+    area_registry.async_update(area.id, name="Renamed workshop")
+    await hass.async_block_till_done()
+    sensor.async_write_ha_state.assert_called_once_with()
+    assert sensor.extra_state_attributes["asset_area_name"] == "Renamed workshop"
+    assert sensor.extra_state_attributes["asset_area_state"] == "present"
+    assert asset["ha_area_id"] == stored_area_id == area.id
+
+    sensor.async_write_ha_state.reset_mock()
+    area_registry.async_delete(area.id)
+    await hass.async_block_till_done()
+    sensor.async_write_ha_state.assert_called_once_with()
+    assert sensor.extra_state_attributes["asset_area_name"] is None
+    assert sensor.extra_state_attributes["asset_area_state"] == "missing"
+    assert asset["ha_area_id"] == stored_area_id
+    unsubscribe()
+
+
+async def test_area_listener_is_removed_with_config_entry_unload(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+    area_registry: ar.AreaRegistry,
+    asset_store_data,
+) -> None:
+    """The setup-scoped Area listener is unregistered during entry unload."""
+    area = area_registry.async_create("Workshop")
+    asset_store_data["assets"][ASSET_UUID]["ha_area_id"] = area.id
+    manager = _manager(hass, asset_store_data)
+    entry = _entry(hass)
+    _asset_device(device_registry, entry)
+    entry.runtime_data = manager
+    add_entities = Mock()
+
+    await async_setup_entry(hass, entry, add_entities)
+
+    deployment = next(
+        entity
+        for entity in add_entities.call_args.args[0]
+        if isinstance(entity, DeviceDeploymentSensor)
+    )
+    deployment.hass = hass
+    deployment.async_write_ha_state = Mock()
+    await entry._async_process_on_unload(hass)
+
+    area_registry.async_update(area.id, name="After unload")
+    await hass.async_block_till_done()
+    deployment.async_write_ha_state.assert_not_called()
 
 
 async def test_relationship_states_names_and_counts_are_deterministic(
