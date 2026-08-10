@@ -15,6 +15,7 @@ from homeassistant.config_entries import (
     ConfigFlowResult,
     ConfigSubentryFlow,
     FlowType,
+    OptionsFlow,
     SOURCE_USER,
     SubentryFlowContext,
     SubentryFlowResult,
@@ -28,11 +29,17 @@ from homeassistant.util.unit_conversion import PowerConverter
 
 from .const import (
     CONFIG_ENTRY_VERSION,
+    CONF_ASSET_NAME,
     CONF_ASSET_UUID,
+    CONF_CATEGORY,
     CONF_CURRENCY,
     CONF_DEVICE_ID,
     CONF_DEVICE_IDS,
+    CONF_HW_VERSION,
     CONF_INSTALLED_DATE,
+    CONF_MANUFACTURER,
+    CONF_MODEL,
+    CONF_MODEL_ID,
     CONF_NOTES,
     CONF_POWER_HYSTERESIS,
     CONF_POWER_THRESHOLD,
@@ -44,7 +51,9 @@ from .const import (
     CONF_RECEIPT_URL,
     CONF_RUNTIME_MODE,
     CONF_SELLER,
+    CONF_SERIAL_NUMBER,
     CONF_SOURCE_ENTITY_ID,
+    CONF_SW_VERSION,
     CONF_WARRANTY_TYPE,
     CONF_WARRANTY_UNTIL,
     DEFAULT_POWER_HYSTERESIS,
@@ -61,8 +70,23 @@ from .const import (
     WARRANTY_TWO_YEARS,
     WARRANTY_TYPES,
 )
+from .models import AssetData, PurchaseData
+from .storage import AssetStoreError, AssetStoreManager
 
 MAIN_UNIQUE_ID = "device_lifecycle_main"
+NO_PURCHASE_SELECTION = "__no_purchase__"
+
+ASSET_METADATA_FIELDS = (
+    CONF_ASSET_NAME,
+    CONF_CATEGORY,
+    CONF_MANUFACTURER,
+    CONF_MODEL,
+    CONF_MODEL_ID,
+    CONF_SERIAL_NUMBER,
+    CONF_SW_VERSION,
+    CONF_HW_VERSION,
+    CONF_NOTES,
+)
 
 ON_STATE_SOURCE_DOMAINS = frozenset(
     {
@@ -237,6 +261,38 @@ def _purchase_schema(
 
     key, val = optional(CONF_NOTES, _text_selector(multiline=True))
     fields[key] = val
+
+    return vol.Schema(fields)
+
+
+def _asset_metadata_schema(
+    purchase_options: list[selector.SelectOptionDict] | None = None,
+) -> vol.Schema:
+    """Build the manual Asset create/edit metadata form."""
+    fields: dict[Any, Any] = {
+        vol.Required(CONF_ASSET_NAME): _text_selector(),
+        vol.Optional(CONF_CATEGORY): _text_selector(),
+        vol.Optional(CONF_MANUFACTURER): _text_selector(),
+        vol.Optional(CONF_MODEL): _text_selector(),
+        vol.Optional(CONF_MODEL_ID): _text_selector(),
+        vol.Optional(CONF_SERIAL_NUMBER): _text_selector(),
+        vol.Optional(CONF_SW_VERSION): _text_selector(),
+        vol.Optional(CONF_HW_VERSION): _text_selector(),
+        vol.Optional(CONF_NOTES): _text_selector(multiline=True),
+    }
+
+    if purchase_options is not None:
+        fields[
+            vol.Required(
+                CONF_PURCHASE_UUID,
+                default=NO_PURCHASE_SELECTION,
+            )
+        ] = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=purchase_options,
+                mode=selector.SelectSelectorMode.DROPDOWN,
+            )
+        )
 
     return vol.Schema(fields)
 
@@ -447,6 +503,22 @@ def _purchase_title(data: dict[str, Any]) -> str:
     seller = str(data.get(CONF_SELLER) or "Ostos").strip()
     purchase_date = str(data.get(CONF_PURCHASE_DATE) or "").strip()
     return _compact_title(f"{seller} {purchase_date}".strip())
+
+
+def _asset_label(asset: AssetData) -> str:
+    """Return the stable Asset choice label shown in management flows."""
+    return f"{asset['asset_id']} — {asset['name']}"
+
+
+def _stored_purchase_label(purchase: PurchaseData) -> str:
+    """Return a readable label for one stored Purchase relationship."""
+    if purchase.get("name"):
+        return str(purchase["name"])
+
+    seller = str(purchase.get("seller") or "").strip()
+    purchase_date = str(purchase.get("purchase_date") or "").strip()
+    label = f"{seller} {purchase_date}".strip()
+    return label or purchase["purchase_uuid"]
 
 
 def _runtime_title(registry: dr.DeviceRegistry, device_id: str) -> str:
@@ -669,6 +741,14 @@ class DeviceLifecycleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     VERSION = CONFIG_ENTRY_VERSION
 
+    @staticmethod
+    @callback
+    def async_get_options_flow(
+        config_entry: ConfigEntry,
+    ) -> DeviceLifecycleOptionsFlow:
+        """Return the parent integration Asset management flow."""
+        return DeviceLifecycleOptionsFlow()
+
     async def async_step_user(
         self,
         user_input: dict[str, Any] | None = None,
@@ -712,6 +792,330 @@ class DeviceLifecycleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             SUBENTRY_TYPE_PURCHASE: PurchaseSubentryFlow,
             SUBENTRY_TYPE_RUNTIME: RuntimeSubentryFlow,
         }
+
+
+class DeviceLifecycleOptionsFlow(OptionsFlow):
+    """Manage physical Assets through the single parent integration."""
+
+    @property
+    def _manager(self) -> AssetStoreManager:
+        """Return the loaded Asset Store manager for the parent entry."""
+        return self.config_entry.runtime_data
+
+    def _localized_label(self, english: str, finnish: str) -> str:
+        """Return a minimal localized dynamic selector label."""
+        if self.hass.config.language.lower().startswith("fi"):
+            return finnish
+        return english
+
+    def _asset_choices(self) -> list[selector.SelectOptionDict]:
+        """Return every Asset keyed by immutable UUID."""
+        return [
+            selector.SelectOptionDict(
+                value=asset["asset_uuid"],
+                label=_asset_label(asset),
+            )
+            for asset in sorted(
+                self._manager.assets(),
+                key=lambda item: item["asset_id"],
+            )
+        ]
+
+    def _purchase_choices(
+        self,
+        current_purchase_uuid: str | None = None,
+    ) -> list[selector.SelectOptionDict]:
+        """Return configured Purchases plus the current historical relationship."""
+        choices = [
+            selector.SelectOptionDict(
+                value=NO_PURCHASE_SELECTION,
+                label=self._localized_label("No Purchase", "Ei ostosta"),
+            )
+        ]
+        purchases = sorted(
+            self._manager.purchases(),
+            key=lambda item: (
+                _stored_purchase_label(item).casefold(),
+                item["purchase_uuid"],
+            ),
+        )
+        for purchase in purchases:
+            if (
+                not purchase.get("configured")
+                and purchase["purchase_uuid"] != current_purchase_uuid
+            ):
+                continue
+            label = _stored_purchase_label(purchase)
+            if not purchase.get("configured"):
+                label = self._localized_label(
+                    f"Historical — {label}",
+                    f"Historiallinen — {label}",
+                )
+            choices.append(
+                selector.SelectOptionDict(
+                    value=purchase["purchase_uuid"],
+                    label=label,
+                )
+            )
+        return choices
+
+    def _metadata_input(self, user_input: dict[str, Any]) -> dict[str, Any]:
+        """Return exactly the editable physical metadata fields."""
+        return {field: user_input.get(field) for field in ASSET_METADATA_FIELDS}
+
+    def _storage_error_key(self, err: Exception) -> str:
+        """Map storage failures to safe flow errors without fabricating data."""
+        message = str(err).lower()
+        if "asset" in message and "does not exist" in message:
+            return "asset_missing"
+        if "purchase" in message and (
+            "does not exist" in message or "not currently configured" in message
+        ):
+            return "invalid_purchase"
+        if "relationship" in message or "conflict" in message:
+            return "purchase_conflict"
+        return "asset_store_error"
+
+    def _finish_asset_action(
+        self,
+        asset: AssetData,
+        description: str,
+    ) -> ConfigFlowResult:
+        """Finish without changing parent config-entry options."""
+        return self.async_create_entry(
+            title="",
+            data=dict(self.config_entry.options),
+            description=description,
+            description_placeholders={
+                "asset_id": asset["asset_id"],
+                "asset_name": asset["name"],
+            },
+        )
+
+    def _show_asset_selection(
+        self,
+        *,
+        errors: dict[str, str] | None = None,
+    ) -> ConfigFlowResult:
+        """Show the all-Asset selector, including legacy and Runtime Assets."""
+        choices = self._asset_choices()
+        if not choices and not errors:
+            errors = {"base": "no_assets"}
+        return self.async_show_form(
+            step_id="manage_asset",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_ASSET_UUID): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=choices,
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    )
+                }
+            ),
+            errors=errors or {},
+        )
+
+    async def async_step_init(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Show the extensible Asset management entry menu."""
+        return self.async_show_menu(
+            step_id="init",
+            menu_options=["create_manual_asset", "manage_asset"],
+        )
+
+    async def async_step_create_manual_asset(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Create one ordinary Asset Core record without requiring an HA device."""
+        errors: dict[str, str] = {}
+        purchase_choices = self._purchase_choices()
+
+        if user_input is not None:
+            purchase_uuid = str(
+                user_input.get(CONF_PURCHASE_UUID) or NO_PURCHASE_SELECTION
+            )
+            valid_purchase_uuids = {
+                option["value"] for option in purchase_choices
+            }
+            if purchase_uuid not in valid_purchase_uuids:
+                errors["base"] = "invalid_purchase"
+            else:
+                pending_asset_uuid = getattr(
+                    self,
+                    "_pending_created_asset_uuid",
+                    None,
+                )
+                try:
+                    if pending_asset_uuid is None:
+                        asset = await self._manager.async_create_manual_asset(
+                            **self._metadata_input(user_input)
+                        )
+                        self._pending_created_asset_uuid = asset["asset_uuid"]
+                    else:
+                        asset = await self._manager.async_update_asset_metadata(
+                            pending_asset_uuid,
+                            **self._metadata_input(user_input),
+                        )
+
+                    if purchase_uuid != NO_PURCHASE_SELECTION:
+                        asset = await self._manager.async_set_asset_purchase(
+                            asset["asset_uuid"],
+                            purchase_uuid,
+                        )
+                except (AssetStoreError, OSError) as err:
+                    errors["base"] = self._storage_error_key(err)
+                else:
+                    return self._finish_asset_action(asset, "asset_created")
+
+        schema = _asset_metadata_schema(purchase_choices)
+        suggested = dict(user_input or {})
+        suggested.setdefault(CONF_PURCHASE_UUID, NO_PURCHASE_SELECTION)
+        return self.async_show_form(
+            step_id="create_manual_asset",
+            data_schema=self.add_suggested_values_to_schema(schema, suggested),
+            errors=errors,
+        )
+
+    async def async_step_manage_asset(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Select any existing Asset by UUID-backed DLxxxx label."""
+        if user_input is not None:
+            asset_uuid = str(user_input.get(CONF_ASSET_UUID) or "")
+            if self._manager.asset(asset_uuid) is None:
+                return self._show_asset_selection(
+                    errors={"base": "asset_missing"}
+                )
+            self._selected_asset_uuid = asset_uuid
+            return await self.async_step_manage_asset_menu()
+
+        return self._show_asset_selection()
+
+    async def async_step_manage_asset_menu(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Show actions for the selected Asset, ready for later extensions."""
+        asset_uuid = getattr(self, "_selected_asset_uuid", None)
+        asset = self._manager.asset(asset_uuid)
+        if asset is None:
+            return self._show_asset_selection(errors={"base": "asset_missing"})
+        return self.async_show_menu(
+            step_id="manage_asset_menu",
+            menu_options=["edit_asset_metadata", "change_asset_purchase"],
+            description_placeholders={"asset": _asset_label(asset)},
+        )
+
+    async def async_step_edit_asset_metadata(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Edit physical metadata while preserving all Asset relationships."""
+        asset_uuid = getattr(self, "_selected_asset_uuid", None)
+        asset = self._manager.asset(asset_uuid)
+        if asset is None:
+            return self._show_asset_selection(errors={"base": "asset_missing"})
+
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            try:
+                asset = await self._manager.async_update_asset_metadata(
+                    asset["asset_uuid"],
+                    **self._metadata_input(user_input),
+                )
+            except (AssetStoreError, OSError) as err:
+                errors["base"] = self._storage_error_key(err)
+            else:
+                return self._finish_asset_action(asset, "asset_updated")
+
+        defaults = {
+            field: asset.get(field) or ""
+            for field in ASSET_METADATA_FIELDS
+        }
+        if user_input is not None:
+            defaults.update(user_input)
+        return self.async_show_form(
+            step_id="edit_asset_metadata",
+            data_schema=self.add_suggested_values_to_schema(
+                _asset_metadata_schema(),
+                defaults,
+            ),
+            errors=errors,
+            description_placeholders={"asset": _asset_label(asset)},
+        )
+
+    async def async_step_change_asset_purchase(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Assign, preserve, or clear the selected Asset's Purchase."""
+        asset_uuid = getattr(self, "_selected_asset_uuid", None)
+        asset = self._manager.asset(asset_uuid)
+        if asset is None:
+            return self._show_asset_selection(errors={"base": "asset_missing"})
+
+        current_purchase_uuid = asset.get("purchase_uuid")
+        purchase_choices = self._purchase_choices(current_purchase_uuid)
+        current_selection = current_purchase_uuid or NO_PURCHASE_SELECTION
+        current_label = next(
+            (
+                option["label"]
+                for option in purchase_choices
+                if option["value"] == current_selection
+            ),
+            current_selection,
+        )
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            selected = str(
+                user_input.get(CONF_PURCHASE_UUID) or NO_PURCHASE_SELECTION
+            )
+            valid_purchase_uuids = {
+                option["value"] for option in purchase_choices
+            }
+            if selected not in valid_purchase_uuids:
+                errors["base"] = "invalid_purchase"
+            else:
+                try:
+                    asset = await self._manager.async_set_asset_purchase(
+                        asset["asset_uuid"],
+                        None if selected == NO_PURCHASE_SELECTION else selected,
+                    )
+                except (AssetStoreError, OSError) as err:
+                    errors["base"] = self._storage_error_key(err)
+                else:
+                    return self._finish_asset_action(
+                        asset,
+                        "asset_purchase_updated",
+                    )
+
+        return self.async_show_form(
+            step_id="change_asset_purchase",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_PURCHASE_UUID,
+                        default=current_selection,
+                    ): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=purchase_choices,
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    )
+                }
+            ),
+            errors=errors,
+            description_placeholders={
+                "asset": _asset_label(asset),
+                "current_purchase": current_label,
+            },
+        )
 
 
 class PurchaseSubentryFlow(ConfigSubentryFlow):

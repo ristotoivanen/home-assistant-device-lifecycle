@@ -1173,6 +1173,14 @@ class AssetStoreManager:
             return None
         return deepcopy(purchase)
 
+    def assets(self) -> list[AssetData]:
+        """Return detached snapshots of all persistent Assets."""
+        return deepcopy(list(self._data["assets"].values()))
+
+    def purchases(self) -> list[PurchaseData]:
+        """Return detached snapshots of all persistent Purchases."""
+        return deepcopy(list(self._data["purchases"].values()))
+
     @property
     def asset_count(self) -> int:
         """Return number of persistent Assets."""

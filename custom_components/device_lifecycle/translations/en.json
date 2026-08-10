@@ -152,6 +152,82 @@
       }
     }
   },
+  "options": {
+    "create_entry": {
+      "asset_created": "Asset {asset_id} — {asset_name} was created.",
+      "asset_purchase_updated": "The Purchase relationship for {asset_id} — {asset_name} was updated.",
+      "asset_updated": "Asset {asset_id} — {asset_name} was updated."
+    },
+    "error": {
+      "asset_missing": "The selected Asset no longer exists.",
+      "asset_store_error": "The Asset Store rejected or could not save the change. No replacement Asset was created.",
+      "invalid_purchase": "The selected Purchase is not available for a new relationship.",
+      "no_assets": "There are no Assets to manage yet.",
+      "purchase_conflict": "The Purchase relationship conflicts with existing Asset Store ownership."
+    },
+    "step": {
+      "change_asset_purchase": {
+        "data": {
+          "purchase_uuid": "Purchase"
+        },
+        "description": "Asset: {asset}. Current relationship: {current_purchase}. Historical Purchases are shown only when already related to this Asset; choose one of the currently configured Purchases or No Purchase to replace it explicitly.",
+        "title": "Change Purchase relationship"
+      },
+      "create_manual_asset": {
+        "data": {
+          "category": "Category",
+          "hw_version": "Hardware version",
+          "manufacturer": "Manufacturer",
+          "model": "Model",
+          "model_id": "Model ID",
+          "name": "Display name",
+          "notes": "Notes",
+          "purchase_uuid": "Purchase",
+          "serial_number": "Serial number",
+          "sw_version": "Software version"
+        },
+        "description": "Create a physical Asset without requiring a Home Assistant device. UUID and DL ID are generated automatically and cannot be edited.",
+        "title": "Create manual Asset"
+      },
+      "edit_asset_metadata": {
+        "data": {
+          "category": "Category",
+          "hw_version": "Hardware version",
+          "manufacturer": "Manufacturer",
+          "model": "Model",
+          "model_id": "Model ID",
+          "name": "Display name",
+          "notes": "Notes",
+          "serial_number": "Serial number",
+          "sw_version": "Software version"
+        },
+        "description": "Edit physical metadata for {asset}. Asset UUID, DL ID, deployment, warranty and Home Assistant relationships are not editable here.",
+        "title": "Edit Asset metadata"
+      },
+      "init": {
+        "menu_options": {
+          "create_manual_asset": "Create manual Asset",
+          "manage_asset": "Manage Asset"
+        },
+        "title": "Asset management"
+      },
+      "manage_asset": {
+        "data": {
+          "asset_uuid": "Asset"
+        },
+        "description": "Select an Asset by its persistent DL ID and display name.",
+        "title": "Manage Asset"
+      },
+      "manage_asset_menu": {
+        "description": "Selected Asset: {asset}",
+        "menu_options": {
+          "change_asset_purchase": "Change Purchase relationship",
+          "edit_asset_metadata": "Edit metadata"
+        },
+        "title": "Manage Asset"
+      }
+    }
+  },
   "selector": {
     "runtime_mode": {
       "options": {
