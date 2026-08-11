@@ -180,6 +180,16 @@ def test_strings_source_matches_english_translation() -> None:
     assert strings == _translation("en")
 
 
+@pytest.mark.parametrize("language", LANGUAGES)
+def test_malformed_history_date_errors_are_available_at_runtime(
+    language: str,
+) -> None:
+    """Both custom-integration translation files expose the new stable errors."""
+    errors = _translation(language)["options"]["error"]
+    assert errors["invalid_lifecycle_effective_date"].strip()
+    assert errors["invalid_replacement_effective_date"].strip()
+
+
 def test_exposure_entity_names_and_enum_states_are_translated() -> None:
     """Both supported languages expose the new translated entity contract."""
     english = _translation("en")["entity"]["sensor"]

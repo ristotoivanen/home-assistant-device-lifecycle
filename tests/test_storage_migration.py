@@ -41,6 +41,7 @@ from .conftest import (
     DEVICE_ID,
     PURCHASE_SUBENTRY_ID,
     PURCHASE_UUID,
+    STORE_V1_2_SECOND_ASSET_UUID,
 )
 
 
@@ -198,28 +199,73 @@ async def test_store_migration_is_idempotent(
     assert current_schema == migrated_once
 
 
-async def test_store_1_2_related_refs_survive_v2_migration(
+async def test_authentic_store_1_2_migrates_directly_to_3_1_without_rewrite(
     hass: HomeAssistant,
-    asset_store_data,
+    asset_store_data_v1_2,
 ) -> None:
-    """Existing Store 1.2 related references survive the v2 boundary."""
-    source = deepcopy(asset_store_data)
-    source["assets"][ASSET_UUID]["ha_device_refs"].extend(
-        [
-            {"device_id": "related-one", "role": "related"},
-            {"device_id": "related-two", "role": "related"},
-        ]
+    """A historical 0.5.6 payload gains only Runtime and 3.1 history fields."""
+    source = deepcopy(asset_store_data_v1_2)
+    source_before = deepcopy(source)
+    assert all("runtime" not in asset for asset in source["assets"].values())
+    assert all("lifecycle" not in asset for asset in source["assets"].values())
+    assert "lifecycle_events" not in source
+    assert "replacement_records" not in source
+
+    migrated = await DeviceLifecycleStore(hass)._async_migrate_func(1, 2, source)
+
+    assert source == source_before
+    assert migrated["next_asset_number"] == source_before["next_asset_number"] == 8
+    assert list(migrated["purchases"]) == list(source_before["purchases"])
+    assert migrated["purchases"][PURCHASE_UUID]["purchase_uuid"] == PURCHASE_UUID
+    assert migrated["purchases"][PURCHASE_UUID]["config_subentry_id"] == (
+        PURCHASE_SUBENTRY_ID
     )
-    store = DeviceLifecycleStore(hass)
+    assert migrated["purchases"][PURCHASE_UUID]["asset_uuids"] == [
+        STORE_V1_2_SECOND_ASSET_UUID,
+        ASSET_UUID,
+    ]
 
-    loaded = await store._async_migrate_func(1, 2, source)
-
-    assert loaded == source
-    assert loaded["assets"][ASSET_UUID]["ha_device_refs"][-2:] == [
+    migrated_asset = migrated["assets"][ASSET_UUID]
+    source_asset = source_before["assets"][ASSET_UUID]
+    assert migrated_asset["asset_uuid"] == source_asset["asset_uuid"] == ASSET_UUID
+    assert migrated_asset["asset_id"] == source_asset["asset_id"] == "DL0007"
+    assert migrated_asset[CONF_DEPLOYMENT_STATE] == source_asset[
+        CONF_DEPLOYMENT_STATE
+    ]
+    assert migrated_asset[CONF_HA_AREA_ID] == source_asset[CONF_HA_AREA_ID]
+    assert migrated_asset["purchase_uuid"] == source_asset["purchase_uuid"]
+    assert migrated_asset["ha_device_refs"] == source_asset["ha_device_refs"] == [
+        {"device_id": DEVICE_ID, "role": "primary"},
         {"device_id": "related-one", "role": "related"},
         {"device_id": "related-two", "role": "related"},
     ]
-    _validate_store_data(loaded)
+    assert migrated_asset["field_sources"] == source_asset["field_sources"]
+    for field in (
+        "name",
+        "category",
+        "manufacturer",
+        "model",
+        "model_id",
+        "serial_number",
+        "sw_version",
+        "hw_version",
+        "notes",
+        "installed_date",
+        "warranty",
+    ):
+        assert migrated_asset[field] == source_asset[field]
+
+    comparable = deepcopy(migrated)
+    for asset in comparable["assets"].values():
+        assert asset.pop("runtime") == {"total_seconds": None}
+        assert asset.pop("lifecycle") == {
+            "status": "unknown",
+            "current_event_uuid": None,
+        }
+    assert comparable.pop("lifecycle_events") == {}
+    assert comparable.pop("replacement_records") == {}
+    assert comparable == source_before
+    _validate_store_data(migrated)
 
 
 async def test_migration_preserves_purchase_with_zero_assets(

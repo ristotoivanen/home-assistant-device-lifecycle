@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import timedelta
 from unittest.mock import AsyncMock
+from uuid import UUID
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -16,6 +17,62 @@ from custom_components.device_lifecycle.storage import (
     AssetStorePersistenceError,
     _validate_store_data,
 )
+
+LONG_REPLACEMENT_CHAIN_SIZE = 1500
+
+
+def _large_replacement_graph(*, size: int, cycle: bool) -> dict:
+    """Build one deterministic Store 3.1 graph without persistence mutations."""
+    asset_uuids = [str(UUID(int=index + 1)) for index in range(size)]
+    assets = {
+        asset_uuid: {
+            "asset_uuid": asset_uuid,
+            "asset_id": f"DL{index + 1:04d}",
+            "name": f"Long-chain Asset {index + 1}",
+            "category": None,
+            "purchase_uuid": None,
+            "deployment_state": "not_deployed",
+            "installed_date": None,
+            "ha_area_id": None,
+            "warranty": {"type": "none", "until": None},
+            "runtime": {"total_seconds": None},
+            "lifecycle": {"status": "unknown", "current_event_uuid": None},
+            "manufacturer": None,
+            "model": None,
+            "model_id": None,
+            "serial_number": None,
+            "sw_version": None,
+            "hw_version": None,
+            "notes": None,
+            "field_sources": {"name": "user"},
+            "ha_device_refs": [],
+        }
+        for index, asset_uuid in enumerate(asset_uuids)
+    }
+    endpoints = list(zip(asset_uuids[:-1], asset_uuids[1:], strict=True))
+    if cycle:
+        endpoints.append((asset_uuids[-1], asset_uuids[0]))
+    replacement_records = {}
+    for index, (predecessor, successor) in enumerate(endpoints):
+        replacement_uuid = str(UUID(int=100_000 + index))
+        replacement_records[replacement_uuid] = {
+            "replacement_uuid": replacement_uuid,
+            "predecessor_asset_uuid": predecessor,
+            "successor_asset_uuid": successor,
+            "reason": "planned_refresh",
+            "effective_date": "2020-01-01",
+            "recorded_at": "2026-01-01T00:00:00+00:00",
+            "notes": None,
+            "voided_at": None,
+            "void_reason": None,
+        }
+    return {
+        "next_asset_number": size + 1,
+        "purchases": {},
+        "assets": assets,
+        "lifecycle_events": {},
+        "replacement_records": replacement_records,
+    }
 
 
 def _manager(hass: HomeAssistant) -> AssetStoreManager:
@@ -32,6 +89,26 @@ async def _assets(
         await manager.async_create_manual_asset(name=f"Asset {index}")
         for index in range(count)
     ]
+
+
+def test_iterative_replacement_validation_accepts_1500_asset_chain() -> None:
+    """A valid chain longer than Python's recursion limit validates safely."""
+    data = _large_replacement_graph(size=LONG_REPLACEMENT_CHAIN_SIZE, cycle=False)
+
+    _validate_store_data(data)
+
+    assert len(data["assets"]) == LONG_REPLACEMENT_CHAIN_SIZE
+    assert len(data["replacement_records"]) == LONG_REPLACEMENT_CHAIN_SIZE - 1
+
+
+def test_iterative_replacement_validation_rejects_1500_asset_cycle() -> None:
+    """The iterative walk detects a cycle spanning the entire large graph."""
+    data = _large_replacement_graph(size=LONG_REPLACEMENT_CHAIN_SIZE, cycle=True)
+
+    with pytest.raises(AssetStoreError) as raised:
+        _validate_store_data(data)
+
+    assert raised.value.code == "replacement_cycle"
 
 
 async def test_valid_long_replacement_chain_and_detached_queries(
@@ -230,6 +307,31 @@ async def test_replacement_dates_and_chain_ordering(
             notes=None,
         )
     assert raised.value.code == "replacement_date_in_future"
+
+
+@pytest.mark.parametrize("effective_date", [123, "not-a-date", "20260810"])
+async def test_malformed_replacement_effective_date_has_distinct_code(
+    hass: HomeAssistant,
+    effective_date: object,
+) -> None:
+    """Only valid canonical dates can be attached to replacement records."""
+    manager = _manager(hass)
+    a, b, *_ = await _assets(manager)
+    before = deepcopy(manager._data)
+    manager._store.async_save.reset_mock()
+
+    with pytest.raises(AssetStoreError) as raised:
+        await manager.async_create_asset_replacement(
+            a["asset_uuid"],
+            b["asset_uuid"],
+            reason="failure",
+            effective_date=effective_date,  # type: ignore[arg-type]
+            notes=None,
+        )
+
+    assert raised.value.code == "invalid_replacement_effective_date"
+    assert manager._data == before
+    manager._store.async_save.assert_not_awaited()
 
 
 async def test_unknown_date_does_not_infer_chain_order(

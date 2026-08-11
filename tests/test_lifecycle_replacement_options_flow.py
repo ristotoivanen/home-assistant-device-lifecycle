@@ -131,6 +131,30 @@ async def test_lifecycle_future_date_and_persistence_failure_reload_zero_times(
     schedule_reload.assert_not_called()
 
 
+async def test_lifecycle_malformed_effective_date_has_specific_flow_error(
+    hass: HomeAssistant,
+) -> None:
+    """Malformed transition dates are not presented as valid dates in the future."""
+    manager = _manager(hass)
+    asset = await manager.async_create_manual_asset(name="Malformed lifecycle date")
+    flow = await _select(hass, manager, asset["asset_uuid"])
+    manager._store.async_save.reset_mock()
+
+    with patch.object(
+        hass.config_entries, "async_schedule_reload"
+    ) as schedule_reload:
+        result = await flow.async_step_asset_lifecycle(
+            {
+                CONF_LIFECYCLE_STATUS: "retired",
+                CONF_EFFECTIVE_DATE: "20260810",
+            }
+        )
+
+    assert result["errors"] == {"base": "invalid_lifecycle_effective_date"}
+    manager._store.async_save.assert_not_awaited()
+    schedule_reload.assert_not_called()
+
+
 async def test_disposed_requires_separate_confirmation(
     hass: HomeAssistant,
 ) -> None:
@@ -400,6 +424,31 @@ async def test_replacement_persistence_failure_has_zero_reload(
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "persistence_error"}
     assert manager._data == before
+    schedule_reload.assert_not_called()
+
+
+async def test_replacement_malformed_effective_date_has_specific_flow_error(
+    hass: HomeAssistant,
+) -> None:
+    """Malformed replacement dates use their stable error and never reload."""
+    manager = _manager(hass)
+    old, new, _other = await _three_assets(manager)
+    flow = await _select(hass, manager, old["asset_uuid"])
+    manager._store.async_save.reset_mock()
+
+    with patch.object(
+        hass.config_entries, "async_schedule_reload"
+    ) as schedule_reload:
+        result = await flow.async_step_replacement_replaced_by(
+            {
+                CONF_REPLACEMENT_TARGET_ASSET_UUID: new["asset_uuid"],
+                CONF_REPLACEMENT_REASON: "failure",
+                CONF_EFFECTIVE_DATE: "20260810",
+            }
+        )
+
+    assert result["errors"] == {"base": "invalid_replacement_effective_date"}
+    manager._store.async_save.assert_not_awaited()
     schedule_reload.assert_not_called()
 
 

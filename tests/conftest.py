@@ -30,6 +30,8 @@ from custom_components.device_lifecycle.const import (
     CONF_SOURCE_ENTITY_ID,
     CONF_WARRANTY_TYPE,
     CONF_WARRANTY_UNTIL,
+    DEPLOYMENT_STATE_DEPLOYED,
+    DEPLOYMENT_STATE_NOT_DEPLOYED,
     DEPLOYMENT_STATE_UNKNOWN,
     RUNTIME_MODE_POWER,
     SUBENTRY_TYPE_PURCHASE,
@@ -46,6 +48,7 @@ DEVICE_ID = "existing-ha-device-id"
 PURCHASE_SUBENTRY_ID = "purchase-subentry-id"
 RUNTIME_SUBENTRY_ID = "runtime-subentry-id"
 SOURCE_ENTITY_ID = "sensor.workshop_power"
+STORE_V1_2_SECOND_ASSET_UUID = "33333333-3333-4333-8333-333333333333"
 
 
 @pytest.fixture(autouse=True)
@@ -113,6 +116,58 @@ def asset_store_data_v1_1() -> AssetStoreData:
             }
         },
     }
+
+
+@pytest.fixture
+def asset_store_data_v1_2(
+    asset_store_data_v1_1: AssetStoreData,
+) -> AssetStoreData:
+    """Return a representative Device Lifecycle 0.5.6 Store 1.2 payload."""
+    data = deepcopy(asset_store_data_v1_1)
+    asset = data["assets"][ASSET_UUID]
+    asset[CONF_DEPLOYMENT_STATE] = DEPLOYMENT_STATE_DEPLOYED
+    asset[CONF_HA_AREA_ID] = "workshop-area"
+    asset["field_sources"]["purchase_uuid"] = "purchase"
+    asset["ha_device_refs"] = [
+        {"device_id": DEVICE_ID, "role": "primary"},
+        {"device_id": "related-one", "role": "related"},
+        {"device_id": "related-two", "role": "related"},
+    ]
+
+    second_asset = deepcopy(asset)
+    second_asset.update(
+        {
+            "asset_uuid": STORE_V1_2_SECOND_ASSET_UUID,
+            "asset_id": "DL0006",
+            "name": "Workshop controller",
+            "category": "Controller",
+            CONF_DEPLOYMENT_STATE: DEPLOYMENT_STATE_NOT_DEPLOYED,
+            CONF_HA_AREA_ID: None,
+            "installed_date": None,
+            "manufacturer": "Second manufacturer",
+            "model": "Second model",
+            "model_id": "SECOND-1",
+            "serial_number": "SECOND-SERIAL",
+            "sw_version": "5.6.0",
+            "hw_version": "B",
+            "notes": "Second historical Asset",
+            "ha_device_refs": [
+                {"device_id": "second-primary", "role": "primary"},
+                {"device_id": "second-related", "role": "related"},
+            ],
+        }
+    )
+    data["assets"][STORE_V1_2_SECOND_ASSET_UUID] = second_asset
+    data["purchases"][PURCHASE_UUID]["asset_uuids"] = [
+        STORE_V1_2_SECOND_ASSET_UUID,
+        ASSET_UUID,
+    ]
+
+    assert "runtime" not in asset
+    assert "lifecycle" not in asset
+    assert "lifecycle_events" not in data
+    assert "replacement_records" not in data
+    return data
 
 
 @pytest.fixture

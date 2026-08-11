@@ -301,6 +301,8 @@ def test_service_device_runtime_title_and_flow_error_mapping(
         code: flow._storage_error_key(AssetStoreError("failure", code=code))
         for code in (
             "asset_missing",
+            "invalid_lifecycle_effective_date",
+            "invalid_replacement_effective_date",
             "lifecycle_date_in_future",
             "replacement_cycle",
             "persistence_error",

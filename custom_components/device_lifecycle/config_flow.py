@@ -967,7 +967,9 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         if isinstance(err, AssetStoreError):
             structured_codes = {
                 "asset_missing",
+                "invalid_lifecycle_effective_date",
                 "invalid_lifecycle_status",
+                "invalid_replacement_effective_date",
                 "invalid_replacement_reason",
                 "lifecycle_chain_invalid",
                 "lifecycle_date_in_future",

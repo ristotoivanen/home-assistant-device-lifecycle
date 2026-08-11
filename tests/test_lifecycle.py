@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import timedelta
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -156,6 +156,36 @@ async def test_same_state_transition_is_a_store_noop(
     manager._store.async_save.assert_not_awaited()
 
 
+@pytest.mark.parametrize(
+    "effective_date",
+    [123, "not-a-date", "20260810", "2099-01-01"],
+)
+async def test_same_state_manager_noop_ignores_transition_only_fields(
+    hass: HomeAssistant,
+    effective_date: object,
+) -> None:
+    """Malformed/future transition fields are irrelevant when no event is created."""
+    manager = _manager(hass)
+    asset = await manager.async_create_manual_asset(name="Strict no-op Asset")
+    before = deepcopy(manager._data)
+    manager._store.async_save.reset_mock()
+
+    with patch("custom_components.device_lifecycle.storage.uuid.uuid4") as event_uuid:
+        returned = await manager.async_set_asset_lifecycle(
+            asset["asset_uuid"],
+            "active",
+            effective_date=effective_date,  # type: ignore[arg-type]
+            notes=object(),  # type: ignore[arg-type]
+        )
+
+    assert returned == asset
+    assert returned is not manager._data["assets"][asset["asset_uuid"]]
+    assert manager._data == before
+    assert len(manager.lifecycle_events_for_asset(asset["asset_uuid"])) == 1
+    event_uuid.assert_not_called()
+    manager._store.async_save.assert_not_awaited()
+
+
 @pytest.mark.parametrize("status", ["stored", "replaced", "returned", ""])
 async def test_invalid_lifecycle_status_is_structured_and_not_saved(
     hass: HomeAssistant,
@@ -214,6 +244,30 @@ async def test_lifecycle_dates_accept_past_today_and_null_but_reject_future(
 
     assert raised.value.code == "lifecycle_date_in_future"
     assert manager._data == before
+
+
+@pytest.mark.parametrize("effective_date", [123, "not-a-date", "20260810"])
+async def test_malformed_lifecycle_effective_date_has_distinct_code(
+    hass: HomeAssistant,
+    effective_date: object,
+) -> None:
+    """Only valid canonical dates can be attached to real lifecycle transitions."""
+    manager = _manager(hass)
+    asset = await manager.async_create_manual_asset(name="Malformed lifecycle date")
+    before = deepcopy(manager._data)
+    manager._store.async_save.reset_mock()
+
+    with pytest.raises(AssetStoreError) as raised:
+        await manager.async_set_asset_lifecycle(
+            asset["asset_uuid"],
+            "retired",
+            effective_date=effective_date,  # type: ignore[arg-type]
+            notes=None,
+        )
+
+    assert raised.value.code == "invalid_lifecycle_effective_date"
+    assert manager._data == before
+    manager._store.async_save.assert_not_awaited()
 
 
 async def test_lifecycle_date_cannot_move_back_between_known_events(

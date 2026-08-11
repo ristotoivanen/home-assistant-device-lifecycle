@@ -364,6 +364,41 @@ def _validate_optional_date(value: Any, field: str) -> None:
         raise AssetStoreError(f"Asset Core {field} is not a valid ISO date") from err
 
 
+def _validate_history_effective_date(
+    value: Any,
+    field: str,
+    *,
+    invalid_code: str,
+    future_code: str,
+) -> date | None:
+    """Validate one canonical, non-future 0.7 history effective date."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise AssetStoreError(
+            f"Asset Core {field} must use canonical YYYY-MM-DD",
+            code=invalid_code,
+        )
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError as err:
+        raise AssetStoreError(
+            f"Asset Core {field} is not a valid calendar date",
+            code=invalid_code,
+        ) from err
+    if parsed.isoformat() != value:
+        raise AssetStoreError(
+            f"Asset Core {field} must use canonical YYYY-MM-DD",
+            code=invalid_code,
+        )
+    if parsed > dt_util.now().date():
+        raise AssetStoreError(
+            f"Asset Core {field} cannot be in the future",
+            code=future_code,
+        )
+    return parsed
+
+
 def _parse_utc_timestamp(value: Any, field: str, *, code: str) -> datetime:
     """Return a valid aware UTC timestamp or fail closed."""
     if not isinstance(value, str):
@@ -447,15 +482,12 @@ def _validate_lifecycle_graph(data: AssetStoreData) -> None:
                 f"Lifecycle event {event_uuid} has an invalid previous UUID",
                 code="lifecycle_chain_invalid",
             )
-        _validate_optional_date(event.get("effective_date"), "lifecycle effective_date")
-        if (
-            event.get("effective_date") is not None
-            and date.fromisoformat(event["effective_date"]) > dt_util.now().date()
-        ):
-            raise AssetStoreError(
-                f"Lifecycle event {event_uuid} has a future effective date",
-                code="lifecycle_date_in_future",
-            )
+        _validate_history_effective_date(
+            event.get("effective_date"),
+            "lifecycle effective_date",
+            invalid_code="invalid_lifecycle_effective_date",
+            future_code="lifecycle_date_in_future",
+        )
         _parse_utc_timestamp(
             event.get("recorded_at"),
             "lifecycle recorded_at",
@@ -650,17 +682,12 @@ def _validate_replacement_graph(data: AssetStoreData) -> None:
                 f"Replacement {replacement_uuid} has an invalid reason",
                 code="invalid_replacement_reason",
             )
-        _validate_optional_date(
-            record.get("effective_date"), "replacement effective_date"
+        _validate_history_effective_date(
+            record.get("effective_date"),
+            "replacement effective_date",
+            invalid_code="invalid_replacement_effective_date",
+            future_code="replacement_date_in_future",
         )
-        if (
-            record.get("effective_date") is not None
-            and date.fromisoformat(record["effective_date"]) > dt_util.now().date()
-        ):
-            raise AssetStoreError(
-                f"Replacement {replacement_uuid} has a future effective date",
-                code="replacement_date_in_future",
-            )
         recorded_at = _parse_utc_timestamp(
             record.get("recorded_at"),
             "replacement recorded_at",
@@ -717,19 +744,23 @@ def _validate_replacement_graph(data: AssetStoreData) -> None:
         incoming[successor] = typed_record
 
     visited: set[str] = set()
-    visiting: set[str] = set()
+    for start_asset_uuid in data["assets"]:
+        if start_asset_uuid in visited:
+            continue
 
-    def _visit(asset_uuid: str) -> None:
-        if asset_uuid in visiting:
-            raise AssetStoreError(
-                "The active replacement graph contains a cycle",
-                code="replacement_cycle",
-            )
-        if asset_uuid in visited:
-            return
-        visiting.add(asset_uuid)
-        record = outgoing.get(asset_uuid)
-        if record is not None:
+        path: set[str] = set()
+        asset_uuid = start_asset_uuid
+        while asset_uuid not in visited:
+            if asset_uuid in path:
+                raise AssetStoreError(
+                    "The active replacement graph contains a cycle",
+                    code="replacement_cycle",
+                )
+            path.add(asset_uuid)
+
+            record = outgoing.get(asset_uuid)
+            if record is None:
+                break
             successor = record["successor_asset_uuid"]
             next_record = outgoing.get(successor)
             if (
@@ -743,12 +774,9 @@ def _validate_replacement_graph(data: AssetStoreData) -> None:
                     "Replacement effective dates decrease along the active chain",
                     code="replacement_graph_invalid",
                 )
-            _visit(successor)
-        visiting.remove(asset_uuid)
-        visited.add(asset_uuid)
+            asset_uuid = successor
 
-    for asset_uuid in data["assets"]:
-        _visit(asset_uuid)
+        visited.update(path)
 
 
 def _validate_store_data(data: AssetStoreData) -> None:
@@ -1371,33 +1399,16 @@ class AssetStoreManager:
         self,
         value: str | None,
         *,
+        invalid_code: str,
         future_code: str,
     ) -> str | None:
         """Validate a user-entered canonical date against HA local today."""
-        if value is None:
-            return None
-        if not isinstance(value, str):
-            raise AssetStoreError(
-                "Effective date must use YYYY-MM-DD",
-                code=future_code,
-            )
-        try:
-            parsed = date.fromisoformat(value)
-        except ValueError as err:
-            raise AssetStoreError(
-                "Effective date must use YYYY-MM-DD",
-                code=future_code,
-            ) from err
-        if parsed.isoformat() != value:
-            raise AssetStoreError(
-                "Effective date must use YYYY-MM-DD",
-                code=future_code,
-            )
-        if parsed > dt_util.now().date():
-            raise AssetStoreError(
-                "Effective date cannot be in the future",
-                code=future_code,
-            )
+        _validate_history_effective_date(
+            value,
+            "effective_date",
+            invalid_code=invalid_code,
+            future_code=future_code,
+        )
         return value
 
     def _normalize_history_notes(self, value: str | None) -> str | None:
@@ -1425,14 +1436,15 @@ class AssetStoreManager:
                     f"Invalid lifecycle status: {status}",
                     code="invalid_lifecycle_status",
                 )
-            normalized_date = self._normalize_effective_date(
-                effective_date,
-                future_code="lifecycle_date_in_future",
-            )
-            normalized_notes = self._normalize_history_notes(notes)
             lifecycle = asset["lifecycle"]
             if lifecycle["status"] == status:
                 return asset
+            normalized_date = self._normalize_effective_date(
+                effective_date,
+                invalid_code="invalid_lifecycle_effective_date",
+                future_code="lifecycle_date_in_future",
+            )
+            normalized_notes = self._normalize_history_notes(notes)
 
             event_uuid = str(uuid.uuid4())
             if event_uuid in data["lifecycle_events"]:
@@ -1579,6 +1591,7 @@ class AssetStoreManager:
             )
         normalized_date = self._normalize_effective_date(
             effective_date,
+            invalid_code="invalid_replacement_effective_date",
             future_code="replacement_date_in_future",
         )
         normalized_notes = self._normalize_history_notes(notes)

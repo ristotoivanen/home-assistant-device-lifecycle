@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -133,7 +133,8 @@ def _set(data: AssetStoreData, path: tuple[str, ...], value: Any) -> None:
         (("lifecycle_events", EVENT_ONE, "from_status"), "stored", "invalid_lifecycle_status"),
         (("lifecycle_events", EVENT_ONE, "to_status"), "unknown", "lifecycle_chain_invalid"),
         (("lifecycle_events", EVENT_ONE, "previous_event_uuid"), "bad", "lifecycle_chain_invalid"),
-        (("lifecycle_events", EVENT_ONE, "effective_date"), 123, "asset_store_error"),
+        (("lifecycle_events", EVENT_ONE, "effective_date"), 123, "invalid_lifecycle_effective_date"),
+        (("lifecycle_events", EVENT_ONE, "effective_date"), "20260809", "invalid_lifecycle_effective_date"),
         (("lifecycle_events", EVENT_ONE, "effective_date"), "2099-01-01", "lifecycle_date_in_future"),
         (("lifecycle_events", EVENT_ONE, "recorded_at"), 123, "lifecycle_chain_invalid"),
         (("lifecycle_events", EVENT_ONE, "recorded_at"), "bad", "lifecycle_chain_invalid"),
@@ -255,7 +256,8 @@ def test_complete_lifecycle_chain_validation(
         (("replacement_records", REPLACEMENT_ONE, "successor_asset_uuid"), THIRD_ASSET, "asset_missing"),
         (("replacement_records", REPLACEMENT_ONE, "successor_asset_uuid"), ASSET_UUID, "replacement_self_reference"),
         (("replacement_records", REPLACEMENT_ONE, "reason"), "returned", "invalid_replacement_reason"),
-        (("replacement_records", REPLACEMENT_ONE, "effective_date"), 123, "asset_store_error"),
+        (("replacement_records", REPLACEMENT_ONE, "effective_date"), 123, "invalid_replacement_effective_date"),
+        (("replacement_records", REPLACEMENT_ONE, "effective_date"), "20260809", "invalid_replacement_effective_date"),
         (("replacement_records", REPLACEMENT_ONE, "effective_date"), "2099-01-01", "replacement_date_in_future"),
         (("replacement_records", REPLACEMENT_ONE, "recorded_at"), "bad", "replacement_graph_invalid"),
         (("replacement_records", REPLACEMENT_ONE, "notes"), 123, "replacement_graph_invalid"),
@@ -271,6 +273,36 @@ def test_replacement_record_validation_rejects_each_corrupt_field(
     """Each permanent record field is checked before graph construction."""
     data = _valid_replacement(asset_store_data)
     _set(data, path, value)
+
+    with pytest.raises(AssetStoreError) as raised:
+        _validate_store_data(data)
+
+    assert raised.value.code == code
+
+
+@pytest.mark.parametrize(
+    ("history_kind", "code"),
+    [
+        ("lifecycle", "invalid_lifecycle_effective_date"),
+        ("replacement", "invalid_replacement_effective_date"),
+    ],
+)
+def test_store_rejects_parseable_noncanonical_history_effective_dates(
+    asset_store_data: AssetStoreData,
+    history_kind: str,
+    code: str,
+) -> None:
+    """Compact ISO input accepted by fromisoformat is not canonical Store data."""
+    noncanonical = "20260809"
+    assert date.fromisoformat(noncanonical).isoformat() == "2026-08-09"
+    if history_kind == "lifecycle":
+        data = _valid_lifecycle(asset_store_data)
+        data["lifecycle_events"][EVENT_ONE]["effective_date"] = noncanonical
+    else:
+        data = _valid_replacement(asset_store_data)
+        data["replacement_records"][REPLACEMENT_ONE][
+            "effective_date"
+        ] = noncanonical
 
     with pytest.raises(AssetStoreError) as raised:
         _validate_store_data(data)
