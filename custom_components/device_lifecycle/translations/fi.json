@@ -1,8 +1,8 @@
 {
-  "title": "Laitteen elinkaari",
+  "title": "Device Lifecycle",
   "config": {
     "abort": {
-      "already_configured": "Laitteen elinkaari on jo lisätty. Lisää uudet ostokset tai käyttötuntiseurannat olemassa olevan integraation sisältä."
+      "already_configured": "Device Lifecycle on jo lisätty. Lisää uudet ostokset tai käyttötuntiseurannat olemassa olevan integraation sisältä."
     },
     "step": {}
   },
@@ -162,13 +162,14 @@
       "asset_replacement_updated": "Laitteen {asset_id} — {asset_name} korvaussuhde päivitettiin.",
       "asset_related_device_added": "Laitteeseen {asset_id} — {asset_name} lisättiin liittyvä Home Assistant -laite.",
       "asset_related_device_removed": "Laitteesta {asset_id} — {asset_name} poistettiin liittyvä Home Assistant -laite.",
-      "asset_updated": "Laite {asset_id} — {asset_name} päivitettiin."
+      "asset_updated": "Laite {asset_id} — {asset_name} päivitettiin.",
+      "quick_asset_created": "{asset_name} lisättiin Device Lifecycleen."
     },
     "error": {
       "asset_missing": "Valittua laitetta ei enää ole.",
       "asset_store_error": "Muutosta ei voitu tallentaa. Mitään ei muutettu.",
       "confirmation_required": "Vahvista toiminto jatkaaksesi.",
-      "device_already_linked": "Valittu Home Assistant -laite on jo linkitetty laitteeseen {owner_asset_id}.",
+      "device_already_linked": "Valittu Home Assistant -laite on jo linkitetty toiseen laitteeseen.",
       "device_lifecycle_device_not_allowed": "Valittua laitetta ei voi linkittää ulkoiseksi Home Assistant -laitteeksi.",
       "device_missing": "Valittu Home Assistant -laite puuttuu tai ei ole saatavilla.",
       "ha_device_purchase_dependency": "Aktiivinen ostos käyttää linkitettyä laitetta. Poista laite ostoksesta ennen linkityksen poistamista tai laitteen vaihtamista.",
@@ -181,18 +182,30 @@
       "invalid_lifecycle_effective_date": "Anna elinkaaritilan voimaantulopäivä muodossa VVVV-KK-PP.",
       "invalid_lifecycle_status": "Valitse kelvollinen elinkaaritila.",
       "invalid_purchase": "Valittua ostosta ei voi liittää tähän laitteeseen.",
+      "invalid_quick_create_request": "Tarkista annetut laitteen tiedot ja yritä uudelleen.",
       "invalid_replacement_effective_date": "Anna korvauksen voimaantulopäivä muodossa VVVV-KK-PP.",
       "invalid_replacement_reason": "Valitse kelvollinen korvauksen syy.",
+      "invalid_warranty_date": "Anna kelvollinen takuun päättymispäivä muodossa VVVV-KK-PP.",
+      "invalid_warranty_type": "Valitse kelvollinen takuun tyyppi.",
       "lifecycle_chain_invalid": "Elinkaarihistoria on ristiriitainen. Mitään ei muutettu.",
       "lifecycle_date_in_future": "Elinkaaritilan voimaantulopäivä ei voi olla tulevaisuudessa.",
+      "lifecycle_date_not_applicable": "Elinkaaritilan voimaantulopäivää ei voi määrittää, kun elinkaaritila on Tuntematon.",
       "lifecycle_no_change": "Valittu elinkaaritila on jo nykyinen tila. Mitään ei muutettu.",
       "no_assets": "Hallittavia laitteita ei vielä ole.",
       "non_physical_device_not_allowed": "Valitse toisen integraation lisäämä fyysinen Home Assistant -laite.",
       "purchase_conflict": "Laite on jo liitetty toiseen ostokseen. Tarkista nykyinen ostos ja yritä uudelleen.",
       "persistence_error": "Muutoksen pysyvää tallennusta ei voitu varmistaa. Mitään ei julkaistu.",
+      "predecessor_changed": "Edeltävän laitteen tiedot muuttuivat lomakkeen ollessa auki. Tarkista korvaus uudelleen.",
+      "purchase_changed": "Valitun ostoksen ostopäivä muuttui lomakkeen ollessa auki. Tarkista uudelleen laskettu takuu.",
+      "purchase_date_required_for_warranty": "1 tai 2 vuoden takuu vaatii käytettävissä olevan ostoksen, jolla on kelvollinen ostopäivä.",
+      "purchase_missing": "Valittua ostosta ei enää ole.",
+      "purchase_not_configured": "Valittu ostos ei ole enää käytettävissä.",
+      "quick_create_idempotency_conflict": "Tämä lisäyspyyntö on ristiriidassa aiemmin tallennetun laitteen kanssa. Mitään ei muutettu.",
+      "review_replacement_deployment": "Korvattava laite on valittu. Tarkista uuden laitteen näkyvä käyttötilan oletusarvo Käytössä ja jatka.",
       "related_device_is_primary": "Valittu Home Assistant -laite on jo tämän laitteen ensisijainen laite.",
       "related_device_not_found": "Valittua liittyvää laitelinkkiä ei enää ole. Tarkista nykyiset linkit ja yritä uudelleen.",
       "replacement_cycle": "Tämä suhde muodostaisi korvausketjuun silmukan.",
+      "replacement_date_before_predecessor_lifecycle": "Korvauksen voimaantulopäivä ei voi olla aikaisempi kuin edeltävän laitteen nykyisen elinkaaritilan voimaantulopäivä.",
       "replacement_date_in_future": "Korvauksen voimaantulopäivä ei voi olla tulevaisuudessa.",
       "replacement_graph_invalid": "Korvausketju on ristiriitainen. Mitään ei muutettu.",
       "replacement_missing": "Valittua aktiivista korvaussuhdetta ei enää ole.",
@@ -200,6 +213,7 @@
       "replacement_self_reference": "Laite ei voi korvata itseään.",
       "replacement_successor_conflict": "Seuraavalla laitteella on jo aktiivinen edeltäjä.",
       "replacement_void_reason_required": "Anna korvaussuhteen mitätöinnille syy.",
+      "manual_warranty_date_required": "Anna manuaalinen takuun päättymispäivä.",
       "service_device_not_allowed": "Valittu kohde on Home Assistant -palvelu eikä fyysinen laite."
     },
     "step": {
@@ -243,21 +257,105 @@
         "description": "Laite: {asset}. Nykyinen ostos: {current_purchase}. Aiempi ostos, joka ei ole enää käytettävissä, näytetään vain silloin, kun laite on jo liitetty siihen. Valitse käytettävissä oleva ostos tai Ei ostosta.",
         "title": "Liitä ostokseen"
       },
-      "create_manual_asset": {
-        "data": {
-          "category": "Luokka",
-          "hw_version": "Laitteistoversio",
-          "manufacturer": "Valmistaja",
-          "model": "Malli",
-          "model_id": "Mallitunnus",
-          "name": "Näyttönimi",
-          "notes": "Muistiinpanot",
-          "purchase_uuid": "Ostos",
-          "serial_number": "Sarjanumero",
-          "sw_version": "Ohjelmistoversio"
+      "quick_add": {
+        "menu_options": {
+          "quick_add_from_ha": "Home Assistant -laitteesta",
+          "quick_add_manual": "Käsin"
         },
-        "description": "Luo fyysinen laite ilman Home Assistant -laitetta tai ostosta. Laite saa automaattisesti pysyvän elinkaaritunnuksen, joka ei muutu, vaikka linkittäisit Home Assistant -laitteen myöhemmin.",
-        "title": "Luo laite"
+        "title": "Lisää laite"
+      },
+      "quick_add_from_ha": {
+        "data": {
+          "device_id": "Home Assistant -laite"
+        },
+        "data_description": {
+          "device_id": "Valitse toisen Home Assistant -integraation omistama fyysinen laite."
+        },
+        "description": "Valitse Home Assistant -laite muokattavien fyysisten tietojen esitäyttöä varten. Ulkoinen laite säilyy oman integraationsa omistuksessa.",
+        "title": "Lisää Home Assistantista"
+      },
+      "quick_add_details": {
+        "description": "Tarkista fyysisen laitteen tiedot ennen pysyvän identiteetin luomista. Ehdotettuja arvoja voi muokata, eikä mitään tallenneta ennen lopullista vahvistusta.",
+        "sections": {
+          "identity": {
+            "name": "Identiteetti",
+            "data": {
+              "name": "Nimi",
+              "category": "Luokka",
+              "manufacturer": "Valmistaja",
+              "model": "Malli"
+            }
+          },
+          "details": {
+            "name": "Tiedot",
+            "data": {
+              "model_id": "Mallitunnus",
+              "serial_number": "Sarjanumero",
+              "sw_version": "Ohjelmistoversio",
+              "hw_version": "Laitteistoversio",
+              "notes": "Muistiinpanot"
+            }
+          },
+          "lifecycle": {
+            "name": "Elinkaari ja käyttötila",
+            "data": {
+              "lifecycle_status": "Elinkaari",
+              "effective_date": "Elinkaaren voimaantulopäivä",
+              "deployment_state": "Käyttötila",
+              "installed_date": "Käyttöönottopäivä",
+              "ha_area_id": "Home Assistant -alue"
+            },
+            "data_description": {
+              "effective_date": "Valinnainen; päivää ei päätellä ostoksesta, käyttöönotosta, korvauksesta tai nykyisestä päivästä.",
+              "ha_area_id": "Laitteen valinnainen sijainti. Ulkoista Home Assistant -laitetta ei siirretä."
+            }
+          },
+          "warranty": {
+            "name": "Takuu",
+            "data": {
+              "warranty_type": "Takuu",
+              "warranty_until": "Manuaalinen takuun päättymispäivä"
+            },
+            "data_description": {
+              "warranty_type": "1 ja 2 vuoden takuu vaatii käytettävissä olevan ostoksen ja lasketaan sen ostopäivästä.",
+              "warranty_until": "Vaaditaan vain manuaaliselle takuulle."
+            }
+          },
+          "relationships": {
+            "name": "Suhteet",
+            "data": {
+              "purchase_uuid": "Ostos",
+              "replacement_target_asset_uuid": "Laite, jonka tämä korvaa"
+            },
+            "data_description": {
+              "purchase_uuid": "Valitse olemassa oleva käytettävissä oleva ostos tai Ei ostosta.",
+              "replacement_target_asset_uuid": "Valinnainen edeltävä fyysinen laite. Korvaus ei siirrä ostosta, takuuta, käyttötunteja, aluetta tai Home Assistant -laitelinkkejä."
+            }
+          }
+        },
+        "title": "Laitteen tiedot"
+      },
+      "quick_add_replacement": {
+        "data": {
+          "replacement_reason": "Korvauksen syy",
+          "effective_date": "Voimaantulopäivä",
+          "notes": "Muistiinpanot",
+          "retire_predecessor": "Siirrä edeltäjä eläkkeelle soveltuvin osin",
+          "undeploy_predecessor": "Merkitse edeltäjä pois käytöstä soveltuvin osin"
+        },
+        "data_description": {
+          "effective_date": "Valinnainen. Samaa päivää käytetään edeltävän laitteen eläkkeelle siirtämiseen, jos valittu.",
+          "notes": "Tallennetaan vain muuttumattomaan korvaustietueeseen."
+        },
+        "description": "Tarkista, miten {predecessor_name} korvataan. Hävitettyä tai kadonnutta edeltäjää ei siirretä automaattisesti eläkkeelle, ja käyttöönottopäivä säilyy.",
+        "title": "Korvauksen tiedot"
+      },
+      "quick_add_confirm": {
+        "data": {
+          "confirm_quick_add": "Vahvista ja lisää laite"
+        },
+        "description": "**Uusi laite**\n\nNimi: {asset_name}\n\nValmistaja / malli: {manufacturer_model}\n\nElinkaari: {lifecycle}\n\nElinkaaren voimaantulopäivä: {lifecycle_date}\n\nKäyttötila: {deployment}\n\nKäyttöönottopäivä: {installed_date}\n\nAlue: {area}\n\nOstos: {purchase}\n\nTakuu: {warranty}\n\nHome Assistant -laite: {ha_device}\n\n{disposed_warning}\n\n**Korvauksen tarkistus**\n\nVanha laite: {predecessor_name}\n\nElinkaari: {predecessor_lifecycle}\n\nKäyttötila: {predecessor_deployment}\n\nAlue: {predecessor_area}\n\nSyy: {replacement_reason}\n\nVoimaantulopäivä: {replacement_date}\n\nMitään ei tallenneta ennen vahvistusta.",
+        "title": "Vahvista laite"
       },
       "confirm_not_deployed": {
         "data": {
@@ -341,8 +439,8 @@
       },
       "init": {
         "menu_options": {
-          "create_manual_asset": "Luo laite",
-          "manage_asset": "Hallitse laitetta"
+          "quick_add": "Lisää laite",
+          "manage_asset": "Hallitse laitteita"
         },
         "title": "Laitteiden hallinta"
       },

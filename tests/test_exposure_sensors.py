@@ -249,7 +249,7 @@ def test_replacement_entity_has_locked_state_and_future_compatible_lists(
     assert sensor.device_class == SensorDeviceClass.ENUM
     assert sensor.options == ["none", "replaces", "replaced_by", "chain_member"]
     assert sensor.entity_category == EntityCategory.DIAGNOSTIC
-    assert sensor.entity_registry_enabled_default is False
+    assert sensor.entity_registry_enabled_default is (predecessor or successor)
     assert sensor.translation_key == "replacement"
     assert sensor.device_entry.id == device.id
     assert sensor.extra_state_attributes == {

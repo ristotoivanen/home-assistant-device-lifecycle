@@ -8,14 +8,17 @@ import re
 import uuid
 from collections.abc import Callable
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
-from typing import Any, TypeVar, cast
+from types import MappingProxyType
+from typing import Any, Mapping, TypeVar, cast
 from uuid import UUID, uuid4
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.storage import Store
 from homeassistant.util import json as json_util
@@ -40,17 +43,21 @@ from .const import (
     CONF_WARRANTY_TYPE,
     CONF_WARRANTY_UNTIL,
     DEPLOYMENT_STATE_NOT_DEPLOYED,
+    DEPLOYMENT_STATE_DEPLOYED,
     DEPLOYMENT_STATE_UNKNOWN,
     DEPLOYMENT_STATES,
     DOMAIN,
     LIFECYCLE_STATUSES,
     LIFECYCLE_STATUS_ACTIVE,
+    LIFECYCLE_STATUS_RETIRED,
     LIFECYCLE_STATUS_UNKNOWN,
     REPLACEMENT_REASONS,
     SUBENTRY_TYPE_PURCHASE,
     SUBENTRY_TYPE_RUNTIME,
     WARRANTY_MANUAL,
     WARRANTY_NONE,
+    WARRANTY_ONE_YEAR,
+    WARRANTY_TWO_YEARS,
     WARRANTY_TYPES,
 )
 from .models import (
@@ -95,6 +102,72 @@ _USER_EDITABLE_ASSET_FIELDS = (
     "hw_version",
     "notes",
 )
+_HOME_ASSISTANT_METADATA_FIELDS = frozenset(
+    {
+        "name",
+        "manufacturer",
+        "model",
+        "model_id",
+        "serial_number",
+        "sw_version",
+        "hw_version",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class QuickAssetCreateRequest:
+    """Immutable canonical command for one atomic Quick Asset creation."""
+
+    asset_uuid: str
+    primary_device_id: str | None
+    metadata: Mapping[str, str | None]
+    field_sources: Mapping[str, str]
+    initial_lifecycle_status: LifecycleStatus
+    initial_lifecycle_effective_date: str | None
+    deployment_state: str
+    installed_date: str | None
+    ha_area_id: str | None
+    warranty_type: str
+    warranty_until: str | None
+    purchase_uuid: str | None
+    expected_purchase_date: str | None = None
+    predecessor_asset_uuid: str | None = None
+    expected_predecessor_lifecycle_status: LifecycleStatus | None = None
+    expected_predecessor_current_event_uuid: str | None = None
+    expected_predecessor_deployment_state: str | None = None
+    expected_predecessor_ha_area_id: str | None = None
+    replacement_reason: ReplacementReason | None = None
+    replacement_effective_date: str | None = None
+    replacement_notes: str | None = None
+    retire_predecessor: bool = False
+    undeploy_predecessor: bool = False
+
+    def __post_init__(self) -> None:
+        """Detach and freeze caller-owned command mappings."""
+        object.__setattr__(
+            self,
+            "metadata",
+            MappingProxyType(dict(self.metadata)),
+        )
+        object.__setattr__(
+            self,
+            "field_sources",
+            MappingProxyType(dict(self.field_sources)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class QuickAssetCreateResult:
+    """Detached result of one atomic or safely replayed Quick Create."""
+
+    asset: AssetData
+    replacement: ReplacementRecordData | None
+    predecessor: AssetData | None
+    predecessor_lifecycle_changed: bool
+    predecessor_deployment_changed: bool
+    predecessor_area_cleared: bool
+    replayed: bool
 
 
 class AssetStoreError(HomeAssistantError):
@@ -334,6 +407,32 @@ def _device_name(device: dr.DeviceEntry | None, fallback: str) -> str:
     return str(value) if value not in (None, "") else fallback
 
 
+def home_assistant_asset_metadata(
+    device: dr.DeviceEntry | None,
+    fallback_name: str,
+) -> dict[str, str | None]:
+    """Return canonical Asset metadata discovered from one HA device."""
+    if device is None:
+        return {
+            "name": fallback_name,
+            "manufacturer": None,
+            "model": None,
+            "model_id": None,
+            "serial_number": None,
+            "sw_version": None,
+            "hw_version": None,
+        }
+    return {
+        "name": _device_name(device, fallback_name),
+        "manufacturer": _optional_text(getattr(device, "manufacturer", None)),
+        "model": _optional_text(getattr(device, "model", None)),
+        "model_id": _optional_text(getattr(device, "model_id", None)),
+        "serial_number": _optional_text(getattr(device, "serial_number", None)),
+        "sw_version": _optional_text(getattr(device, "sw_version", None)),
+        "hw_version": _optional_text(getattr(device, "hw_version", None)),
+    }
+
+
 def _warranty_type(data: dict[str, Any]) -> str:
     """Return an explicit warranty type or infer old pre-0.3.4 data."""
     if value := data.get(CONF_WARRANTY_TYPE):
@@ -362,6 +461,21 @@ def _validate_optional_date(value: Any, field: str) -> None:
         date.fromisoformat(value)
     except ValueError as err:
         raise AssetStoreError(f"Asset Core {field} is not a valid ISO date") from err
+
+
+def add_calendar_years(value: str, years: int) -> str | None:
+    """Add calendar years to one canonical date with leap-day safety."""
+    try:
+        parsed = date.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed.isoformat() != value:
+        return None
+    try:
+        result = parsed.replace(year=parsed.year + years)
+    except ValueError:
+        result = parsed.replace(year=parsed.year + years, month=2, day=28)
+    return result.isoformat()
 
 
 def _validate_history_effective_date(
@@ -1049,23 +1163,28 @@ class AssetStoreManager:
         _validate_store_data(data)
         self._data = data
 
+    async def _async_recover_uncertain_persistence(self) -> None:
+        """Recover the direct persisted snapshot before another mutation."""
+        if not self._persistence_uncertain:
+            return
+        persisted = await self._store.async_load_persisted_snapshot()
+        if persisted is None:
+            if self._data != _empty_store_data():
+                raise AssetStoreError(
+                    "Asset Core persistence disappeared during recovery"
+                )
+        else:
+            _validate_store_data(persisted)
+            self._data = persisted
+        self._persistence_uncertain = False
+
     async def _async_mutate(
         self,
         mutator: Callable[[AssetStoreData], _MutationResultT],
     ) -> _MutationResultT:
         """Apply one all-or-nothing mutation to a detached Store snapshot."""
         async with self._mutation_lock:
-            if self._persistence_uncertain:
-                persisted = await self._store.async_load_persisted_snapshot()
-                if persisted is None:
-                    if self._data != _empty_store_data():
-                        raise AssetStoreError(
-                            "Asset Core persistence disappeared during recovery"
-                        )
-                else:
-                    _validate_store_data(persisted)
-                    self._data = persisted
-                self._persistence_uncertain = False
+            await self._async_recover_uncertain_persistence()
 
             data = deepcopy(self._data)
             result = mutator(data)
@@ -1191,6 +1310,9 @@ class AssetStoreManager:
         data: AssetStoreData,
         asset: AssetData,
         status: LifecycleStatus,
+        *,
+        effective_date: str | None = None,
+        recorded_at: str | None = None,
     ) -> None:
         """Initialize one new Asset without fabricating same-state history."""
         if status not in LIFECYCLE_STATUSES:
@@ -1199,11 +1321,45 @@ class AssetStoreManager:
                 code="invalid_lifecycle_status",
             )
         asset["lifecycle"] = {
-            "status": status,
+            "status": LIFECYCLE_STATUS_UNKNOWN,
             "current_event_uuid": None,
         }
         if status == LIFECYCLE_STATUS_UNKNOWN:
             return
+        self._append_lifecycle_transition(
+            data,
+            asset,
+            status,
+            effective_date=effective_date,
+            notes=None,
+            recorded_at=recorded_at,
+        )
+
+    def _append_lifecycle_transition(
+        self,
+        data: AssetStoreData,
+        asset: AssetData,
+        status: LifecycleStatus,
+        *,
+        effective_date: str | None,
+        notes: str | None,
+        recorded_at: str | None = None,
+    ) -> bool:
+        """Append one transition inside an existing atomic Store snapshot."""
+        if status not in LIFECYCLE_STATUSES:
+            raise AssetStoreError(
+                f"Invalid lifecycle status: {status}",
+                code="invalid_lifecycle_status",
+            )
+        lifecycle = asset["lifecycle"]
+        if lifecycle["status"] == status:
+            return False
+        normalized_date = self._normalize_effective_date(
+            effective_date,
+            invalid_code="invalid_lifecycle_effective_date",
+            future_code="lifecycle_date_in_future",
+        )
+        normalized_notes = self._normalize_history_notes(notes)
         event_uuid = str(uuid.uuid4())
         if event_uuid in data["lifecycle_events"]:
             raise AssetStoreError(
@@ -1213,15 +1369,17 @@ class AssetStoreManager:
         event: LifecycleEventData = {
             "event_uuid": event_uuid,
             "asset_uuid": asset["asset_uuid"],
-            "previous_event_uuid": None,
-            "from_status": LIFECYCLE_STATUS_UNKNOWN,
+            "previous_event_uuid": lifecycle["current_event_uuid"],
+            "from_status": lifecycle["status"],
             "to_status": status,
-            "effective_date": None,
-            "recorded_at": datetime.now(UTC).isoformat(),
-            "notes": None,
+            "effective_date": normalized_date,
+            "recorded_at": recorded_at or datetime.now(UTC).isoformat(),
+            "notes": normalized_notes,
         }
         data["lifecycle_events"][event_uuid] = event
-        asset["lifecycle"]["current_event_uuid"] = event_uuid
+        lifecycle["status"] = status
+        lifecycle["current_event_uuid"] = event_uuid
+        return True
 
     def _normalize_user_asset_text(
         self,
@@ -1273,36 +1431,86 @@ class AssetStoreManager:
     ) -> AssetData:
         """Create one stable Asset for a physical Home Assistant device."""
         asset_uuid = str(uuid4())
+        asset = self._create_asset_in_snapshot(
+            data,
+            asset_uuid=asset_uuid,
+            name=_device_name(device, device_id),
+            metadata={},
+            field_sources={"name": FIELD_SOURCE_HOME_ASSISTANT},
+            primary_device_id=device_id,
+            deployment_state=DEPLOYMENT_STATE_UNKNOWN,
+            installed_date=None,
+            ha_area_id=None,
+            warranty_type=WARRANTY_NONE,
+            warranty_until=None,
+            initial_lifecycle_status=LIFECYCLE_STATUS_ACTIVE,
+        )
+        self._refresh_home_assistant_metadata(asset, device, device_id)
+        return asset
+
+    def _create_asset_in_snapshot(
+        self,
+        data: AssetStoreData,
+        *,
+        asset_uuid: str,
+        name: str,
+        metadata: dict[str, str | None],
+        field_sources: dict[str, str],
+        primary_device_id: str | None,
+        deployment_state: str,
+        installed_date: str | None,
+        ha_area_id: str | None,
+        warranty_type: str,
+        warranty_until: str | None,
+        initial_lifecycle_status: LifecycleStatus,
+        lifecycle_effective_date: str | None = None,
+        recorded_at: str | None = None,
+    ) -> AssetData:
+        """Create one Asset inside an existing atomic Store snapshot."""
+        if asset_uuid in data["assets"]:
+            raise AssetStoreError("Generated Asset UUID is already in use")
         asset: AssetData = {
             "asset_uuid": asset_uuid,
             "asset_id": self._allocate_asset_id(data),
-            "name": _device_name(device, device_id),
-            "category": None,
+            "name": name,
+            "category": metadata.get("category"),
             "purchase_uuid": None,
-            CONF_DEPLOYMENT_STATE: DEPLOYMENT_STATE_UNKNOWN,
-            "installed_date": None,
-            CONF_HA_AREA_ID: None,
-            "warranty": {"type": WARRANTY_NONE, "until": None},
+            CONF_DEPLOYMENT_STATE: deployment_state,
+            "installed_date": installed_date,
+            CONF_HA_AREA_ID: ha_area_id,
+            "warranty": {"type": warranty_type, "until": warranty_until},
             "runtime": {"total_seconds": None},
             "lifecycle": {
                 "status": LIFECYCLE_STATUS_UNKNOWN,
                 "current_event_uuid": None,
             },
-            "manufacturer": None,
-            "model": None,
-            "model_id": None,
-            "serial_number": None,
-            "sw_version": None,
-            "hw_version": None,
-            "notes": None,
-            "field_sources": {"name": FIELD_SOURCE_HOME_ASSISTANT},
-            "ha_device_refs": [
-                {"device_id": device_id, "role": DEVICE_ROLE_PRIMARY}
-            ],
+            "manufacturer": metadata.get("manufacturer"),
+            "model": metadata.get("model"),
+            "model_id": metadata.get("model_id"),
+            "serial_number": metadata.get("serial_number"),
+            "sw_version": metadata.get("sw_version"),
+            "hw_version": metadata.get("hw_version"),
+            "notes": metadata.get("notes"),
+            "field_sources": dict(field_sources),
+            "ha_device_refs": (
+                []
+                if primary_device_id is None
+                else [
+                    {
+                        "device_id": primary_device_id,
+                        "role": DEVICE_ROLE_PRIMARY,
+                    }
+                ]
+            ),
         }
         data["assets"][asset_uuid] = asset
-        self._initialize_asset_lifecycle(data, asset, LIFECYCLE_STATUS_ACTIVE)
-        self._refresh_home_assistant_metadata(asset, device, device_id)
+        self._initialize_asset_lifecycle(
+            data,
+            asset,
+            initial_lifecycle_status,
+            effective_date=lifecycle_effective_date,
+            recorded_at=recorded_at,
+        )
         return asset
 
     async def async_create_manual_asset(
@@ -1350,8 +1558,6 @@ class AssetStoreManager:
 
         def _create(data: AssetStoreData) -> AssetData:
             asset_uuid = str(uuid4())
-            if asset_uuid in data["assets"]:
-                raise AssetStoreError("Generated Asset UUID is already in use")
             sources = {"name": FIELD_SOURCE_USER}
             sources.update(
                 {
@@ -1360,38 +1566,20 @@ class AssetStoreManager:
                     if value is not None
                 }
             )
-            asset: AssetData = {
-                "asset_uuid": asset_uuid,
-                "asset_id": self._allocate_asset_id(data),
-                "name": cast(str, normalized_name),
-                "category": metadata["category"],
-                "purchase_uuid": None,
-                CONF_DEPLOYMENT_STATE: DEPLOYMENT_STATE_NOT_DEPLOYED,
-                "installed_date": None,
-                CONF_HA_AREA_ID: None,
-                "warranty": {"type": WARRANTY_NONE, "until": None},
-                "runtime": {"total_seconds": None},
-                "lifecycle": {
-                    "status": LIFECYCLE_STATUS_UNKNOWN,
-                    "current_event_uuid": None,
-                },
-                "manufacturer": metadata["manufacturer"],
-                "model": metadata["model"],
-                "model_id": metadata["model_id"],
-                "serial_number": metadata["serial_number"],
-                "sw_version": metadata["sw_version"],
-                "hw_version": metadata["hw_version"],
-                "notes": metadata["notes"],
-                "field_sources": sources,
-                "ha_device_refs": [],
-            }
-            data["assets"][asset_uuid] = asset
-            self._initialize_asset_lifecycle(
+            return self._create_asset_in_snapshot(
                 data,
-                asset,
-                initial_lifecycle_status,
+                asset_uuid=asset_uuid,
+                name=cast(str, normalized_name),
+                metadata=metadata,
+                field_sources=sources,
+                primary_device_id=None,
+                deployment_state=DEPLOYMENT_STATE_NOT_DEPLOYED,
+                installed_date=None,
+                ha_area_id=None,
+                warranty_type=WARRANTY_NONE,
+                warranty_until=None,
+                initial_lifecycle_status=initial_lifecycle_status,
             )
-            return asset
 
         return await self._async_mutate(_create)
 
@@ -1419,6 +1607,760 @@ class AssetStoreManager:
             raise AssetStoreError("History notes must be text")
         return value if value else None
 
+    def _canonical_quick_date(
+        self,
+        value: str | None,
+        *,
+        code: str,
+        required_code: str | None = None,
+    ) -> str | None:
+        """Validate one canonical Quick Create calendar date."""
+        if value is None:
+            if required_code is not None:
+                raise AssetStoreError("A date is required", code=required_code)
+            return None
+        if not isinstance(value, str):
+            raise AssetStoreError("Date must use YYYY-MM-DD", code=code)
+        try:
+            parsed = date.fromisoformat(value)
+        except ValueError as err:
+            raise AssetStoreError("Date must use YYYY-MM-DD", code=code) from err
+        if parsed.isoformat() != value:
+            raise AssetStoreError("Date must use YYYY-MM-DD", code=code)
+        return value
+
+    def _validate_quick_create_request(
+        self,
+        request: QuickAssetCreateRequest,
+    ) -> None:
+        """Validate one immutable command without resolving Store references."""
+        if not isinstance(request, QuickAssetCreateRequest):
+            raise AssetStoreError(
+                "Quick Create request has an invalid type",
+                code="invalid_quick_create_request",
+            )
+        if _valid_uuid(request.asset_uuid) != request.asset_uuid:
+            raise AssetStoreError(
+                "Quick Create Asset UUID is invalid",
+                code="invalid_quick_create_request",
+            )
+        if set(request.metadata) != set(_USER_EDITABLE_ASSET_FIELDS):
+            raise AssetStoreError(
+                "Quick Create metadata is incomplete",
+                code="invalid_quick_create_request",
+            )
+        for field, value in request.metadata.items():
+            if value is not None and not isinstance(value, str):
+                raise AssetStoreError(
+                    f"Quick Create metadata {field} is invalid",
+                    code="invalid_quick_create_request",
+                )
+            if field == "name":
+                if not isinstance(value, str) or not value.strip():
+                    raise AssetStoreError(
+                        "Quick Create name is required",
+                        code="invalid_quick_create_request",
+                    )
+                if value != value.strip():
+                    raise AssetStoreError(
+                        "Quick Create name is not normalized",
+                        code="invalid_quick_create_request",
+                    )
+            elif value == "":
+                raise AssetStoreError(
+                    f"Quick Create metadata {field} is not normalized",
+                    code="invalid_quick_create_request",
+                )
+
+        if not set(request.field_sources).issubset(_USER_EDITABLE_ASSET_FIELDS):
+            raise AssetStoreError(
+                "Quick Create metadata provenance is invalid",
+                code="invalid_quick_create_request",
+            )
+        for field, source in request.field_sources.items():
+            if source not in (FIELD_SOURCE_HOME_ASSISTANT, FIELD_SOURCE_USER):
+                raise AssetStoreError(
+                    "Quick Create metadata provenance is invalid",
+                    code="invalid_quick_create_request",
+                )
+            if source == FIELD_SOURCE_HOME_ASSISTANT and (
+                field not in _HOME_ASSISTANT_METADATA_FIELDS
+                or request.metadata[field] is None
+            ):
+                raise AssetStoreError(
+                    "Quick Create Home Assistant provenance is invalid",
+                    code="invalid_quick_create_request",
+                )
+        for field, value in request.metadata.items():
+            if value is not None and field not in request.field_sources:
+                raise AssetStoreError(
+                    f"Quick Create metadata {field} has no provenance",
+                    code="invalid_quick_create_request",
+                )
+
+        if request.primary_device_id is not None and (
+            not isinstance(request.primary_device_id, str)
+            or not request.primary_device_id.strip()
+            or request.primary_device_id != request.primary_device_id.strip()
+        ):
+            raise AssetStoreError(
+                "Quick Create primary device is invalid",
+                code="invalid_quick_create_request",
+            )
+        if request.primary_device_id is None and FIELD_SOURCE_HOME_ASSISTANT in (
+            request.field_sources.values()
+        ):
+            raise AssetStoreError(
+                "Quick Create HA provenance requires a primary device",
+                code="invalid_quick_create_request",
+            )
+        if request.initial_lifecycle_status not in LIFECYCLE_STATUSES:
+            raise AssetStoreError(
+                "Quick Create Lifecycle status is invalid",
+                code="invalid_lifecycle_status",
+            )
+        if (
+            request.initial_lifecycle_status == LIFECYCLE_STATUS_UNKNOWN
+            and request.initial_lifecycle_effective_date is not None
+        ):
+            raise AssetStoreError(
+                "Initial unknown Lifecycle cannot have an effective date",
+                code="lifecycle_date_not_applicable",
+            )
+        self._normalize_effective_date(
+            request.initial_lifecycle_effective_date,
+            invalid_code="invalid_lifecycle_effective_date",
+            future_code="lifecycle_date_in_future",
+        )
+        if request.deployment_state not in DEPLOYMENT_STATES:
+            raise AssetStoreError(
+                "Quick Create deployment state is invalid",
+                code="invalid_deployment_state",
+            )
+        self._canonical_quick_date(
+            request.installed_date,
+            code="invalid_installed_date",
+        )
+        if request.ha_area_id is not None and (
+            not isinstance(request.ha_area_id, str)
+            or not request.ha_area_id.strip()
+        ):
+            raise AssetStoreError("Quick Create Area is invalid", code="invalid_area")
+        if (
+            request.deployment_state == DEPLOYMENT_STATE_NOT_DEPLOYED
+            and request.ha_area_id is not None
+        ):
+            raise AssetStoreError(
+                "A not-deployed Asset cannot have an Area",
+                code="invalid_area",
+            )
+        if request.warranty_type not in WARRANTY_TYPES:
+            raise AssetStoreError(
+                "Quick Create warranty type is invalid",
+                code="invalid_warranty_type",
+            )
+        if request.warranty_type == WARRANTY_NONE:
+            if request.warranty_until is not None:
+                raise AssetStoreError(
+                    "No-warranty selection cannot have an end date",
+                    code="invalid_warranty_date",
+                )
+        elif request.warranty_type == WARRANTY_MANUAL:
+            self._canonical_quick_date(
+                request.warranty_until,
+                code="invalid_warranty_date",
+                required_code="manual_warranty_date_required",
+            )
+        else:
+            self._canonical_quick_date(
+                request.warranty_until,
+                code="invalid_warranty_date",
+                required_code="purchase_date_required_for_warranty",
+            )
+
+        if request.purchase_uuid is not None and (
+            _valid_uuid(request.purchase_uuid) != request.purchase_uuid
+        ):
+            raise AssetStoreError(
+                "Quick Create Purchase UUID is invalid",
+                code="invalid_purchase",
+            )
+        if request.expected_purchase_date is not None and not isinstance(
+            request.expected_purchase_date, str
+        ):
+            raise AssetStoreError(
+                "Quick Create expected Purchase date is invalid",
+                code="invalid_quick_create_request",
+            )
+        if not isinstance(request.retire_predecessor, bool) or not isinstance(
+            request.undeploy_predecessor, bool
+        ):
+            raise AssetStoreError(
+                "Quick Create predecessor actions are invalid",
+                code="invalid_quick_create_request",
+            )
+
+        if request.predecessor_asset_uuid is None:
+            replacement_values = (
+                request.expected_predecessor_lifecycle_status,
+                request.expected_predecessor_current_event_uuid,
+                request.expected_predecessor_deployment_state,
+                request.expected_predecessor_ha_area_id,
+                request.replacement_reason,
+                request.replacement_effective_date,
+                request.replacement_notes,
+            )
+            if any(value is not None for value in replacement_values) or (
+                request.retire_predecessor or request.undeploy_predecessor
+            ):
+                raise AssetStoreError(
+                    "Quick Create replacement data has no predecessor",
+                    code="invalid_quick_create_request",
+                )
+            return
+
+        if _valid_uuid(request.predecessor_asset_uuid) != (
+            request.predecessor_asset_uuid
+        ):
+            raise AssetStoreError(
+                "Quick Create predecessor UUID is invalid",
+                code="asset_missing",
+            )
+        if request.predecessor_asset_uuid == request.asset_uuid:
+            raise AssetStoreError(
+                "An Asset cannot replace itself",
+                code="replacement_self_reference",
+            )
+        if request.expected_predecessor_lifecycle_status not in LIFECYCLE_STATUSES:
+            raise AssetStoreError(
+                "Quick Create expected predecessor Lifecycle is invalid",
+                code="invalid_quick_create_request",
+            )
+        if request.expected_predecessor_current_event_uuid is not None and (
+            _valid_uuid(request.expected_predecessor_current_event_uuid)
+            != request.expected_predecessor_current_event_uuid
+        ):
+            raise AssetStoreError(
+                "Quick Create expected predecessor event is invalid",
+                code="invalid_quick_create_request",
+            )
+        if request.expected_predecessor_deployment_state not in DEPLOYMENT_STATES:
+            raise AssetStoreError(
+                "Quick Create expected predecessor Deployment is invalid",
+                code="invalid_quick_create_request",
+            )
+        if request.expected_predecessor_ha_area_id is not None and (
+            not isinstance(request.expected_predecessor_ha_area_id, str)
+            or not request.expected_predecessor_ha_area_id.strip()
+        ):
+            raise AssetStoreError(
+                "Quick Create expected predecessor Area is invalid",
+                code="invalid_quick_create_request",
+            )
+        if request.replacement_reason not in REPLACEMENT_REASONS:
+            raise AssetStoreError(
+                "Quick Create replacement reason is invalid",
+                code="invalid_replacement_reason",
+            )
+        self._normalize_effective_date(
+            request.replacement_effective_date,
+            invalid_code="invalid_replacement_effective_date",
+            future_code="replacement_date_in_future",
+        )
+        if request.replacement_notes is not None and (
+            not isinstance(request.replacement_notes, str)
+            or request.replacement_notes == ""
+        ):
+            raise AssetStoreError(
+                "Quick Create replacement notes are not canonical",
+                code="invalid_quick_create_request",
+            )
+
+    def _quick_create_sources(
+        self,
+        request: QuickAssetCreateRequest,
+    ) -> dict[str, str]:
+        """Return exact initial field provenance without owning absent defaults."""
+        sources = dict(request.field_sources)
+        sources[CONF_DEPLOYMENT_STATE] = FIELD_SOURCE_USER
+        if request.installed_date is not None:
+            sources[CONF_INSTALLED_DATE] = FIELD_SOURCE_USER
+        if request.ha_area_id is not None:
+            sources[CONF_HA_AREA_ID] = FIELD_SOURCE_USER
+        if request.warranty_type != WARRANTY_NONE:
+            sources["warranty"] = FIELD_SOURCE_USER
+        if request.purchase_uuid is not None:
+            sources["purchase_uuid"] = FIELD_SOURCE_USER
+        return sources
+
+    def _resolve_quick_purchase_and_warranty(
+        self,
+        data: AssetStoreData,
+        request: QuickAssetCreateRequest,
+    ) -> tuple[PurchaseData | None, str | None]:
+        """Resolve one current Purchase and final warranty date atomically."""
+        purchase: PurchaseData | None = None
+        if request.purchase_uuid is not None:
+            purchase = data["purchases"].get(request.purchase_uuid)
+            if purchase is None:
+                raise AssetStoreError(
+                    "The selected Purchase no longer exists",
+                    code="purchase_missing",
+                )
+            if not purchase.get("configured"):
+                raise AssetStoreError(
+                    "The selected Purchase is not configured",
+                    code="purchase_not_configured",
+                )
+
+        if request.warranty_type == WARRANTY_NONE:
+            return purchase, None
+        if request.warranty_type == WARRANTY_MANUAL:
+            return purchase, request.warranty_until
+        if purchase is None:
+            raise AssetStoreError(
+                "A Purchase is required for calculated warranty",
+                code="purchase_date_required_for_warranty",
+            )
+        purchase_date = purchase.get("purchase_date")
+        if purchase_date is None:
+            raise AssetStoreError(
+                "The Purchase has no purchase date",
+                code="purchase_date_required_for_warranty",
+            )
+        if purchase_date != request.expected_purchase_date:
+            raise AssetStoreError(
+                "The Purchase date changed after review",
+                code="purchase_changed",
+            )
+        years = 1 if request.warranty_type == WARRANTY_ONE_YEAR else 2
+        warranty_until = add_calendar_years(purchase_date, years)
+        if warranty_until is None:
+            raise AssetStoreError(
+                "The Purchase date cannot calculate warranty",
+                code="invalid_warranty_date",
+            )
+        if request.warranty_until != warranty_until:
+            raise AssetStoreError(
+                "The reviewed warranty date is inconsistent",
+                code="invalid_warranty_date",
+            )
+        return purchase, warranty_until
+
+    def _quick_create_conflict(self, detail: str) -> None:
+        """Raise the stable idempotency conflict for a mismatched replay."""
+        raise AssetStoreError(
+            f"Quick Create replay does not match persisted state: {detail}",
+            code="quick_create_idempotency_conflict",
+        )
+
+    def _quick_initial_lifecycle_event(
+        self,
+        data: AssetStoreData,
+        asset: AssetData,
+        request: QuickAssetCreateRequest,
+    ) -> LifecycleEventData | None:
+        """Return the matching initial event or reject a mismatched replay."""
+        asset_events = [
+            event
+            for event in data["lifecycle_events"].values()
+            if event["asset_uuid"] == request.asset_uuid
+        ]
+        lifecycle = asset["lifecycle"]
+        if request.initial_lifecycle_status == LIFECYCLE_STATUS_UNKNOWN:
+            if lifecycle != {
+                "status": LIFECYCLE_STATUS_UNKNOWN,
+                "current_event_uuid": None,
+            } or asset_events:
+                self._quick_create_conflict("initial Lifecycle")
+            return None
+        if len(asset_events) != 1:
+            self._quick_create_conflict("initial Lifecycle history")
+        event = asset_events[0]
+        if lifecycle != {
+            "status": request.initial_lifecycle_status,
+            "current_event_uuid": event["event_uuid"],
+        } or any(
+            (
+                event["previous_event_uuid"] is not None,
+                event["from_status"] != LIFECYCLE_STATUS_UNKNOWN,
+                event["to_status"] != request.initial_lifecycle_status,
+                event["effective_date"]
+                != request.initial_lifecycle_effective_date,
+                event["notes"] is not None,
+            )
+        ):
+            self._quick_create_conflict("initial Lifecycle event")
+        return event
+
+    def _quick_replay_result(
+        self,
+        data: AssetStoreData,
+        request: QuickAssetCreateRequest,
+    ) -> QuickAssetCreateResult:
+        """Verify and return an already persisted Quick Create final state."""
+        asset = data["assets"].get(request.asset_uuid)
+        if asset is None:
+            raise AssetStoreError(
+                "Quick Create replay Asset is missing",
+                code="persistence_error",
+            )
+        expected_metadata = dict(request.metadata)
+        expected_values: dict[str, Any] = {
+            "name": expected_metadata["name"],
+            "category": expected_metadata["category"],
+            "manufacturer": expected_metadata["manufacturer"],
+            "model": expected_metadata["model"],
+            "model_id": expected_metadata["model_id"],
+            "serial_number": expected_metadata["serial_number"],
+            "sw_version": expected_metadata["sw_version"],
+            "hw_version": expected_metadata["hw_version"],
+            "notes": expected_metadata["notes"],
+            "purchase_uuid": request.purchase_uuid,
+            CONF_DEPLOYMENT_STATE: request.deployment_state,
+            CONF_INSTALLED_DATE: request.installed_date,
+            CONF_HA_AREA_ID: request.ha_area_id,
+            "warranty": {
+                "type": request.warranty_type,
+                "until": request.warranty_until,
+            },
+            "runtime": {"total_seconds": None},
+            "field_sources": self._quick_create_sources(request),
+            "ha_device_refs": (
+                []
+                if request.primary_device_id is None
+                else [
+                    {
+                        "device_id": request.primary_device_id,
+                        "role": DEVICE_ROLE_PRIMARY,
+                    }
+                ]
+            ),
+        }
+        if any(asset.get(field) != value for field, value in expected_values.items()):
+            self._quick_create_conflict("Asset fields")
+
+        purchase: PurchaseData | None = None
+        if request.purchase_uuid is not None:
+            purchase = data["purchases"].get(request.purchase_uuid)
+            if (
+                purchase is None
+                or not purchase.get("configured")
+                or purchase["asset_uuids"].count(request.asset_uuid) != 1
+            ):
+                self._quick_create_conflict("Purchase relationship")
+        if request.warranty_type in (WARRANTY_ONE_YEAR, WARRANTY_TWO_YEARS):
+            if (
+                purchase is None
+                or purchase.get("purchase_date") != request.expected_purchase_date
+            ):
+                self._quick_create_conflict("Purchase review snapshot")
+            years = 1 if request.warranty_type == WARRANTY_ONE_YEAR else 2
+            if add_calendar_years(request.expected_purchase_date or "", years) != (
+                request.warranty_until
+            ):
+                self._quick_create_conflict("calculated warranty")
+
+        initial_event = self._quick_initial_lifecycle_event(data, asset, request)
+        related_records = [
+            record
+            for record in data["replacement_records"].values()
+            if request.asset_uuid
+            in (
+                record["predecessor_asset_uuid"],
+                record["successor_asset_uuid"],
+            )
+        ]
+        if request.predecessor_asset_uuid is None:
+            if related_records:
+                self._quick_create_conflict("unexpected replacement history")
+            return QuickAssetCreateResult(
+                asset=asset,
+                replacement=None,
+                predecessor=None,
+                predecessor_lifecycle_changed=False,
+                predecessor_deployment_changed=False,
+                predecessor_area_cleared=False,
+                replayed=True,
+            )
+
+        if len(related_records) != 1:
+            self._quick_create_conflict("replacement history")
+        replacement = related_records[0]
+        if any(
+            (
+                replacement["predecessor_asset_uuid"]
+                != request.predecessor_asset_uuid,
+                replacement["successor_asset_uuid"] != request.asset_uuid,
+                replacement["reason"] != request.replacement_reason,
+                replacement["effective_date"]
+                != request.replacement_effective_date,
+                replacement["notes"] != request.replacement_notes,
+                replacement["voided_at"] is not None,
+                replacement["void_reason"] is not None,
+            )
+        ):
+            self._quick_create_conflict("replacement record")
+
+        predecessor = data["assets"].get(request.predecessor_asset_uuid)
+        if predecessor is None:
+            self._quick_create_conflict("predecessor")
+        lifecycle_changed = request.retire_predecessor and (
+            request.expected_predecessor_lifecycle_status
+            in (LIFECYCLE_STATUS_ACTIVE, LIFECYCLE_STATUS_UNKNOWN)
+        )
+        expected_status = (
+            LIFECYCLE_STATUS_RETIRED
+            if lifecycle_changed
+            else request.expected_predecessor_lifecycle_status
+        )
+        predecessor_event: LifecycleEventData | None = None
+        if predecessor["lifecycle"]["status"] != expected_status:
+            self._quick_create_conflict("predecessor Lifecycle")
+        if lifecycle_changed:
+            predecessor_event = data["lifecycle_events"].get(
+                predecessor["lifecycle"]["current_event_uuid"] or ""
+            )
+            if predecessor_event is None or any(
+                (
+                    predecessor_event["previous_event_uuid"]
+                    != request.expected_predecessor_current_event_uuid,
+                    predecessor_event["from_status"]
+                    != request.expected_predecessor_lifecycle_status,
+                    predecessor_event["to_status"] != LIFECYCLE_STATUS_RETIRED,
+                    predecessor_event["effective_date"]
+                    != request.replacement_effective_date,
+                    predecessor_event["notes"] is not None,
+                )
+            ):
+                self._quick_create_conflict("predecessor Lifecycle event")
+        elif predecessor["lifecycle"]["current_event_uuid"] != (
+            request.expected_predecessor_current_event_uuid
+        ):
+            self._quick_create_conflict("predecessor Lifecycle event pointer")
+
+        deployment_changed = request.undeploy_predecessor and (
+            request.expected_predecessor_deployment_state
+            in (DEPLOYMENT_STATE_DEPLOYED, DEPLOYMENT_STATE_UNKNOWN)
+        )
+        expected_deployment = (
+            DEPLOYMENT_STATE_NOT_DEPLOYED
+            if deployment_changed
+            else request.expected_predecessor_deployment_state
+        )
+        expected_area = (
+            None
+            if deployment_changed
+            else request.expected_predecessor_ha_area_id
+        )
+        if (
+            predecessor[CONF_DEPLOYMENT_STATE] != expected_deployment
+            or predecessor[CONF_HA_AREA_ID] != expected_area
+        ):
+            self._quick_create_conflict("predecessor Deployment or Area")
+        area_cleared = deployment_changed and (
+            request.expected_predecessor_ha_area_id is not None
+        )
+        timestamps = [replacement["recorded_at"]]
+        if initial_event is not None:
+            timestamps.append(initial_event["recorded_at"])
+        if predecessor_event is not None:
+            timestamps.append(predecessor_event["recorded_at"])
+        if len(set(timestamps)) != 1:
+            self._quick_create_conflict("transaction timestamps")
+        return QuickAssetCreateResult(
+            asset=asset,
+            replacement=replacement,
+            predecessor=predecessor,
+            predecessor_lifecycle_changed=lifecycle_changed,
+            predecessor_deployment_changed=deployment_changed,
+            predecessor_area_cleared=area_cleared,
+            replayed=True,
+        )
+
+    def _quick_create_in_snapshot(
+        self,
+        data: AssetStoreData,
+        request: QuickAssetCreateRequest,
+    ) -> QuickAssetCreateResult:
+        """Apply one new Quick Create command to a detached Store snapshot."""
+        _purchase, warranty_until = self._resolve_quick_purchase_and_warranty(
+            data,
+            request,
+        )
+        if request.ha_area_id is not None and (
+            ar.async_get(self.hass).async_get_area(request.ha_area_id) is None
+        ):
+            raise AssetStoreError(
+                "The selected Home Assistant Area no longer exists",
+                code="invalid_area",
+            )
+        if request.primary_device_id is not None and (
+            self._find_asset_by_primary_device(data, request.primary_device_id)
+            is not None
+        ):
+            raise AssetStoreError(
+                "The Home Assistant device is already linked",
+                code="device_already_linked",
+            )
+
+        predecessor: AssetData | None = None
+        if request.predecessor_asset_uuid is not None:
+            predecessor = self._require_asset(data, request.predecessor_asset_uuid)
+            lifecycle = predecessor["lifecycle"]
+            if (
+                lifecycle["status"]
+                != request.expected_predecessor_lifecycle_status
+                or lifecycle["current_event_uuid"]
+                != request.expected_predecessor_current_event_uuid
+                or predecessor[CONF_DEPLOYMENT_STATE]
+                != request.expected_predecessor_deployment_state
+                or predecessor[CONF_HA_AREA_ID]
+                != request.expected_predecessor_ha_area_id
+            ):
+                raise AssetStoreError(
+                    "The predecessor changed after review",
+                    code="predecessor_changed",
+                )
+            current_event = data["lifecycle_events"].get(
+                lifecycle["current_event_uuid"] or ""
+            )
+            if (
+                request.retire_predecessor
+                and lifecycle["status"]
+                in (LIFECYCLE_STATUS_ACTIVE, LIFECYCLE_STATUS_UNKNOWN)
+                and request.replacement_effective_date is not None
+                and current_event is not None
+                and current_event["effective_date"] is not None
+                and request.replacement_effective_date
+                < current_event["effective_date"]
+            ):
+                raise AssetStoreError(
+                    "Replacement date precedes the predecessor Lifecycle date",
+                    code="replacement_date_before_predecessor_lifecycle",
+                )
+
+        recorded_at = datetime.now(UTC).isoformat()
+        asset = self._create_asset_in_snapshot(
+            data,
+            asset_uuid=request.asset_uuid,
+            name=cast(str, request.metadata["name"]),
+            metadata=dict(request.metadata),
+            field_sources=self._quick_create_sources(request),
+            primary_device_id=request.primary_device_id,
+            deployment_state=request.deployment_state,
+            installed_date=request.installed_date,
+            ha_area_id=request.ha_area_id,
+            warranty_type=request.warranty_type,
+            warranty_until=warranty_until,
+            initial_lifecycle_status=request.initial_lifecycle_status,
+            lifecycle_effective_date=request.initial_lifecycle_effective_date,
+            recorded_at=recorded_at,
+        )
+        if request.purchase_uuid is not None:
+            self._assign_asset_purchase_in_snapshot(
+                data,
+                asset,
+                request.purchase_uuid,
+            )
+
+        lifecycle_changed = False
+        deployment_changed = False
+        area_cleared = False
+        replacement: ReplacementRecordData | None = None
+        if predecessor is not None:
+            if request.retire_predecessor and predecessor["lifecycle"]["status"] in (
+                LIFECYCLE_STATUS_ACTIVE,
+                LIFECYCLE_STATUS_UNKNOWN,
+            ):
+                lifecycle_changed = self._append_lifecycle_transition(
+                    data,
+                    predecessor,
+                    LIFECYCLE_STATUS_RETIRED,
+                    effective_date=request.replacement_effective_date,
+                    notes=None,
+                    recorded_at=recorded_at,
+                )
+            if request.undeploy_predecessor and predecessor[
+                CONF_DEPLOYMENT_STATE
+            ] in (DEPLOYMENT_STATE_DEPLOYED, DEPLOYMENT_STATE_UNKNOWN):
+                updates: dict[str, str | None | object] = {
+                    CONF_DEPLOYMENT_STATE: DEPLOYMENT_STATE_NOT_DEPLOYED,
+                }
+                if predecessor[CONF_HA_AREA_ID] is not None:
+                    updates[CONF_HA_AREA_ID] = None
+                    area_cleared = True
+                self._set_asset_deployment_in_snapshot(predecessor, updates)
+                deployment_changed = True
+            replacement = self._create_replacement_record(
+                data,
+                predecessor_asset_uuid=predecessor["asset_uuid"],
+                successor_asset_uuid=asset["asset_uuid"],
+                reason=cast(ReplacementReason, request.replacement_reason),
+                effective_date=request.replacement_effective_date,
+                notes=request.replacement_notes,
+                recorded_at=recorded_at,
+            )
+        return QuickAssetCreateResult(
+            asset=asset,
+            replacement=replacement,
+            predecessor=predecessor,
+            predecessor_lifecycle_changed=lifecycle_changed,
+            predecessor_deployment_changed=deployment_changed,
+            predecessor_area_cleared=area_cleared,
+            replayed=False,
+        )
+
+    async def async_quick_create_asset(
+        self,
+        request: QuickAssetCreateRequest,
+    ) -> QuickAssetCreateResult:
+        """Create one complete Asset outcome in exactly one durable transaction."""
+        async with self._mutation_lock:
+            await self._async_recover_uncertain_persistence()
+            self._validate_quick_create_request(request)
+            data = deepcopy(self._data)
+            if request.asset_uuid in data["assets"]:
+                return deepcopy(self._quick_replay_result(data, request))
+
+            result = self._quick_create_in_snapshot(data, request)
+            _validate_store_data(data)
+            try:
+                await self._store.async_save(data)
+            except AssetStorePersistenceError as err:
+                if not err.ambiguous:
+                    raise
+                self._persistence_uncertain = True
+                try:
+                    persisted = await self._store.async_load_persisted_snapshot()
+                    if persisted is None:
+                        if self._data != _empty_store_data():
+                            raise AssetStorePersistenceError(
+                                "Asset Core persistence disappeared during recovery",
+                                ambiguous=True,
+                            )
+                        self._persistence_uncertain = False
+                        raise AssetStorePersistenceError(
+                            "Quick Create was not persisted"
+                        )
+                    _validate_store_data(persisted)
+                except AssetStorePersistenceError:
+                    raise
+                self._data = persisted
+                self._persistence_uncertain = False
+                if request.asset_uuid not in persisted["assets"]:
+                    raise AssetStorePersistenceError(
+                        "Quick Create was not persisted"
+                    )
+                return deepcopy(self._quick_replay_result(persisted, request))
+            except OSError as err:
+                raise AssetStorePersistenceError(
+                    "Quick Create could not be persisted"
+                ) from err
+
+            self._data = data
+            return deepcopy(result)
+
     async def async_set_asset_lifecycle(
         self,
         asset_uuid: str,
@@ -1431,40 +2373,13 @@ class AssetStoreManager:
 
         def _set_lifecycle(data: AssetStoreData) -> AssetData:
             asset = self._require_asset(data, asset_uuid)
-            if status not in LIFECYCLE_STATUSES:
-                raise AssetStoreError(
-                    f"Invalid lifecycle status: {status}",
-                    code="invalid_lifecycle_status",
-                )
-            lifecycle = asset["lifecycle"]
-            if lifecycle["status"] == status:
-                return asset
-            normalized_date = self._normalize_effective_date(
-                effective_date,
-                invalid_code="invalid_lifecycle_effective_date",
-                future_code="lifecycle_date_in_future",
+            self._append_lifecycle_transition(
+                data,
+                asset,
+                status,
+                effective_date=effective_date,
+                notes=notes,
             )
-            normalized_notes = self._normalize_history_notes(notes)
-
-            event_uuid = str(uuid.uuid4())
-            if event_uuid in data["lifecycle_events"]:
-                raise AssetStoreError(
-                    "Generated lifecycle event UUID is already in use",
-                    code="lifecycle_chain_invalid",
-                )
-            event: LifecycleEventData = {
-                "event_uuid": event_uuid,
-                "asset_uuid": asset_uuid,
-                "previous_event_uuid": lifecycle["current_event_uuid"],
-                "from_status": lifecycle["status"],
-                "to_status": status,
-                "effective_date": normalized_date,
-                "recorded_at": datetime.now(UTC).isoformat(),
-                "notes": normalized_notes,
-            }
-            data["lifecycle_events"][event_uuid] = event
-            lifecycle["status"] = status
-            lifecycle["current_event_uuid"] = event_uuid
             return asset
 
         return await self._async_mutate_history(_set_lifecycle)
@@ -1575,6 +2490,7 @@ class AssetStoreManager:
         reason: ReplacementReason,
         effective_date: str | None,
         notes: str | None,
+        recorded_at: str | None = None,
     ) -> ReplacementRecordData:
         """Create one active record inside an existing atomic mutation."""
         self._require_asset(data, predecessor_asset_uuid)
@@ -1607,7 +2523,7 @@ class AssetStoreManager:
             "successor_asset_uuid": successor_asset_uuid,
             "reason": reason,
             "effective_date": normalized_date,
-            "recorded_at": datetime.now(UTC).isoformat(),
+            "recorded_at": recorded_at or datetime.now(UTC).isoformat(),
             "notes": normalized_notes,
             "voided_at": None,
             "void_reason": None,
@@ -1771,38 +2687,52 @@ class AssetStoreManager:
 
         def _set_purchase(data: AssetStoreData) -> AssetData:
             asset = self._require_asset(data, asset_uuid)
-            old_purchase_uuid = asset.get("purchase_uuid")
-            target: PurchaseData | None = None
-
-            if purchase_uuid is not None:
-                target = data["purchases"].get(purchase_uuid)
-                if target is None:
-                    raise AssetStoreError(f"Purchase {purchase_uuid} does not exist")
-                if not target.get("configured") and old_purchase_uuid != purchase_uuid:
-                    raise AssetStoreError(
-                        f"Purchase {purchase_uuid} is not currently configured"
-                    )
-
-            if old_purchase_uuid is not None and old_purchase_uuid != purchase_uuid:
-                old_purchase = data["purchases"].get(old_purchase_uuid)
-                if old_purchase is not None:
-                    old_purchase["asset_uuids"] = [
-                        member_uuid
-                        for member_uuid in old_purchase.get("asset_uuids", [])
-                        if member_uuid != asset_uuid
-                    ]
-
-            asset["purchase_uuid"] = purchase_uuid
-            asset.setdefault("field_sources", {})[
-                "purchase_uuid"
-            ] = FIELD_SOURCE_USER
-
-            if target is not None and asset_uuid not in target["asset_uuids"]:
-                target["asset_uuids"].append(asset_uuid)
-
-            return asset
+            return self._assign_asset_purchase_in_snapshot(
+                data,
+                asset,
+                purchase_uuid,
+            )
 
         return await self._async_mutate(_set_purchase)
+
+    def _assign_asset_purchase_in_snapshot(
+        self,
+        data: AssetStoreData,
+        asset: AssetData,
+        purchase_uuid: str | None,
+    ) -> AssetData:
+        """Assign both sides of a Purchase link inside one Store snapshot."""
+        asset_uuid = asset["asset_uuid"]
+        old_purchase_uuid = asset.get("purchase_uuid")
+        target: PurchaseData | None = None
+
+        if purchase_uuid is not None:
+            target = data["purchases"].get(purchase_uuid)
+            if target is None:
+                raise AssetStoreError(f"Purchase {purchase_uuid} does not exist")
+            if not target.get("configured") and old_purchase_uuid != purchase_uuid:
+                raise AssetStoreError(
+                    f"Purchase {purchase_uuid} is not currently configured"
+                )
+
+        if old_purchase_uuid is not None and old_purchase_uuid != purchase_uuid:
+            old_purchase = data["purchases"].get(old_purchase_uuid)
+            if old_purchase is not None:
+                old_purchase["asset_uuids"] = [
+                    member_uuid
+                    for member_uuid in old_purchase.get("asset_uuids", [])
+                    if member_uuid != asset_uuid
+                ]
+
+        asset["purchase_uuid"] = purchase_uuid
+        asset.setdefault("field_sources", {})[
+            "purchase_uuid"
+        ] = FIELD_SOURCE_USER
+
+        if target is not None and asset_uuid not in target["asset_uuids"]:
+            target["asset_uuids"].append(asset_uuid)
+
+        return asset
 
     async def async_set_asset_deployment(
         self,
@@ -1821,15 +2751,23 @@ class AssetStoreManager:
 
         def _set_deployment(data: AssetStoreData) -> AssetData:
             asset = self._require_asset(data, asset_uuid)
-            sources = asset.setdefault("field_sources", {})
-            for field, value in updates.items():
-                if value is _UNSET:
-                    continue
-                asset[field] = value  # type: ignore[literal-required]
-                sources[field] = FIELD_SOURCE_USER
-            return asset
+            return self._set_asset_deployment_in_snapshot(asset, updates)
 
         return await self._async_mutate(_set_deployment)
+
+    def _set_asset_deployment_in_snapshot(
+        self,
+        asset: AssetData,
+        updates: dict[str, str | None | object],
+    ) -> AssetData:
+        """Set user-owned deployment fields inside one Store snapshot."""
+        sources = asset.setdefault("field_sources", {})
+        for field, value in updates.items():
+            if value is _UNSET:
+                continue
+            asset[field] = value  # type: ignore[literal-required]
+            sources[field] = FIELD_SOURCE_USER
+        return asset
 
     async def async_link_asset_device(
         self,
@@ -1975,15 +2913,7 @@ class AssetStoreManager:
                 asset["name"] = fallback_name
             return
 
-        discovered: dict[str, Any] = {
-            "name": _device_name(device, fallback_name),
-            "manufacturer": getattr(device, "manufacturer", None),
-            "model": getattr(device, "model", None),
-            "model_id": getattr(device, "model_id", None),
-            "serial_number": getattr(device, "serial_number", None),
-            "sw_version": getattr(device, "sw_version", None),
-            "hw_version": getattr(device, "hw_version", None),
-        }
+        discovered = home_assistant_asset_metadata(device, fallback_name)
         sources = asset.setdefault("field_sources", {})
 
         for field, value in discovered.items():

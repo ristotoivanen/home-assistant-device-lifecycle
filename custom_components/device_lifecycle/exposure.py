@@ -109,6 +109,8 @@ class EntityRegistryUpdatePlan:
     original_device_id: str | None
     original_config_subentry_id: str | None
     desired_config_subentry_id: str | None
+    original_disabled_by: er.RegistryEntryDisabler | None = None
+    enable_integration_disabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -234,9 +236,11 @@ def build_exposure_migration_plan(
     assets: list[AssetData],
     device_registry: dr.DeviceRegistry,
     entity_registry: er.EntityRegistry,
+    active_replacement_asset_uuids: set[str] | None = None,
 ) -> ExposureMigrationPlan:
     """Build and validate the complete 0.6 exposure plan without mutation."""
     assets_by_uuid = {asset["asset_uuid"]: asset for asset in assets}
+    active_replacement_asset_uuids = active_replacement_asset_uuids or set()
     if len(assets_by_uuid) != len(assets):
         raise AssetStoreError("Asset snapshots contain duplicate canonical UUIDs")
 
@@ -368,7 +372,14 @@ def build_exposure_migration_plan(
                     unique_id=registry_entry.unique_id,
                     original_device_id=registry_entry.device_id,
                     original_config_subentry_id=(registry_entry.config_subentry_id),
+                    original_disabled_by=registry_entry.disabled_by,
                     desired_config_subentry_id=desired_subentry_id,
+                    enable_integration_disabled=(
+                        kind == "replacement"
+                        and asset_uuid in active_replacement_asset_uuids
+                        and registry_entry.disabled_by
+                        is er.RegistryEntryDisabler.INTEGRATION
+                    ),
                 )
             )
 
@@ -449,6 +460,7 @@ def _rollback_exposure_registry(
         if (
             current.device_id == update.original_device_id
             and current.config_subentry_id == update.original_config_subentry_id
+            and current.disabled_by == update.original_disabled_by
         ):
             continue
         try:
@@ -456,6 +468,7 @@ def _rollback_exposure_registry(
                 update.entity_id,
                 device_id=update.original_device_id,
                 config_subentry_id=update.original_config_subentry_id,
+                disabled_by=update.original_disabled_by,
             )
         except Exception as err:  # noqa: BLE001 - rollback must continue
             failures.append(f"entity {update.entity_id}: {err}")
@@ -508,6 +521,14 @@ async def async_reconcile_exposure_registry(
         assets=manager.assets(),
         device_registry=device_registry,
         entity_registry=entity_registry,
+        active_replacement_asset_uuids={
+            asset["asset_uuid"]
+            for asset in manager.assets()
+            if manager.active_replacement_predecessor(asset["asset_uuid"])
+            is not None
+            or manager.active_replacement_successor(asset["asset_uuid"])
+            is not None
+        },
     )
 
     created_device_ids: list[str] = []
@@ -572,14 +593,17 @@ async def async_reconcile_exposure_registry(
             if (
                 current.device_id == desired_device_id
                 and current.config_subentry_id == update.desired_config_subentry_id
+                and not update.enable_integration_disabled
             ):
                 continue
             attempted_updates.append(update)
-            entity_registry.async_update_entity(
-                update.entity_id,
-                device_id=desired_device_id,
-                config_subentry_id=update.desired_config_subentry_id,
-            )
+            update_values: dict[str, object] = {
+                "device_id": desired_device_id,
+                "config_subentry_id": update.desired_config_subentry_id,
+            }
+            if update.enable_integration_disabled:
+                update_values["disabled_by"] = None
+            entity_registry.async_update_entity(update.entity_id, **update_values)
     except Exception as err:
         _discover_attempt_devices(
             plan=plan,

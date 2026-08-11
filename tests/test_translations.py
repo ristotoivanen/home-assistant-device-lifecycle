@@ -25,7 +25,7 @@ TRANSLATION_DIRECTORY = (
     / "device_lifecycle"
     / "translations"
 )
-STRINGS_FILE = TRANSLATION_DIRECTORY.parent / "strings.json"
+INTEGRATION_DIRECTORY = TRANSLATION_DIRECTORY.parent
 LANGUAGES = ("en", "fi")
 LIFECYCLE_REPLACEMENT_STEPS = {
     "asset_lifecycle",
@@ -131,11 +131,19 @@ def test_options_translation_structures_match_and_are_valid_json() -> None:
     english = _translation("en")
     finnish = _translation("fi")
 
+    assert english["title"] == finnish["title"] == "Device Lifecycle"
     assert _key_shape(english["options"]) == _key_shape(finnish["options"])
     assert _key_shape(english["config_subentries"]["purchase"]) == _key_shape(
         finnish["config_subentries"]["purchase"]
     )
     assert _key_shape(english["entity"]) == _key_shape(finnish["entity"])
+
+
+def test_custom_integration_uses_runtime_translation_files_only() -> None:
+    """The custom integration has complete EN/FI runtime files, not strings.json."""
+    assert not (INTEGRATION_DIRECTORY / "strings.json").exists()
+    assert (TRANSLATION_DIRECTORY / "en.json").is_file()
+    assert (TRANSLATION_DIRECTORY / "fi.json").is_file()
 
 
 @pytest.mark.parametrize("language", LANGUAGES)
@@ -172,14 +180,6 @@ def test_custom_integration_runtime_translation_is_independently_complete(
         assert all(value.strip() for value in entity["state"].values())
 
 
-def test_strings_source_matches_english_translation() -> None:
-    """The canonical strings source matches the English translation."""
-    with STRINGS_FILE.open(encoding="utf-8") as strings_file:
-        strings = json.load(strings_file)
-
-    assert strings == _translation("en")
-
-
 @pytest.mark.parametrize("language", LANGUAGES)
 def test_malformed_history_date_errors_are_available_at_runtime(
     language: str,
@@ -188,6 +188,8 @@ def test_malformed_history_date_errors_are_available_at_runtime(
     errors = _translation(language)["options"]["error"]
     assert errors["invalid_lifecycle_effective_date"].strip()
     assert errors["invalid_replacement_effective_date"].strip()
+    assert errors["lifecycle_date_not_applicable"].strip()
+    assert errors["replacement_date_before_predecessor_lifecycle"].strip()
 
 
 def test_exposure_entity_names_and_enum_states_are_translated() -> None:
@@ -239,8 +241,12 @@ def test_every_menu_action_and_step_has_translation(language: str) -> None:
     steps = _translation(language)["options"]["step"]
 
     assert set(steps["init"]["menu_options"]) == {
-        "create_manual_asset",
+        "quick_add",
         "manage_asset",
+    }
+    assert set(steps["quick_add"]["menu_options"]) == {
+        "quick_add_from_ha",
+        "quick_add_manual",
     }
     assert set(steps["manage_asset_menu"]["menu_options"]) == {
         "asset_deployment",
@@ -262,10 +268,12 @@ def test_every_menu_action_and_step_has_translation(language: str) -> None:
     }
     menu_actions = {
         *steps["init"]["menu_options"],
+        *steps["quick_add"]["menu_options"],
         *steps["manage_asset_menu"]["menu_options"],
         *steps["ha_relationship"]["menu_options"],
         *steps["asset_replacement"]["menu_options"],
     }
+    menu_actions.remove("quick_add_manual")
     assert menu_actions <= set(steps)
 
 
