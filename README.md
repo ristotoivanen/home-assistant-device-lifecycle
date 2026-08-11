@@ -10,7 +10,6 @@
   <a href="https://my.home-assistant.io/redirect/hacs_repository/?owner=ristotoivanen&amp;repository=home-assistant-device-lifecycle&amp;category=integration"><img src="https://my.home-assistant.io/badges/hacs_repository.svg" alt="Open this Device Lifecycle repository in HACS"></a>
   <a href="https://github.com/ristotoivanen/home-assistant-device-lifecycle/releases"><img src="https://img.shields.io/github/v/release/ristotoivanen/home-assistant-device-lifecycle?display_name=tag&amp;sort=semver" alt="Latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/ristotoivanen/home-assistant-device-lifecycle" alt="MIT license"></a>
-  <a href="https://buymeacoffee.com/ristodev"><img src="https://img.shields.io/badge/Buy_Me_a_Coffee-Support-FFDD00?logo=buymeacoffee&amp;logoColor=000" alt="Buy Me a Coffee"></a>
 </p>
 
 <p align="center">
@@ -442,6 +441,8 @@ Device Lifecycle 0.7.1 does not provide Asset deletion/purge/merge, Runtime rese
 ## Support
 
 For reproducible problems, open a [GitHub issue](https://github.com/ristotoivanen/home-assistant-device-lifecycle/issues). If Device Lifecycle is useful to you, you can support its development through [Buy Me a Coffee](https://buymeacoffee.com/ristodev).
+
+<a href="https://buymeacoffee.com/ristodev"><img src="https://img.shields.io/badge/Buy_me_a_beer-Support-FFDD00?logo=buymeacoffee&amp;logoColor=000" alt="Buy me a beer"></a>
 
 ## Roadmap
 
