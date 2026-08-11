@@ -440,9 +440,9 @@ Device Lifecycle 0.7.1 does not provide Asset deletion/purge/merge, Runtime rese
 
 ## Support
 
-For reproducible problems, open a [GitHub issue](https://github.com/ristotoivanen/home-assistant-device-lifecycle/issues). If Device Lifecycle is useful to you, you can support its development through [Buy Me a Coffee](https://buymeacoffee.com/ristodev).
+For reproducible problems, open a [GitHub issue](https://github.com/ristotoivanen/home-assistant-device-lifecycle/issues). Enjoying Device Lifecycle? [Buy me a coffee](https://buymeacoffee.com/ristodev) ☕
 
-<a href="https://buymeacoffee.com/ristodev"><img src="https://img.shields.io/badge/Buy_me_a_beer-Support-FFDD00?logo=buymeacoffee&amp;logoColor=000" alt="Buy me a beer"></a>
+<a href="https://buymeacoffee.com/ristodev"><img src="https://img.shields.io/badge/Buy_me_a_coffee-Support-FFDD00?logo=buymeacoffee&amp;logoColor=000" alt="Buy me a coffee"></a>
 
 ## Roadmap
 

@@ -1719,6 +1719,14 @@ class AssetStoreManager:
                 "Quick Create Lifecycle status is invalid",
                 code="invalid_lifecycle_status",
             )
+        if (
+            request.initial_lifecycle_status == LIFECYCLE_STATUS_UNKNOWN
+            and request.initial_lifecycle_effective_date is not None
+        ):
+            raise AssetStoreError(
+                "Initial unknown Lifecycle cannot have an effective date",
+                code="lifecycle_date_not_applicable",
+            )
         self._normalize_effective_date(
             request.initial_lifecycle_effective_date,
             invalid_code="invalid_lifecycle_effective_date",

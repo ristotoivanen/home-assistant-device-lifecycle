@@ -189,6 +189,7 @@
       "invalid_warranty_type": "Select a valid warranty type.",
       "lifecycle_chain_invalid": "The Lifecycle history is inconsistent. Nothing was changed.",
       "lifecycle_date_in_future": "The Lifecycle effective date cannot be in the future.",
+      "lifecycle_date_not_applicable": "Lifecycle effective date cannot be set when Lifecycle is Unknown.",
       "lifecycle_no_change": "The selected Lifecycle status is already current. Nothing was changed.",
       "no_assets": "There are no Assets to manage yet.",
       "non_physical_device_not_allowed": "Select a physical Home Assistant device provided by another integration.",

@@ -262,6 +262,31 @@ async def test_quick_create_initial_lifecycle_states(
         assert events[0]["from_status"] == LIFECYCLE_STATUS_UNKNOWN
         assert events[0]["to_status"] == status
         assert events[0]["effective_date"] == "2026-08-01"
+    else:
+        assert result.asset["lifecycle"]["current_event_uuid"] is None
+
+
+async def test_quick_create_unknown_lifecycle_rejects_date_atomically(
+    hass: HomeAssistant,
+) -> None:
+    """Unknown initial Lifecycle cannot silently discard an effective date."""
+    manager = _manager(hass)
+    before = deepcopy(manager._data)
+
+    with pytest.raises(AssetStoreError) as raised:
+        await manager.async_quick_create_asset(
+            _request(
+                initial_lifecycle_status=LIFECYCLE_STATUS_UNKNOWN,
+                initial_lifecycle_effective_date="2026-08-01",
+            )
+        )
+
+    assert raised.value.code == "lifecycle_date_not_applicable"
+    assert manager._data == before
+    assert manager._data["next_asset_number"] == 1
+    assert manager.asset(QUICK_UUID) is None
+    assert manager._data["lifecycle_events"] == {}
+    manager._store.async_save.assert_not_awaited()
 
 
 async def test_quick_create_purchase_and_two_year_warranty_are_atomic(

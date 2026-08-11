@@ -189,6 +189,7 @@
       "invalid_warranty_type": "Valitse kelvollinen takuun tyyppi.",
       "lifecycle_chain_invalid": "Elinkaarihistoria on ristiriitainen. Mitään ei muutettu.",
       "lifecycle_date_in_future": "Elinkaaritilan voimaantulopäivä ei voi olla tulevaisuudessa.",
+      "lifecycle_date_not_applicable": "Elinkaaritilan voimaantulopäivää ei voi määrittää, kun elinkaaritila on Tuntematon.",
       "lifecycle_no_change": "Valittu elinkaaritila on jo nykyinen tila. Mitään ei muutettu.",
       "no_assets": "Hallittavia laitteita ei vielä ole.",
       "non_physical_device_not_allowed": "Valitse toisen integraation lisäämä fyysinen Home Assistant -laite.",

@@ -1032,6 +1032,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 "invalid_warranty_type",
                 "lifecycle_chain_invalid",
                 "lifecycle_date_in_future",
+                "lifecycle_date_not_applicable",
                 "persistence_error",
                 "predecessor_changed",
                 "purchase_changed",
@@ -1861,6 +1862,14 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 invalid_code="invalid_lifecycle_effective_date",
                 reject_future=True,
             )
+            if (
+                lifecycle_status == LIFECYCLE_STATUS_UNKNOWN
+                and lifecycle_date is not None
+            ):
+                raise AssetStoreError(
+                    "Initial unknown Lifecycle cannot have an effective date",
+                    code="lifecycle_date_not_applicable",
+                )
             deployment_state = str(
                 values.get(
                     CONF_DEPLOYMENT_STATE,
@@ -2220,6 +2229,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 "invalid_lifecycle_status",
                 "invalid_lifecycle_effective_date",
                 "lifecycle_date_in_future",
+                "lifecycle_date_not_applicable",
                 "invalid_deployment_state",
                 "invalid_installed_date",
                 "invalid_area",

@@ -47,6 +47,7 @@ from custom_components.device_lifecycle.const import (
     DOMAIN,
     LIFECYCLE_STATUS_ACTIVE,
     LIFECYCLE_STATUS_DISPOSED,
+    LIFECYCLE_STATUS_UNKNOWN,
     WARRANTY_MANUAL,
     WARRANTY_NONE,
     WARRANTY_ONE_YEAR,
@@ -359,6 +360,86 @@ async def test_details_validation_and_disposed_confirmation(
     )
     assert disposed["step_id"] == "quick_add_confirm"
     assert "disposed" in disposed["description_placeholders"]["disposed_warning"]
+
+
+async def test_unknown_lifecycle_date_is_local_atomic_and_recoverable(
+    hass: HomeAssistant,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unknown plus a date stays editable and reuses one proposed Asset UUID."""
+    manager = _manager(hass)
+    flow, entry = _flow(hass, manager)
+    uuid_factory = Mock(return_value=UUID(QUICK_UUID))
+    monkeypatch.setattr(
+        "custom_components.device_lifecycle.config_flow.uuid4",
+        uuid_factory,
+    )
+    reload_mock = Mock()
+    monkeypatch.setattr(hass.config_entries, "async_schedule_reload", reload_mock)
+    await flow.async_step_quick_add_manual()
+    proposed_uuid = flow._quick_asset_uuid
+    before = deepcopy(manager._data)
+    invalid = _details(
+        name="Unknown dated Asset",
+        lifecycle_status=LIFECYCLE_STATUS_UNKNOWN,
+    )
+    invalid[QUICK_SECTION_LIFECYCLE][CONF_EFFECTIVE_DATE] = "2026-08-01"
+
+    retry = await flow.async_step_quick_add_details(invalid)
+
+    assert retry["step_id"] == "quick_add_details"
+    assert retry["errors"] == {"base": "lifecycle_date_not_applicable"}
+    lifecycle_schema = retry["data_schema"].schema[
+        QUICK_SECTION_LIFECYCLE
+    ].schema.schema
+    lifecycle_markers = {
+        getattr(marker, "schema", marker): marker for marker in lifecycle_schema
+    }
+    identity_schema = retry["data_schema"].schema[
+        QUICK_SECTION_IDENTITY
+    ].schema.schema
+    identity_markers = {
+        getattr(marker, "schema", marker): marker for marker in identity_schema
+    }
+    assert lifecycle_markers["lifecycle_status"].description[
+        "suggested_value"
+    ] == LIFECYCLE_STATUS_UNKNOWN
+    assert lifecycle_markers[CONF_EFFECTIVE_DATE].description[
+        "suggested_value"
+    ] == "2026-08-01"
+    assert identity_markers[CONF_ASSET_NAME].description[
+        "suggested_value"
+    ] == "Unknown dated Asset"
+    assert flow._quick_details_input == flow._flatten_quick_sections(invalid)
+    assert manager._data == before
+    assert manager._data["next_asset_number"] == 1
+    assert manager.asset(proposed_uuid) is None
+    manager._store.async_save.assert_not_awaited()
+    assert reload_mock.call_count == 0
+    assert flow._quick_asset_uuid == proposed_uuid == QUICK_UUID
+    assert uuid_factory.call_count == 1
+
+    corrected = deepcopy(invalid)
+    corrected[QUICK_SECTION_LIFECYCLE].pop(CONF_EFFECTIVE_DATE)
+    confirm = await flow.async_step_quick_add_details(corrected)
+    result = await flow.async_step_quick_add_confirm(
+        {CONF_CONFIRM_QUICK_ADD: True}
+    )
+
+    assert confirm["step_id"] == "quick_add_confirm"
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"] == entry.options == {}
+    asset = manager.asset(proposed_uuid)
+    assert asset is not None
+    assert asset["lifecycle"] == {
+        "status": LIFECYCLE_STATUS_UNKNOWN,
+        "current_event_uuid": None,
+    }
+    assert manager.lifecycle_events_for_asset(proposed_uuid) == []
+    assert manager._store.async_save.await_count == 1
+    assert reload_mock.call_count == 1
+    assert flow._quick_asset_uuid == proposed_uuid
+    assert uuid_factory.call_count == 1
 
 
 async def test_warranty_calculation_and_stale_purchase_error_locality(

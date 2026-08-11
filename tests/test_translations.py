@@ -188,6 +188,7 @@ def test_malformed_history_date_errors_are_available_at_runtime(
     errors = _translation(language)["options"]["error"]
     assert errors["invalid_lifecycle_effective_date"].strip()
     assert errors["invalid_replacement_effective_date"].strip()
+    assert errors["lifecycle_date_not_applicable"].strip()
     assert errors["replacement_date_before_predecessor_lifecycle"].strip()
 
 
