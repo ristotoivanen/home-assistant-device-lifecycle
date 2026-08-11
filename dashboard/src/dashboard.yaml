@@ -1,0 +1,1990 @@
+# Canonical shared dashboard logic. Localized segments are expanded by build.py.
+template: |
+  __DL_I18N_SEGMENT_0001__
+  views:
+    - type: sections
+  __DL_I18N_SEGMENT_0002__
+      max_columns: 4
+      dense_section_placement: true
+      sections:
+        - type: grid
+          column_span: 1
+          cards:
+            - type: markdown
+              content: >
+                # Device Lifecycle
+
+  __DL_I18N_SEGMENT_0003__
+
+
+                {% set entities = integration_entities('device_lifecycle') | list
+                %}
+
+                {% set lifecycle_options =
+                  ['unknown', 'active', 'retired', 'disposed', 'lost'] %}
+
+                {% set ns = namespace(
+                  assets=0,
+                  active=0,
+                  unknown=0,
+                  archived=0,
+                  deployed=0,
+                  not_deployed=0,
+                  deployment_unknown=0,
+                  runtime=0,
+                  running=0
+                ) %}
+
+
+                {% for entity in entities %}
+                  {% if state_attr(entity, 'takuu_tila') is not none %}
+                    {% set ns.assets = ns.assets + 1 %}
+                    {% set asset_device_id = device_id(entity) %}
+                    {% set match = namespace(
+                      lifecycle='',
+                      deployment=''
+                    ) %}
+
+                    {% for sibling in entities %}
+                      {% if asset_device_id
+                            and device_id(sibling) == asset_device_id %}
+                        {% set sibling_options =
+                          state_attr(sibling, 'options') %}
+
+                        {% if sibling_options is not none
+                              and (sibling_options | list)
+                                == lifecycle_options %}
+                          {% set match.lifecycle = sibling %}
+                        {% elif state_attr(
+                              sibling, 'asset_area_state') is not none %}
+                          {% set match.deployment = sibling %}
+                        {% endif %}
+                      {% endif %}
+                    {% endfor %}
+
+                    {% if match.lifecycle %}
+                      {% set lifecycle_state = states(match.lifecycle) %}
+
+                      {% if lifecycle_state == 'active' %}
+                        {% set ns.active = ns.active + 1 %}
+                      {% elif lifecycle_state == 'unknown' %}
+                        {% set ns.unknown = ns.unknown + 1 %}
+                      {% elif lifecycle_state in
+                            ['retired', 'disposed', 'lost'] %}
+                        {% set ns.archived = ns.archived + 1 %}
+                      {% endif %}
+                    {% endif %}
+
+                    {% if match.deployment %}
+                      {% if states(match.deployment) == 'deployed' %}
+                        {% set ns.deployed = ns.deployed + 1 %}
+                      {% elif states(match.deployment) == 'not_deployed' %}
+                        {% set ns.not_deployed = ns.not_deployed + 1 %}
+                      {% else %}
+                        {% set ns.deployment_unknown =
+                          ns.deployment_unknown + 1 %}
+                      {% endif %}
+                    {% else %}
+                      {% set ns.deployment_unknown =
+                        ns.deployment_unknown + 1 %}
+                    {% endif %}
+
+                  {% elif state_attr(entity, 'lahde_entiteetti') is not none %}
+                    {% set ns.runtime = ns.runtime + 1 %}
+
+                    {% if state_attr(entity, 'aktiivinen') == true %}
+                      {% set ns.running = ns.running + 1 %}
+                    {% endif %}
+                  {% endif %}
+                {% endfor %}
+
+
+  __DL_I18N_SEGMENT_0004__
+
+
+  __DL_I18N_SEGMENT_0005__
+
+
+  __DL_I18N_SEGMENT_0006__
+
+                {% if ns.deployment_unknown > 0 %}
+
+                 {{ ns.deployment_unknown }} {% if ns.deployment_unknown == 1
+  __DL_I18N_SEGMENT_0007__
+
+                {% endif %}
+
+
+  __DL_I18N_SEGMENT_0008__
+            - type: markdown
+              content: >
+  __DL_I18N_SEGMENT_0009__
+
+
+                {% set entities = integration_entities('device_lifecycle') | list
+                %}
+
+                {% set lifecycle_options =
+                  ['unknown', 'active', 'retired', 'disposed', 'lost'] %}
+
+                {% set deployment_states =
+                  ['unknown', 'not_deployed', 'deployed'] %}
+
+                {% set relationship_states =
+                  ['none', 'present', 'missing'] %}
+
+                {% set ns = namespace(
+                  runtime=0,
+                  relationships=0,
+                  areas=0,
+                  lifecycle_unavailable=0,
+                  deployment_unavailable=0,
+                  relationships_unavailable=0,
+                  lifecycle_unknown=0,
+                  deployment_unknown=0,
+                  warranty_soon=0,
+                  warranty_expired=0
+                ) %}
+
+
+                {% for entity in entities %}
+                  {% if state_attr(entity, 'lahde_entiteetti') is not none
+                        and state_attr(entity, 'lahde_saatavilla') == false %}
+                    {% set ns.runtime = ns.runtime + 1 %}
+                  {% endif %}
+
+                  {% if state_attr(entity, 'primary_state') is not none
+                        and states(entity) == 'missing' %}
+                    {% set ns.relationships = ns.relationships + 1 %}
+                  {% endif %}
+
+                  {% if state_attr(entity, 'asset_area_state') == 'missing' %}
+                    {% set ns.areas = ns.areas + 1 %}
+                  {% endif %}
+
+                  {% if state_attr(entity, 'takuu_tila') is not none %}
+                    {% if state_attr(entity, 'takuu_tila') == 'päättynyt' %}
+                      {% set ns.warranty_expired =
+                        ns.warranty_expired + 1 %}
+                    {% elif state_attr(entity, 'takuu_tila') == 'voimassa' %}
+                      {% set warranty_days = state_attr(
+                        entity, 'takuuta_jaljella_paivaa') %}
+
+                      {% if warranty_days is not none
+                            and warranty_days | int(999999) <= 90 %}
+                        {% set ns.warranty_soon =
+                          ns.warranty_soon + 1 %}
+                      {% endif %}
+                    {% endif %}
+
+                    {% set asset_device_id = device_id(entity) %}
+                    {% set match = namespace(
+                      lifecycle='',
+                      deployment='',
+                      relationships=''
+                    ) %}
+
+                    {% for sibling in entities %}
+                      {% if asset_device_id
+                            and device_id(sibling) == asset_device_id %}
+                        {% set sibling_options =
+                          state_attr(sibling, 'options') %}
+
+                        {# Lifecycle Status has no stronger unique template
+                           attribute in 0.7.0; use its canonical ENUM options. #}
+                        {% if sibling_options is not none
+                              and (sibling_options | list)
+                                == lifecycle_options %}
+                          {% set match.lifecycle = sibling %}
+                        {% elif state_attr(
+                              sibling, 'asset_area_state') is not none %}
+                          {% set match.deployment = sibling %}
+                        {% elif state_attr(
+                              sibling, 'primary_state') is not none %}
+                          {% set match.relationships = sibling %}
+                        {% endif %}
+                      {% endif %}
+                    {% endfor %}
+
+                    {% if match.lifecycle
+                          and states(match.lifecycle)
+                            in lifecycle_options %}
+                      {% if states(match.lifecycle) == 'unknown' %}
+                        {% set ns.lifecycle_unknown =
+                          ns.lifecycle_unknown + 1 %}
+                      {% endif %}
+                    {% else %}
+                      {% set ns.lifecycle_unavailable =
+                        ns.lifecycle_unavailable + 1 %}
+                    {% endif %}
+
+                    {% if match.deployment
+                          and states(match.deployment)
+                            in deployment_states %}
+                      {% if states(match.deployment) == 'unknown' %}
+                        {% set ns.deployment_unknown =
+                          ns.deployment_unknown + 1 %}
+                      {% endif %}
+                    {% else %}
+                      {% set ns.deployment_unavailable =
+                        ns.deployment_unavailable + 1 %}
+                    {% endif %}
+
+                    {% if not match.relationships
+                          or states(match.relationships)
+                            not in relationship_states %}
+                      {% set ns.relationships_unavailable =
+                        ns.relationships_unavailable + 1 %}
+                    {% endif %}
+                  {% endif %}
+                {% endfor %}
+
+
+  __DL_I18N_SEGMENT_0010__
+
+
+                {% if ns.runtime == 0
+                      and ns.relationships == 0
+                      and ns.areas == 0
+                      and ns.lifecycle_unavailable == 0
+                      and ns.deployment_unavailable == 0
+                      and ns.relationships_unavailable == 0 %}
+
+  __DL_I18N_SEGMENT_0011__
+
+                {% else %}
+
+                {% if ns.runtime > 0 %}
+
+  __DL_I18N_SEGMENT_0012__
+
+                {% endif %}
+
+
+                {% if ns.relationships > 0 %}
+
+  __DL_I18N_SEGMENT_0013__
+
+                {% endif %}
+
+
+                {% if ns.areas > 0 %}
+
+  __DL_I18N_SEGMENT_0014__
+
+                {% endif %}
+
+
+                {% if ns.lifecycle_unavailable > 0 %}
+
+  __DL_I18N_SEGMENT_0015__
+
+                {% endif %}
+
+
+                {% if ns.deployment_unavailable > 0 %}
+
+  __DL_I18N_SEGMENT_0016__
+
+                {% endif %}
+
+
+                {% if ns.relationships_unavailable > 0 %}
+
+  __DL_I18N_SEGMENT_0017__
+
+                {% endif %}
+
+                {% endif %}
+
+
+  __DL_I18N_SEGMENT_0018__
+
+
+                {% if ns.lifecycle_unknown == 0
+                      and ns.deployment_unknown == 0 %}
+
+  __DL_I18N_SEGMENT_0019__
+
+                {% else %}
+
+                {% if ns.lifecycle_unknown > 0 %}
+
+  __DL_I18N_SEGMENT_0020__
+
+                {% endif %}
+
+
+                {% if ns.deployment_unknown > 0 %}
+
+  __DL_I18N_SEGMENT_0021__
+
+                {% endif %}
+
+                {% endif %}
+
+
+                {% if ns.warranty_soon > 0 %}
+
+  __DL_I18N_SEGMENT_0022__
+
+
+  __DL_I18N_SEGMENT_0023__
+
+                {% endif %}
+
+
+  __DL_I18N_SEGMENT_0024__
+
+
+  __DL_I18N_SEGMENT_0025__
+        - type: grid
+          column_span: 1
+          cards:
+            - type: markdown
+              content: >
+                ## Runtime
+
+
+                {% set entities = integration_entities('device_lifecycle') | list
+                %}
+
+                {% set ns = namespace(
+                  items=[],
+                  running=0,
+                  unavailable=0
+                ) %}
+
+
+                {% for entity in entities %}
+                  {% if state_attr(entity, 'lahde_entiteetti') is not none %}
+                    {% set name = device_name(entity) or
+                      state_attr(entity, 'friendly_name') or entity %}
+
+                    {% if state_attr(entity, 'lahde_saatavilla') == false %}
+  __DL_I18N_SEGMENT_0026__
+                      {% set ns.unavailable = ns.unavailable + 1 %}
+                    {% elif state_attr(entity, 'aktiivinen') == true %}
+  __DL_I18N_SEGMENT_0027__
+                      {% set ns.running = ns.running + 1 %}
+                    {% else %}
+  __DL_I18N_SEGMENT_0028__
+                    {% endif %}
+
+                    {% set ns.items = ns.items + [{
+                      'name': name,
+                      'entity': entity,
+                      'status': status
+                    }] %}
+                  {% endif %}
+                {% endfor %}
+
+
+  __DL_I18N_SEGMENT_0029__
+
+
+                {% if ns.items | count == 0 %}
+
+  __DL_I18N_SEGMENT_0030__
+
+                {% else %}
+
+                {% for item in ns.items | sort(attribute='name') %}
+                  {% set dev = device_id(item.entity) %}
+                  {% if dev %}
+                    {% set display_name =
+                      '[' ~ item.name ~ '](/config/devices/device/'
+                      ~ dev ~ ')' %}
+                  {% else %}
+                    {% set display_name = item.name %}
+                  {% endif %}
+                - {{ display_name }} · {{ item.status }} {% endfor %}
+
+                {% endif %}
+      cards: []
+    - type: sections
+  __DL_I18N_SEGMENT_0031__
+      max_columns: 4
+      dense_section_placement: true
+      sections:
+        - type: grid
+          column_span: 3
+          cards:
+            - type: markdown
+              grid_options:
+                columns: 36
+                rows: auto
+              content: >
+                # Device Lifecycle
+
+  __DL_I18N_SEGMENT_0032__
+
+
+                {% set entities = integration_entities('device_lifecycle') | list
+                %}
+
+                {% set lifecycle_options =
+                  ['unknown', 'active', 'retired', 'disposed', 'lost'] %}
+
+                {% set table_header = [
+  __DL_I18N_SEGMENT_0033__
+                  '|---|---|---|---|'
+                ] %}
+
+                {% set ns = namespace(
+                  active=[],
+                  unknown=[],
+                  archived=[],
+                  unavailable=[]
+                ) %}
+
+
+                {% for entity in entities %}
+                  {% if state_attr(entity, 'takuu_tila') is not none %}
+                    {% set asset_id = state_attr(entity, 'asset_id') %}
+                    {% set asset_device_id = device_id(entity) %}
+                    {% set name = device_name(entity) %}
+
+                    {% if not name %}
+                      {% set name =
+                        (state_attr(entity, 'friendly_name') or entity)
+  __DL_I18N_SEGMENT_0034__
+                    {% endif %}
+
+                    {% if asset_device_id %}
+                      {% set name_link =
+                        '[' ~ name ~ '](/config/devices/device/'
+                        ~ asset_device_id ~ ')' %}
+                    {% else %}
+                      {% set name_link = name %}
+                    {% endif %}
+
+                    {% set match = namespace(
+                      lifecycle='',
+                      deployment=''
+                    ) %}
+
+                    {% for sibling in entities %}
+                      {% if asset_device_id
+                            and device_id(sibling) == asset_device_id %}
+                        {% set sibling_options =
+                          state_attr(sibling, 'options') %}
+
+                        {# Lifecycle Status has no stronger unique template
+                           attribute in 0.7.0; use its canonical ENUM options. #}
+                        {% if sibling_options is not none
+                              and (sibling_options | list)
+                                == lifecycle_options %}
+                          {% set match.lifecycle = sibling %}
+                        {% elif state_attr(
+                              sibling, 'asset_area_state') is not none %}
+                          {% set match.deployment = sibling %}
+                        {% endif %}
+                      {% endif %}
+                    {% endfor %}
+
+                    {% if match.deployment %}
+                      {% set deployment_state = states(match.deployment) %}
+                      {% set area_name = state_attr(
+                        match.deployment, 'asset_area_name') %}
+
+                      {% if deployment_state == 'deployed' %}
+  __DL_I18N_SEGMENT_0035__
+                      {% elif deployment_state == 'not_deployed' %}
+  __DL_I18N_SEGMENT_0036__
+                      {% else %}
+                        {% set deployment_text =
+  __DL_I18N_SEGMENT_0037__
+                      {% endif %}
+
+                      {% if area_name %}
+                        {% set deployment_text =
+                          deployment_text ~ ' · ' ~ area_name %}
+                      {% elif state_attr(
+                            match.deployment, 'asset_area_state') == 'missing' %}
+                        {% set deployment_text =
+  __DL_I18N_SEGMENT_0038__
+                      {% endif %}
+
+                      {# Canonical Installation Date remains independent of
+                         Deployment state and comes from Deployment exposure. #}
+                      {% set installed_date = state_attr(
+                        match.deployment, 'installed_date') %}
+                      {% set installed_date_text = '' %}
+
+                      {% if installed_date %}
+                        {% set date_string = installed_date | string %}
+                        {% if date_string | length == 10
+                              and date_string[4:5] == '-'
+                              and date_string[7:8] == '-' %}
+                          {% set installed_date_text =
+                            (date_string[8:10] | int)
+                            ~ '.' ~ (date_string[5:7] | int)
+                            ~ '.' ~ date_string[0:4] %}
+                        {% else %}
+                          {% set installed_date_text = date_string %}
+                        {% endif %}
+                      {% endif %}
+
+                      {% if installed_date_text %}
+                        {% set deployment_text =
+  __DL_I18N_SEGMENT_0039__
+                          ~ installed_date_text %}
+                      {% endif %}
+                    {% else %}
+                      {% set deployment_text =
+  __DL_I18N_SEGMENT_0040__
+                    {% endif %}
+
+                    {% set warranty_state =
+                      state_attr(entity, 'takuu_tila') %}
+                    {% set warranty_until =
+                      state_attr(entity, 'takuu_paattyy') %}
+                    {% set warranty_days = state_attr(
+                      entity, 'takuuta_jaljella_paivaa') %}
+
+                    {% if warranty_state == 'voimassa' %}
+                      {% if warranty_days is not none
+                            and warranty_days | int(999999) <= 90 %}
+                        {% set warranty_text = '🟠 ' ~ (
+  __DL_I18N_SEGMENT_0041__
+                      {% else %}
+                        {% set warranty_text = '🟢 ' ~ (
+  __DL_I18N_SEGMENT_0042__
+                      {% endif %}
+                    {% elif warranty_state == 'päättynyt' %}
+  __DL_I18N_SEGMENT_0043__
+                    {% else %}
+                      {% set warranty_text = '—' %}
+                    {% endif %}
+
+                    {% if match.lifecycle %}
+                      {% set lifecycle_state = states(match.lifecycle) %}
+                      {% set lifecycle_effective_date = state_attr(
+                        match.lifecycle, 'effective_date') %}
+                    {% else %}
+                      {% set lifecycle_state = '' %}
+                      {% set lifecycle_effective_date = none %}
+                    {% endif %}
+
+                    {% set lifecycle_date_text = '' %}
+                    {% if lifecycle_effective_date %}
+                      {% set date_string =
+                        lifecycle_effective_date | string %}
+                      {% if date_string | length == 10
+                            and date_string[4:5] == '-'
+                            and date_string[7:8] == '-' %}
+                        {% set lifecycle_date_text =
+                          (date_string[8:10] | int)
+                          ~ '.' ~ (date_string[5:7] | int)
+                          ~ '.' ~ date_string[0:4] %}
+                      {% else %}
+                        {% set lifecycle_date_text = date_string %}
+                      {% endif %}
+                    {% endif %}
+
+                    {% if lifecycle_state == 'active' %}
+  __DL_I18N_SEGMENT_0044__
+                      {% set asset_text = '**' ~ name_link ~ '**' %}
+                    {% elif lifecycle_state == 'unknown' %}
+  __DL_I18N_SEGMENT_0045__
+                      {% set asset_text = '**' ~ name_link ~ '**' %}
+                    {% elif lifecycle_state == 'retired' %}
+  __DL_I18N_SEGMENT_0046__
+                      {% set asset_text = name_link %}
+                    {% elif lifecycle_state == 'disposed' %}
+  __DL_I18N_SEGMENT_0047__
+                      {% set asset_text = name_link %}
+                    {% elif lifecycle_state == 'lost' %}
+  __DL_I18N_SEGMENT_0048__
+                      {% set asset_text = name_link %}
+                    {% else %}
+  __DL_I18N_SEGMENT_0049__
+                      {% set asset_text = name_link %}
+                    {% endif %}
+
+                    {% if lifecycle_date_text %}
+                      {% set lifecycle_text =
+                        lifecycle_text ~ ' · ' ~ lifecycle_date_text %}
+                    {% endif %}
+
+                    {% set row =
+                      '| ' ~ asset_text
+                      ~ ' | ' ~ lifecycle_text
+                      ~ ' | ' ~ deployment_text
+                      ~ ' | ' ~ warranty_text
+                      ~ ' |'
+                    %}
+
+                    {% if lifecycle_state == 'active' %}
+                      {% set ns.active = ns.active + [row] %}
+                    {% elif lifecycle_state == 'unknown' %}
+                      {% set ns.unknown = ns.unknown + [row] %}
+                    {% elif lifecycle_state in
+                          ['retired', 'disposed', 'lost'] %}
+                      {% set ns.archived = ns.archived + [row] %}
+                    {% else %}
+                      {% set ns.unavailable = ns.unavailable + [row] %}
+                    {% endif %}
+                  {% endif %}
+                {% endfor %}
+
+
+  __DL_I18N_SEGMENT_0050__
+
+
+                {% if ns.active | count > 0 %}
+
+                {{ (table_header + ns.active) | join('\n') }}
+
+                {% else %}
+
+  __DL_I18N_SEGMENT_0051__
+
+                {% endif %}
+
+
+  __DL_I18N_SEGMENT_0052__
+
+
+                {% if ns.unknown | count > 0 %}
+
+                {{ (table_header + ns.unknown) | join('\n') }}
+
+                {% else %}
+
+  __DL_I18N_SEGMENT_0053__
+
+                {% endif %}
+
+
+  __DL_I18N_SEGMENT_0054__
+
+
+                {% if ns.archived | count > 0 %}
+
+                {{ (table_header + ns.archived) | join('\n') }}
+
+                {% else %}
+
+  __DL_I18N_SEGMENT_0055__
+
+                {% endif %}
+
+
+                {% if ns.unavailable | count > 0 %}
+
+  __DL_I18N_SEGMENT_0056__
+
+
+                {{ (table_header + ns.unavailable) | join('\n') }}
+
+                {% endif %}
+        - type: grid
+          column_span: 1
+          cards:
+            - type: markdown
+              content: >
+  __DL_I18N_SEGMENT_0057__
+
+
+                {% set entities = integration_entities('device_lifecycle') | list
+                %}
+
+                {# Replacement is uniquely identified in 0.7.0 by both
+                   predecessor/successor list attributes. #}
+
+                {% set ns = namespace(
+                  available=0,
+                  edge_keys=[],
+                  edges=[]
+                ) %}
+
+
+                {% for entity in entities %}
+                  {% if state_attr(entity, 'takuu_tila') is not none %}
+                    {% set asset_id = state_attr(entity, 'asset_id') %}
+                    {% set asset_device_id = device_id(entity) %}
+
+                    {% for sibling in entities %}
+                      {% if asset_device_id
+                            and device_id(sibling) == asset_device_id %}
+                        {% set predecessors = state_attr(
+                          sibling, 'predecessor_asset_ids') %}
+                        {% set successors = state_attr(
+                          sibling, 'successor_asset_ids') %}
+
+                        {% if predecessors is not none
+                              and successors is not none %}
+                          {% set ns.available = ns.available + 1 %}
+
+                          {% set predecessors = predecessors or [] %}
+                          {% set successors = successors or [] %}
+
+                          {% for predecessor in predecessors %}
+                            {% set edge_key =
+                              predecessor ~ '>' ~ asset_id %}
+                            {% if edge_key not in ns.edge_keys %}
+                              {% set ns.edge_keys =
+                                ns.edge_keys + [edge_key] %}
+                              {% set ns.edges = ns.edges + [{
+                                'from': predecessor,
+                                'to': asset_id
+                              }] %}
+                            {% endif %}
+                          {% endfor %}
+
+                          {% for successor in successors %}
+                            {% set edge_key =
+                              asset_id ~ '>' ~ successor %}
+                            {% if edge_key not in ns.edge_keys %}
+                              {% set ns.edge_keys =
+                                ns.edge_keys + [edge_key] %}
+                              {% set ns.edges = ns.edges + [{
+                                'from': asset_id,
+                                'to': successor
+                              }] %}
+                            {% endif %}
+                          {% endfor %}
+                        {% endif %}
+                      {% endif %}
+                    {% endfor %}
+                  {% endif %}
+                {% endfor %}
+
+
+                {% if ns.available == 0 %}
+
+  __DL_I18N_SEGMENT_0058__
+
+                {% elif ns.edges | count == 0 %}
+
+  __DL_I18N_SEGMENT_0059__
+
+                {% else %}
+
+                {% for edge in ns.edges %}
+                  {% set predecessor = namespace(
+                    name='',
+                    device=''
+                  ) %}
+                  {% set successor = namespace(
+                    name='',
+                    device=''
+                  ) %}
+
+                  {% for candidate in entities %}
+                    {% if state_attr(candidate, 'takuu_tila') is not none %}
+                      {% set candidate_id =
+                        state_attr(candidate, 'asset_id') %}
+
+                      {% if candidate_id == edge.from %}
+                        {% set predecessor.name =
+                          device_name(candidate)
+                          or (state_attr(candidate, 'friendly_name')
+                            or candidate)
+  __DL_I18N_SEGMENT_0060__
+                        {% set predecessor.device = device_id(candidate) %}
+                      {% endif %}
+
+                      {% if candidate_id == edge.to %}
+                        {% set successor.name =
+                          device_name(candidate)
+                          or (state_attr(candidate, 'friendly_name')
+                            or candidate)
+  __DL_I18N_SEGMENT_0061__
+                        {% set successor.device = device_id(candidate) %}
+                      {% endif %}
+                    {% endif %}
+                  {% endfor %}
+
+                  {% if predecessor.name %}
+                    {% if predecessor.device %}
+                      {% set predecessor_text =
+                        '[' ~ predecessor.name
+                        ~ '](/config/devices/device/'
+                        ~ predecessor.device ~ ')' %}
+                    {% else %}
+                      {% set predecessor_text = predecessor.name %}
+                    {% endif %}
+                  {% else %}
+                    {% set predecessor_text = edge.from %}
+                  {% endif %}
+
+                  {% if successor.name %}
+                    {% if successor.device %}
+                      {% set successor_text =
+                        '[' ~ successor.name
+                        ~ '](/config/devices/device/'
+                        ~ successor.device ~ ')' %}
+                    {% else %}
+                      {% set successor_text = successor.name %}
+                    {% endif %}
+                  {% else %}
+                    {% set successor_text = edge.to %}
+                  {% endif %}
+
+                - {{ predecessor_text }} → {{ successor_text }} {% endfor %}
+
+
+  __DL_I18N_SEGMENT_0062__
+
+                {% endif %}
+      cards: []
+    - type: sections
+  __DL_I18N_SEGMENT_0063__
+      max_columns: 4
+      dense_section_placement: true
+      sections:
+        - type: grid
+          column_span: 4
+          cards:
+            - type: markdown
+              grid_options:
+                columns: 48
+                rows: auto
+              content: >
+                # Device Lifecycle
+
+  __DL_I18N_SEGMENT_0064__
+
+
+                {% set entities = integration_entities('device_lifecycle') | list
+                %}
+
+                {% set ns = namespace(
+                  purchase_ids=[],
+                  items=[],
+                  total=0,
+                  price_count=0,
+                  currencies=[],
+                  years=[]
+                ) %}
+
+
+                {% for entity in entities %}
+                  {% if state_attr(entity, 'takuu_tila') is not none %}
+                    {% set purchase_id =
+                      state_attr(entity, 'purchase_uuid') %}
+
+                    {% if purchase_id
+                          and purchase_id not in ns.purchase_ids %}
+                      {% set ns.purchase_ids =
+                        ns.purchase_ids + [purchase_id] %}
+
+                      {% set purchase_date =
+                        state_attr(entity, 'ostopaiva') %}
+                      {% set date_string =
+                        purchase_date | string if purchase_date else '' %}
+                      {% set purchase_year = '' %}
+
+                      {# Purchase years come only from the exposed Purchase
+                         purchase_date (ostopaiva). Missing or malformed dates
+                         remain outside the yearly summary. #}
+                      {% set year_number =
+                        date_string[0:4] | int(0) %}
+                      {% set month_number =
+                        date_string[5:7] | int(0) %}
+                      {% set day_number =
+                        date_string[8:10] | int(0) %}
+                      {% set day_limit = 0 %}
+
+                      {% if month_number >= 1 and month_number <= 12 %}
+                        {% set month_lengths =
+                          [31, 28, 31, 30, 31, 30,
+                           31, 31, 30, 31, 30, 31] %}
+                        {% set day_limit =
+                          month_lengths[month_number - 1] %}
+
+                        {% if month_number == 2
+                              and (year_number % 400 == 0
+                                or (year_number % 4 == 0
+                                  and year_number % 100 != 0)) %}
+                          {% set day_limit = 29 %}
+                        {% endif %}
+                      {% endif %}
+
+                      {% if date_string | length == 10
+                            and date_string[4:5] == '-'
+                            and date_string[7:8] == '-'
+                            and year_number > 0
+                            and ('%04d' | format(year_number))
+                              == date_string[0:4]
+                            and month_number >= 1
+                            and month_number <= 12
+                            and ('%02d' | format(month_number))
+                              == date_string[5:7]
+                            and day_number >= 1
+                            and day_number <= day_limit
+                            and ('%02d' | format(day_number))
+                              == date_string[8:10] %}
+                        {% set purchase_year = date_string[0:4] %}
+
+                        {% if purchase_year not in ns.years %}
+                          {% set ns.years =
+                            ns.years + [purchase_year] %}
+                        {% endif %}
+                      {% endif %}
+
+                      {% set total =
+                        state_attr(entity, 'ostoksen_hinta') %}
+                      {% set currency =
+                        state_attr(entity, 'valuutta') or '' %}
+
+                      {% set ns.items = ns.items + [{
+                        'name': state_attr(entity, 'ostoksen_nimi')
+                          or state_attr(entity, 'ostos')
+  __DL_I18N_SEGMENT_0065__
+                        'date': purchase_date,
+                        'sort_date': date_string,
+                        'year': purchase_year,
+                        'seller': state_attr(entity, 'myyja') or '—',
+                        'total': total,
+                        'currency': currency
+                      }] %}
+
+                      {% if total is not none %}
+                        {% set ns.total =
+                          ns.total + (total | float(0)) %}
+                        {% set ns.price_count = ns.price_count + 1 %}
+
+                        {% if currency not in ns.currencies %}
+                          {% set ns.currencies =
+                            ns.currencies + [currency] %}
+                        {% endif %}
+                      {% endif %}
+
+                    {% endif %}
+                  {% endif %}
+                {% endfor %}
+
+
+  __DL_I18N_SEGMENT_0066__
+                > 0 %}
+                  {% if ns.price_count == 0 %}
+                    {% set purchase_total_text =
+  __DL_I18N_SEGMENT_0067__
+                  {% elif ns.currencies | count != 1 %}
+                    {% set purchase_total_text =
+  __DL_I18N_SEGMENT_0068__
+                  {% else %}
+                    {% set currency = ns.currencies[0] %}
+                    {% set amount =
+                      ('%.2f' | format(ns.total)) | replace('.', ',') %}
+                    {% if currency == 'EUR' %}
+                      {% set purchase_total_text = amount ~ ' €' %}
+                    {% elif currency %}
+                      {% set purchase_total_text =
+                        amount ~ ' ' ~ currency %}
+                    {% else %}
+                      {% set purchase_total_text = amount %}
+                    {% endif %}
+                  {% endif %}
+                {% endif %}
+
+  __DL_I18N_SEGMENT_0069__
+
+                |---|---:|
+
+  __DL_I18N_SEGMENT_0070__
+
+  __DL_I18N_SEGMENT_0071__
+
+  __DL_I18N_SEGMENT_0072__
+
+  __DL_I18N_SEGMENT_0073__
+
+                {% if ns.items | count > 0 %}
+
+                  {% if ns.price_count > 0 and ns.currencies | count == 1 %}
+
+  __DL_I18N_SEGMENT_0074__
+
+                  {% else %}
+
+  __DL_I18N_SEGMENT_0075__
+
+                  {% endif %}
+
+                {% endif %}
+
+                {% if ns.items | count == 0 %}
+
+  __DL_I18N_SEGMENT_0076__
+
+                {% else %}
+
+  __DL_I18N_SEGMENT_0077__
+
+
+                {% if ns.years | count > 0 %}
+                  {% set yearly_table = namespace(lines=[
+  __DL_I18N_SEGMENT_0078__
+                    '|---|---:|---:|---:|---:|'
+                  ]) %}
+
+                  {% for year in ns.years | sort(reverse=true) %}
+                    {% set annual = namespace(
+                      count=0,
+                      price_count=0,
+                      total=0,
+                      currencies=[]
+                    ) %}
+
+                    {% for item in ns.items %}
+                      {% if item.year == year %}
+                        {% set annual.count = annual.count + 1 %}
+
+                        {% if item.total is not none %}
+                          {% set annual.price_count =
+                            annual.price_count + 1 %}
+                          {% set annual.total =
+                            annual.total + (item.total | float(0)) %}
+
+                          {% if item.currency not in annual.currencies %}
+                            {% set annual.currencies =
+                              annual.currencies + [item.currency] %}
+                          {% endif %}
+                        {% endif %}
+                      {% endif %}
+                    {% endfor %}
+
+                    {% set annual_total_text = '—' %}
+                    {% if annual.price_count > 0 %}
+                      {% if annual.currencies | count != 1 %}
+                        {% set annual_total_text =
+  __DL_I18N_SEGMENT_0079__
+                      {% else %}
+                        {% set currency = annual.currencies[0] %}
+                        {% set amount =
+                          ('%.2f' | format(annual.total))
+                          | replace('.', ',') %}
+
+                        {% if currency == 'EUR' %}
+                          {% set annual_total_text = amount ~ ' €' %}
+                        {% elif currency %}
+                          {% set annual_total_text =
+                            amount ~ ' ' ~ currency %}
+                        {% else %}
+                          {% set annual_total_text = amount %}
+                        {% endif %}
+                      {% endif %}
+                    {% endif %}
+
+                    {% set row =
+                      '| ' ~ year
+                      ~ ' | ' ~ annual.count
+                      ~ ' | ' ~ annual.price_count ~ '/' ~ annual.count
+                      ~ ' | ' ~ (annual.count - annual.price_count)
+                      ~ ' | ' ~ annual_total_text
+                      ~ ' |'
+                    %}
+                    {% set yearly_table.lines =
+                      yearly_table.lines + [row] %}
+                  {% endfor %}
+
+
+                {{ yearly_table.lines | join('\n') }}
+
+
+  __DL_I18N_SEGMENT_0080__
+
+                {% else %}
+
+  __DL_I18N_SEGMENT_0081__
+
+                {% endif %}
+
+
+  __DL_I18N_SEGMENT_0082__
+
+                {% set table = namespace(lines=[
+  __DL_I18N_SEGMENT_0083__
+                  '|---|---|---|---:|'
+                ]) %}
+
+
+                {% for item in ns.items
+                      | sort(attribute='sort_date', reverse=true) %}
+                  {% set date_string =
+                    item.date | string if item.date else '' %}
+
+                  {% if date_string | length == 10
+                        and date_string[4:5] == '-'
+                        and date_string[7:8] == '-' %}
+                    {% set date_text =
+                      (date_string[8:10] | int)
+                      ~ '.' ~ (date_string[5:7] | int)
+                      ~ '.' ~ date_string[0:4] %}
+                  {% else %}
+                    {% set date_text = item.date or '—' %}
+                  {% endif %}
+
+                  {% if item.total is not none %}
+                    {% set amount =
+                      ('%.2f' | format(item.total | float(0)))
+                      | replace('.', ',') %}
+                    {% if item.currency == 'EUR' %}
+                      {% set total_text = amount ~ ' €' %}
+                    {% elif item.currency %}
+                      {% set total_text =
+                        amount ~ ' ' ~ item.currency %}
+                    {% else %}
+                      {% set total_text = amount %}
+                    {% endif %}
+                  {% else %}
+                    {% set total_text = '—' %}
+                  {% endif %}
+
+                  {% set row =
+                    '| ' ~ item.name
+                    ~ ' | ' ~ date_text
+                    ~ ' | ' ~ item.seller
+                    ~ ' | ' ~ total_text
+                    ~ ' |'
+                  %}
+
+                  {% set table.lines = table.lines + [row] %}
+                {% endfor %}
+
+
+                {{ table.lines | join('\n') }}
+
+
+                {% endif %}
+
+
+  __DL_I18N_SEGMENT_0084__
+      cards: []
+    - type: sections
+  __DL_I18N_SEGMENT_0085__
+      max_columns: 4
+      dense_section_placement: true
+      sections:
+        - type: grid
+          column_span: 1
+          cards:
+            - type: markdown
+              content: >
+                # Device Lifecycle
+
+  __DL_I18N_SEGMENT_0086__
+
+
+                {% set entities = integration_entities('device_lifecycle') | list
+                %}
+
+                {% set ns = namespace(
+                  assets=0,
+                  runtime=0,
+                  running=0,
+                  runtime_unavailable=0,
+                  deployed=0,
+                  not_deployed=0,
+                  deployment_unknown=0,
+                  relationships=0,
+                  relationship_none=0,
+                  relationship_missing=0,
+                  warranty_active=0,
+                  warranty_expired=0,
+                  warranty_unknown=0
+                ) %}
+
+
+                {% for entity in entities %}
+
+                  {# Lifecycle #}
+                  {% if state_attr(entity, 'takuu_tila') is not none %}
+                    {% set ns.assets = ns.assets + 1 %}
+
+                    {% if state_attr(entity, 'takuu_tila') == 'voimassa' %}
+                      {% set ns.warranty_active = ns.warranty_active + 1 %}
+                    {% elif state_attr(entity, 'takuu_tila') == 'päättynyt' %}
+                      {% set ns.warranty_expired = ns.warranty_expired + 1 %}
+                    {% else %}
+                      {% set ns.warranty_unknown = ns.warranty_unknown + 1 %}
+                    {% endif %}
+
+                  {# Runtime #}
+                  {% elif state_attr(entity, 'lahde_entiteetti') is not none %}
+                    {% set ns.runtime = ns.runtime + 1 %}
+
+                    {% if state_attr(entity, 'aktiivinen') == true %}
+                      {% set ns.running = ns.running + 1 %}
+                    {% endif %}
+
+                    {% if state_attr(entity, 'lahde_saatavilla') == false %}
+                      {% set ns.runtime_unavailable = ns.runtime_unavailable + 1 %}
+                    {% endif %}
+
+                  {# Deployment #}
+                  {% elif state_attr(entity, 'asset_area_state') is not none %}
+                    {% if states(entity) == 'deployed' %}
+                      {% set ns.deployed = ns.deployed + 1 %}
+                    {% elif states(entity) == 'not_deployed' %}
+                      {% set ns.not_deployed = ns.not_deployed + 1 %}
+                    {% else %}
+                      {% set ns.deployment_unknown = ns.deployment_unknown + 1 %}
+                    {% endif %}
+
+  __DL_I18N_SEGMENT_0087__
+                  {% elif state_attr(entity, 'primary_state') is not none %}
+                    {% if states(entity) == 'none' %}
+                      {% set ns.relationship_none = ns.relationship_none + 1 %}
+                    {% else %}
+                      {% set ns.relationships = ns.relationships + 1 %}
+                    {% endif %}
+
+                    {% if states(entity) == 'missing' %}
+                      {% set ns.relationship_missing = ns.relationship_missing + 1 %}
+                    {% endif %}
+                  {% endif %}
+
+                {% endfor %}
+
+
+  __DL_I18N_SEGMENT_0088__
+
+                |---|---:|
+
+  __DL_I18N_SEGMENT_0089__
+
+  __DL_I18N_SEGMENT_0090__
+
+  __DL_I18N_SEGMENT_0091__
+
+  __DL_I18N_SEGMENT_0092__
+
+  __DL_I18N_SEGMENT_0093__
+
+  __DL_I18N_SEGMENT_0094__
+
+  __DL_I18N_SEGMENT_0095__
+
+  __DL_I18N_SEGMENT_0096__
+
+  __DL_I18N_SEGMENT_0097__
+
+  __DL_I18N_SEGMENT_0098__
+
+  __DL_I18N_SEGMENT_0099__
+
+  __DL_I18N_SEGMENT_0100__
+            - type: markdown
+              content: >
+  __DL_I18N_SEGMENT_0101__
+
+
+                {% set entities = integration_entities('device_lifecycle') | list
+                %}
+
+                {% set ns = namespace(
+                  runtime_unavailable=[],
+                  warranty_expired=[],
+                  relationship_missing=[],
+                  area_missing=[]
+                ) %}
+
+
+                {% for entity in entities %}
+
+                  {% if state_attr(entity, 'lahde_entiteetti') is not none
+                        and state_attr(entity, 'lahde_saatavilla') == false %}
+                    {% set ns.runtime_unavailable =
+                      ns.runtime_unavailable + [entity] %}
+                  {% endif %}
+
+                  {% if state_attr(entity, 'takuu_tila') == 'päättynyt' %}
+                    {% set ns.warranty_expired =
+                      ns.warranty_expired + [entity] %}
+                  {% endif %}
+
+                  {% if state_attr(entity, 'primary_state') is not none
+                        and states(entity) == 'missing' %}
+                    {% set ns.relationship_missing =
+                      ns.relationship_missing + [entity] %}
+                  {% endif %}
+
+                  {% if state_attr(entity, 'asset_area_state') == 'missing' %}
+                    {% set ns.area_missing =
+                      ns.area_missing + [entity] %}
+                  {% endif %}
+
+                {% endfor %}
+
+
+                {% if ns.runtime_unavailable | count == 0 %}
+
+  __DL_I18N_SEGMENT_0102__
+
+                {% else %}
+
+  __DL_I18N_SEGMENT_0103__
+
+                {% endif %}
+
+
+                {% if ns.relationship_missing | count == 0 %}
+
+  __DL_I18N_SEGMENT_0104__
+
+                {% else %}
+
+  __DL_I18N_SEGMENT_0105__
+
+                {% for entity in ns.relationship_missing %}
+                  {% set name = device_name(entity) or
+                    state_attr(entity, 'friendly_name') or entity %}
+                  {% set dev = device_id(entity) %}
+                - {% if dev %}[**{{ name }}**](/config/devices/device/{{ dev }}){%
+                else %}**{{ name }}**{% endif %}
+
+                {% endfor %}
+
+                {% endif %}
+
+
+                {% if ns.area_missing | count > 0 %}
+
+  __DL_I18N_SEGMENT_0106__
+
+                {% endif %}
+
+
+                {% if ns.warranty_expired | count == 0 %}
+
+  __DL_I18N_SEGMENT_0107__
+
+                {% else %}
+
+  __DL_I18N_SEGMENT_0108__
+
+
+                {% for entity in ns.warranty_expired | sort %}
+                  {% set name = device_name(entity) %}
+                  {% if not name %}
+                    {% set name =
+                      (state_attr(entity, 'friendly_name') or entity)
+  __DL_I18N_SEGMENT_0109__
+                  {% endif %}
+                  {% set dev = device_id(entity) %}
+                - {% if dev %}[**{{ name }}**](/config/devices/device/{{ dev }}){%
+                else %}**{{ name }}**{% endif %}
+                  {{ states(entity) }}
+                {% endfor %}
+
+                {% endif %}
+        - type: grid
+          column_span: 2
+          cards:
+            - type: markdown
+              grid_options:
+                columns: 24
+                rows: auto
+              content: >
+  __DL_I18N_SEGMENT_0110__
+
+
+                {% set entities = integration_entities('device_lifecycle') | list
+                %}
+
+                {% set lifecycle_options =
+                  ['unknown', 'active', 'retired', 'disposed', 'lost'] %}
+
+                {% set ns = namespace(items=[]) %}
+
+
+                {% for entity in entities %}
+                  {% if state_attr(entity, 'takuu_tila') is not none %}
+                    {% set asset_id = state_attr(entity, 'asset_id') %}
+
+                    {% if asset_id %}
+                      {% set ns.items = ns.items + [{
+                        'asset_id': asset_id,
+                        'entity': entity
+                      }] %}
+                    {% endif %}
+                  {% endif %}
+                {% endfor %}
+
+
+                {% if ns.items | count == 0 %}
+
+  __DL_I18N_SEGMENT_0111__
+
+                {% else %}
+
+                {% set table = namespace(lines=[
+  __DL_I18N_SEGMENT_0112__
+                  '|---|---|---|---|---|'
+                ]) %}
+
+
+                {% for item in ns.items | sort(attribute='asset_id') %}
+                  {% set entity = item.entity %}
+                  {% set asset_id = item.asset_id %}
+                  {% set asset_device_id = device_id(entity) %}
+                  {% set name = device_name(entity) %}
+
+                  {% if not name %}
+                    {% set name =
+                      (state_attr(entity, 'friendly_name') or entity)
+  __DL_I18N_SEGMENT_0113__
+                  {% endif %}
+
+                  {% if asset_device_id %}
+                    {% set asset_name =
+                      '[' ~ name ~ '](/config/devices/device/'
+                      ~ asset_device_id ~ ')<br>' ~ asset_id %}
+                  {% else %}
+                    {% set asset_name = name ~ '<br>' ~ asset_id %}
+                  {% endif %}
+
+                  {% set match = namespace(
+                    lifecycle='',
+                    runtime='',
+                    deployment='',
+                    relationships=''
+                  ) %}
+
+                  {% for sibling in entities %}
+                    {% if asset_device_id
+                          and device_id(sibling) == asset_device_id %}
+                      {% set sibling_options =
+                        state_attr(sibling, 'options') %}
+
+                      {# Lifecycle Status has no stronger unique template
+                         attribute in 0.7.0; use its canonical ENUM options. #}
+                      {% if sibling_options is not none
+                            and (sibling_options | list)
+                              == lifecycle_options %}
+                        {% set match.lifecycle = sibling %}
+                      {% elif state_attr(
+                            sibling, 'lahde_entiteetti') is not none %}
+                        {% set match.runtime = sibling %}
+                      {% elif state_attr(
+                            sibling, 'asset_area_state') is not none %}
+                        {% set match.deployment = sibling %}
+                      {% elif state_attr(
+                            sibling, 'primary_state') is not none %}
+                        {% set match.relationships = sibling %}
+                      {% endif %}
+                    {% endif %}
+                  {% endfor %}
+
+                  {% if match.lifecycle %}
+                    {% set lifecycle_text = states(match.lifecycle) %}
+                    {% if lifecycle_text not in lifecycle_options %}
+                      {% set lifecycle_text =
+                        '🔴 ' ~ lifecycle_text %}
+                    {% endif %}
+                  {% else %}
+  __DL_I18N_SEGMENT_0114__
+                  {% endif %}
+
+                  {% if match.deployment %}
+                    {% set deployment_text = states(match.deployment) %}
+                    {% set area_state = state_attr(
+                      match.deployment, 'asset_area_state') %}
+
+                    {% if area_state == 'missing' %}
+                      {% set deployment_text =
+                        deployment_text ~ '<br>🔴 Area: missing' %}
+                    {% else %}
+                      {% set deployment_text =
+                        deployment_text ~ '<br>Area: '
+                        ~ (area_state or '—') %}
+                    {% endif %}
+                  {% else %}
+  __DL_I18N_SEGMENT_0115__
+                  {% endif %}
+
+                  {% if match.runtime %}
+                    {% if state_attr(
+                          match.runtime, 'lahde_saatavilla') == false %}
+  __DL_I18N_SEGMENT_0116__
+                    {% elif state_attr(
+                          match.runtime, 'aktiivinen') == true %}
+  __DL_I18N_SEGMENT_0117__
+                    {% else %}
+  __DL_I18N_SEGMENT_0118__
+                    {% endif %}
+
+                    {% set runtime_text =
+                      runtime_text ~ '<br>'
+                      ~ state_attr(match.runtime, 'lahde_entiteetti') %}
+                  {% else %}
+                    {% set runtime_text = '—' %}
+                  {% endif %}
+
+                  {% if match.relationships %}
+                    {% set relationships_text =
+                      states(match.relationships) %}
+
+                    {% if relationships_text == 'missing' %}
+                      {% set relationships_text =
+                        '🔴 missing' %}
+                    {% elif relationships_text
+                          not in ['none', 'present'] %}
+                      {% set relationships_text =
+                        '🔴 ' ~ relationships_text %}
+                    {% endif %}
+
+                    {% set relationships_text =
+                      relationships_text ~ '<br>primary: '
+                      ~ (state_attr(
+                        match.relationships, 'primary_state') or '—')
+                      ~ ' · related: '
+                      ~ (state_attr(
+                        match.relationships, 'related_device_count')
+                        | int(0)) %}
+                  {% else %}
+                    {% set relationships_text =
+  __DL_I18N_SEGMENT_0119__
+                  {% endif %}
+
+                  {% set row =
+                    '| ' ~ asset_name
+                    ~ ' | ' ~ lifecycle_text
+                    ~ ' | ' ~ deployment_text
+                    ~ ' | ' ~ runtime_text
+                    ~ ' | ' ~ relationships_text
+                    ~ ' |'
+                  %}
+
+                  {% set table.lines = table.lines + [row] %}
+                {% endfor %}
+
+
+                {{ table.lines | join('\n') }}
+
+
+                {% endif %}
+        - type: grid
+          column_span: 1
+          cards:
+            - type: markdown
+              content: >
+                ## Runtime
+
+
+                {% set entities = integration_entities('device_lifecycle') | list
+                %}
+
+                {% set ns = namespace(items=[]) %}
+
+
+                {% for entity in entities %}
+                  {% if state_attr(entity, 'lahde_entiteetti') is not none %}
+                    {% set name = device_name(entity) or
+                      state_attr(entity, 'friendly_name') or entity %}
+
+                    {% set ns.items = ns.items + [{
+                      'name': name,
+                      'entity': entity
+                    }] %}
+                  {% endif %}
+                {% endfor %}
+
+
+                {% if ns.items | count == 0 %}
+
+
+  __DL_I18N_SEGMENT_0120__
+
+
+                {% else %}
+
+
+                {% set table = namespace(lines=[
+  __DL_I18N_SEGMENT_0121__
+                  '|---|---:|---|'
+                ]) %}
+
+
+                {% for item in ns.items | sort(attribute='name') %}
+                  {% set entity = item.entity %}
+                  {% set dev = device_id(entity) %}
+
+                  {% if dev %}
+                    {% set display_name =
+                      '**[' ~ item.name ~ '](/config/devices/device/'
+                      ~ dev ~ ')**' %}
+                  {% else %}
+                    {% set display_name = '**' ~ item.name ~ '**' %}
+                  {% endif %}
+
+                  {% if states(entity)
+                        not in ['unknown', 'unavailable', 'none', ''] %}
+                    {% set hours = states(entity) | float(0) %}
+                    {% set hours_text =
+                      ('%.1f' | format(hours))
+                      | replace('.', ',') ~ ' h' %}
+                  {% else %}
+                    {% set hours_text = '—' %}
+                  {% endif %}
+
+                  {% if state_attr(entity, 'lahde_saatavilla') == false %}
+  __DL_I18N_SEGMENT_0122__
+                  {% elif state_attr(entity, 'aktiivinen') == true %}
+  __DL_I18N_SEGMENT_0123__
+                  {% else %}
+  __DL_I18N_SEGMENT_0124__
+                  {% endif %}
+
+                  {% set row =
+                    '| ' ~ display_name
+                    ~ ' | ' ~ hours_text
+                    ~ ' | ' ~ status
+                    ~ ' |'
+                  %}
+
+                  {% set table.lines = table.lines + [row] %}
+                {% endfor %}
+
+
+                {{ table.lines | join('\n') }}
+
+
+                {% endif %}
+            - type: markdown
+              content: >
+  __DL_I18N_SEGMENT_0125__
+
+
+                {% set entities = integration_entities('device_lifecycle') | list
+                %}
+
+                {% set ns = namespace(items=[]) %}
+
+
+                {% for entity in entities %}
+                  {% if state_attr(entity, 'primary_state') is not none
+                        and states(entity) != 'none' %}
+
+                    {% set name = device_name(entity) or
+                      state_attr(entity, 'friendly_name') or entity %}
+
+                    {% set ns.items = ns.items + [{
+                      'name': name,
+                      'entity': entity
+                    }] %}
+                  {% endif %}
+                {% endfor %}
+
+
+                {% if ns.items | count == 0 %}
+
+
+  __DL_I18N_SEGMENT_0126__
+
+
+                {% else %}
+
+
+                {% set table = namespace(lines=[
+  __DL_I18N_SEGMENT_0127__
+                  '|---|---|---|'
+                ]) %}
+
+
+                {% for item in ns.items | sort(attribute='name') %}
+                  {% set entity = item.entity %}
+                  {% set dev = device_id(entity) %}
+
+                  {% if dev %}
+                    {% set asset_name =
+                      '**[' ~ item.name ~ '](/config/devices/device/'
+                      ~ dev ~ ')**' %}
+                  {% else %}
+                    {% set asset_name = '**' ~ item.name ~ '**' %}
+                  {% endif %}
+
+                  {# Primary #}
+                  {% set primary_state =
+                    state_attr(entity, 'primary_state') %}
+
+                  {% if primary_state == 'present' %}
+                    {% set primary_text =
+                      state_attr(entity, 'primary_device_name')
+  __DL_I18N_SEGMENT_0128__
+                  {% elif primary_state == 'missing' %}
+  __DL_I18N_SEGMENT_0129__
+                  {% else %}
+                    {% set primary_text = '—' %}
+                  {% endif %}
+
+                  {# Related #}
+                  {% set related =
+                    state_attr(entity, 'related_devices') or [] %}
+                  {% set rel = namespace(names=[]) %}
+
+                  {% for relation in related %}
+                    {% if relation.state == 'missing' %}
+  __DL_I18N_SEGMENT_0130__
+                    {% else %}
+                      {% set relation_name =
+                        relation.name or relation.device_id %}
+                    {% endif %}
+
+                    {% set rel.names =
+                      rel.names + [relation_name] %}
+                  {% endfor %}
+
+                  {% if rel.names | count > 0 %}
+                    {% set related_text = rel.names | join(', ') %}
+                  {% else %}
+                    {% set related_text = '—' %}
+                  {% endif %}
+
+                  {% set row =
+                    '| ' ~ asset_name
+                    ~ ' | ' ~ primary_text
+                    ~ ' | ' ~ related_text
+                    ~ ' |'
+                  %}
+
+                  {% set table.lines = table.lines + [row] %}
+                {% endfor %}
+
+
+                {{ table.lines | join('\n') }}
+
+
+                {% endif %}
+            - type: markdown
+              content: >
+  __DL_I18N_SEGMENT_0131__
+
+
+                {% set entities = integration_entities('device_lifecycle') | list
+                %}
+
+                {% set ns = namespace(
+                  runtime=0,
+                  relationships=0,
+                  areas=0
+                ) %}
+
+
+                {% for entity in entities %}
+                  {% if state_attr(entity, 'lahde_entiteetti') is not none
+                        and state_attr(entity, 'lahde_saatavilla') == false %}
+                    {% set ns.runtime = ns.runtime + 1 %}
+                  {% endif %}
+
+                  {% if state_attr(entity, 'primary_state') is not none
+                        and states(entity) == 'missing' %}
+                    {% set ns.relationships = ns.relationships + 1 %}
+                  {% endif %}
+
+                  {% if state_attr(entity, 'asset_area_state') == 'missing' %}
+                    {% set ns.areas = ns.areas + 1 %}
+                  {% endif %}
+                {% endfor %}
+
+
+                {% if ns.runtime == 0
+                      and ns.relationships == 0
+                      and ns.areas == 0 %}
+
+  __DL_I18N_SEGMENT_0132__
+
+
+                {% else %}
+
+
+                {% if ns.runtime > 0 %}
+
+  __DL_I18N_SEGMENT_0133__
+
+                {% endif %}
+
+
+                {% if ns.relationships > 0 %}
+
+  __DL_I18N_SEGMENT_0134__
+
+                {% endif %}
+
+
+                {% if ns.areas > 0 %}
+
+  __DL_I18N_SEGMENT_0135__
+
+                {% endif %}
+
+
+                {% endif %}
+        - type: grid
+          column_span: 1
+          cards:
+            - type: markdown
+              content: >
+  __DL_I18N_SEGMENT_0136__
+
+
+                {% set entities = integration_entities('device_lifecycle') | list
+                %}
+
+                {# Replacement is uniquely identified in 0.7.0 by both
+                   predecessor/successor list attributes. #}
+
+                {% set ns = namespace(
+                  available=0,
+                  edge_keys=[],
+                  edges=[]
+                ) %}
+
+
+                {% for entity in entities %}
+                  {% if state_attr(entity, 'takuu_tila') is not none %}
+                    {% set asset_id = state_attr(entity, 'asset_id') %}
+                    {% set asset_device_id = device_id(entity) %}
+
+                    {% for sibling in entities %}
+                      {% if asset_device_id
+                            and device_id(sibling) == asset_device_id %}
+                        {% set predecessors = state_attr(
+                          sibling, 'predecessor_asset_ids') %}
+                        {% set successors = state_attr(
+                          sibling, 'successor_asset_ids') %}
+
+                        {% if predecessors is not none
+                              and successors is not none %}
+                          {% set ns.available = ns.available + 1 %}
+
+                          {% set predecessors = predecessors or [] %}
+                          {% set successors = successors or [] %}
+
+                          {% for predecessor in predecessors %}
+                            {% set edge_key =
+                              predecessor ~ '>' ~ asset_id %}
+                            {% if edge_key not in ns.edge_keys %}
+                              {% set ns.edge_keys =
+                                ns.edge_keys + [edge_key] %}
+                              {% set ns.edges = ns.edges + [{
+                                'from': predecessor,
+                                'to': asset_id
+                              }] %}
+                            {% endif %}
+                          {% endfor %}
+
+                          {% for successor in successors %}
+                            {% set edge_key =
+                              asset_id ~ '>' ~ successor %}
+                            {% if edge_key not in ns.edge_keys %}
+                              {% set ns.edge_keys =
+                                ns.edge_keys + [edge_key] %}
+                              {% set ns.edges = ns.edges + [{
+                                'from': asset_id,
+                                'to': successor
+                              }] %}
+                            {% endif %}
+                          {% endfor %}
+                        {% endif %}
+                      {% endif %}
+                    {% endfor %}
+                  {% endif %}
+                {% endfor %}
+
+
+  __DL_I18N_SEGMENT_0137__
+
+
+                {% if ns.available == 0 %}
+
+  __DL_I18N_SEGMENT_0138__
+
+                {% elif ns.edges | count == 0 %}
+
+  __DL_I18N_SEGMENT_0139__
+
+                {% else %}
+
+                {% set table = namespace(lines=[
+  __DL_I18N_SEGMENT_0140__
+                  '|---|---|'
+                ]) %}
+
+
+                {% for edge in ns.edges %}
+                  {% set predecessor = namespace(
+                    name='',
+                    device=''
+                  ) %}
+                  {% set successor = namespace(
+                    name='',
+                    device=''
+                  ) %}
+
+                  {% for candidate in entities %}
+                    {% if state_attr(candidate, 'takuu_tila') is not none %}
+                      {% set candidate_id =
+                        state_attr(candidate, 'asset_id') %}
+
+                      {% if candidate_id == edge.from %}
+                        {% set predecessor.name =
+                          device_name(candidate)
+                          or (state_attr(candidate, 'friendly_name')
+                            or candidate)
+  __DL_I18N_SEGMENT_0141__
+                        {% set predecessor.device = device_id(candidate) %}
+                      {% endif %}
+
+                      {% if candidate_id == edge.to %}
+                        {% set successor.name =
+                          device_name(candidate)
+                          or (state_attr(candidate, 'friendly_name')
+                            or candidate)
+  __DL_I18N_SEGMENT_0142__
+                        {% set successor.device = device_id(candidate) %}
+                      {% endif %}
+                    {% endif %}
+                  {% endfor %}
+
+                  {% if predecessor.name %}
+                    {% if predecessor.device %}
+                      {% set predecessor_text =
+                        '[' ~ predecessor.name
+                        ~ '](/config/devices/device/'
+                        ~ predecessor.device ~ ')<br>' ~ edge.from %}
+                    {% else %}
+                      {% set predecessor_text =
+                        predecessor.name ~ '<br>' ~ edge.from %}
+                    {% endif %}
+                  {% else %}
+                    {% set predecessor_text = edge.from %}
+                  {% endif %}
+
+                  {% if successor.name %}
+                    {% if successor.device %}
+                      {% set successor_text =
+                        '[' ~ successor.name
+                        ~ '](/config/devices/device/'
+                        ~ successor.device ~ ')<br>' ~ edge.to %}
+                    {% else %}
+                      {% set successor_text =
+                        successor.name ~ '<br>' ~ edge.to %}
+                    {% endif %}
+                  {% else %}
+                    {% set successor_text = edge.to %}
+                  {% endif %}
+
+                  {% set row =
+                    '| ' ~ predecessor_text
+                    ~ ' | ' ~ successor_text
+                    ~ ' |'
+                  %}
+
+                  {% set table.lines = table.lines + [row] %}
+                {% endfor %}
+
+
+                {{ table.lines | join('\n') }}
+
+
+  __DL_I18N_SEGMENT_0143__
+
+                {% endif %}
+      cards: []

@@ -1,10 +1,33 @@
-# Device Lifecycle
+<p align="center">
+  <img src="custom_components/device_lifecycle/brand/icon.png" width="128" alt="Device Lifecycle logo">
+</p>
 
-Home Assistant custom integration for tracking physical Assets, Purchases, deployment information, warranty metadata, optional Home Assistant device relationships, and runtime hours.
+<h1 align="center">Device Lifecycle</h1>
 
-The integration UI is available in English and Finnish. The product name is **Device Lifecycle** in both languages, and the Finnish name of the human-readable Asset ID is **Elinkaaritunnus**.
+<p align="center">A Home Assistant custom integration for tracking the identity, acquisition, deployment, lifecycle, replacement history, warranty, relationships, and runtime of physical Assets.</p>
 
-## Asset Core
+<p align="center">
+  <a href="https://my.home-assistant.io/redirect/hacs_repository/?owner=ristotoivanen&amp;repository=home-assistant-device-lifecycle&amp;category=integration"><img src="https://my.home-assistant.io/badges/hacs_repository.svg" alt="Open this Device Lifecycle repository in HACS"></a>
+  <a href="https://github.com/ristotoivanen/home-assistant-device-lifecycle/releases"><img src="https://img.shields.io/github/v/release/ristotoivanen/home-assistant-device-lifecycle?display_name=tag&amp;sort=semver" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/ristotoivanen/home-assistant-device-lifecycle" alt="MIT license"></a>
+  <a href="https://buymeacoffee.com/ristodev"><img src="https://img.shields.io/badge/Buy_Me_a_Coffee-Support-FFDD00?logo=buymeacoffee&amp;logoColor=000" alt="Buy Me a Coffee"></a>
+</p>
+
+<p align="center">
+  <a href="#whats-new-in-071">What's new</a> ·
+  <a href="#installation">Installation</a> ·
+  <a href="#quick-add">Quick Add</a> ·
+  <a href="#optional-dashboard">Dashboard</a> ·
+  <a href="#what-device-lifecycle-is">Asset concepts</a> ·
+  <a href="#lifecycle-status">Lifecycle</a> ·
+  <a href="#runtime-tracking">Runtime</a> ·
+  <a href="#documentation">Documentation</a> ·
+  <a href="#support">Support</a>
+</p>
+
+## What Device Lifecycle is
+
+Device Lifecycle keeps one stable canonical record for each real-world physical item while treating Purchases and Home Assistant devices as relationships rather than identity. Its UI is available in English and Finnish. The product name is **Device Lifecycle** in both languages, and the Finnish name of the human-readable Asset ID is **Elinkaaritunnus**.
 
 An **Asset** is the canonical record of one real-world physical item. A Purchase records how an Asset was acquired, while a Home Assistant device is an optional relationship to that Asset. Neither one defines Asset identity.
 
@@ -28,6 +51,42 @@ Warranty can be not specified, manual, or calculated as one or two calendar year
 Quick Add can atomically record that the new physical Asset replaces a predecessor. The user may explicitly retire or undeploy that predecessor; an actual undeploy clears its Asset Area while preserving Installation date. Disposed or lost predecessors are never automatically changed to retired. Replacement never transfers Runtime, Purchase, warranty, external Home Assistant relationships, or other canonical domains, and it never creates a Purchase. The diagnostic Replacement entity retains its unique ID but is now enabled by default when an active replacement exists; user- or config-entry-disabled registry entries are never overridden.
 
 First-time setup continues into Quick Add after creating and loading the single parent ConfigEntry. Existing installations using the exact old Finnish default title are normalized to **Device Lifecycle**; custom titles are preserved. Store remains **3.1** and ConfigEntry remains version **4**, with no migration in this release.
+
+## Installation
+
+### Open in HACS
+
+[Open this exact repository in HACS](https://my.home-assistant.io/redirect/hacs_repository/?owner=ristotoivanen&repository=home-assistant-device-lifecycle&category=integration), install **Device Lifecycle**, restart Home Assistant, then go to **Settings > Devices & services > Add integration** and search for **Device Lifecycle**.
+
+If the repository is not already available in your HACS instance, add it manually as a custom repository:
+
+1. Open HACS and choose **Custom repositories** from its menu.
+2. Add `https://github.com/ristotoivanen/home-assistant-device-lifecycle`.
+3. Select category **Integration**.
+4. Install **Device Lifecycle** and restart Home Assistant.
+
+### Manual installation
+
+Copy `custom_components/device_lifecycle/` into `/config/custom_components/device_lifecycle/`, restart Home Assistant, and add the integration from **Settings > Devices & services**.
+
+Device Lifecycle 0.7.1 requires Home Assistant 2026.8.0 or newer. Review the [upgrade notes](#upgrade-notes) and create a Home Assistant backup before any upgrade that changes the Store schema.
+
+## Optional dashboard
+
+Device Lifecycle 0.7.1 includes an optional native Home Assistant dashboard in [English](dashboard/device-lifecycle-dashboard.en.yaml) and [Finnish](dashboard/device-lifecycle-dashboard.fi.yaml). It uses Sections views and Markdown cards only; no custom cards or additional HACS dependencies are required, and the integration itself does not depend on the dashboard.
+
+The four views keep daily attention, inventory, acquisition history, and diagnostics separate:
+
+- **Overview / Yleiskuva** — daily situation and attention items, without a full inventory dump
+- **Assets / Laitteet** — Active, Review, and Archived Assets plus current replacement context
+- **Purchases / Ostot** — Purchase-level counts, totals, and history, deduplicated by `purchase_uuid`
+- **Technical / Tekninen** — dense diagnostics where technical IDs are intentionally visible
+
+Lifecycle controls inventory grouping: `active` is Active, `unknown` is Review, and `retired`, `disposed`, or `lost` is Archived. Deployment remains independent, so `not_deployed` alone never archives an Asset. Canonical comparisons remain English machine states in both dashboard languages.
+
+![Device Lifecycle Overview dashboard](dashboard/screenshots/en/overview.png)
+
+See the concise [dashboard installation and entity notes](dashboard/README.md) for import instructions and all four real dashboard screenshots.
 
 ## What's new in 0.7.0
 
@@ -114,7 +173,7 @@ Purchase metadata includes:
 
 The Purchase price is the total transaction price, not a per-device price. The configured Home Assistant currency is captured when the Purchase is created and retained when it is edited later.
 
-## Manual Assets
+## Quick Add
 
 A physical item can be inventoried even when it has no Home Assistant device. Examples include:
 
@@ -363,40 +422,6 @@ Example Runtime sensor:
 Runtime hours: 1284.53 h
 ```
 
-## Requirements
-
-- Home Assistant 2026.8.0 or newer
-
-The integration uses Home Assistant's device-linking model while keeping Device Lifecycle entities and external device ownership separate.
-
-## Installation with HACS
-
-Until this repository is included as a HACS default repository, add it as a custom repository:
-
-1. Open HACS.
-2. Open the menu and choose **Custom repositories**.
-3. Add `https://github.com/ristotoivanen/home-assistant-device-lifecycle`.
-4. Select category **Integration**.
-5. Install **Device Lifecycle**.
-6. Restart Home Assistant.
-7. Go to **Settings > Devices & services > Add integration** and search for **Device Lifecycle**.
-
-## Manual installation
-
-Copy:
-
-```text
-custom_components/device_lifecycle/
-```
-
-to:
-
-```text
-/config/custom_components/device_lifecycle/
-```
-
-Restart Home Assistant.
-
 ## Editing and deletion behavior
 
 Existing Purchases remain editable, including Purchases with zero Assets. Removing a device from a Purchase removes the active Purchase projection while preserving the Asset identity and permanent Asset ID.
@@ -406,6 +431,17 @@ Removing a Runtime tracking entry removes only that Runtime sensor and active co
 Removing a Device Lifecycle Asset Device from Home Assistant does not delete or purge its canonical Asset. The projection can be recreated on reload.
 
 Device Lifecycle 0.7.1 does not provide Asset deletion/purge/merge, Runtime reset/manual editing, bulk Asset creation, automatic discovery or stale-device rematching, Purchase creation inside Quick Add, Maintenance, RMA cases, Documents, export/import, future replacement scheduling, automatic inheritance/transfer between replacement Assets, a lifecycle-history UI, or full replacement-history attributes. Lifecycle and replacement history remain canonical in Store 3.1 even though Home Assistant exposes only current state.
+
+## Documentation
+
+- [Architecture and persistence invariants](ARCHITECTURE.md)
+- [Optional dashboard and import instructions](dashboard/README.md)
+- [Release history](https://github.com/ristotoivanen/home-assistant-device-lifecycle/releases)
+- [Issue tracker](https://github.com/ristotoivanen/home-assistant-device-lifecycle/issues)
+
+## Support
+
+For reproducible problems, open a [GitHub issue](https://github.com/ristotoivanen/home-assistant-device-lifecycle/issues). If Device Lifecycle is useful to you, you can support its development through [Buy Me a Coffee](https://buymeacoffee.com/ristodev).
 
 ## Roadmap
 
