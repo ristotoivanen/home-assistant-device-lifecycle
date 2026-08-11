@@ -5,18 +5,17 @@ from __future__ import annotations
 from datetime import date
 from math import isfinite
 from typing import Any
+from uuid import uuid4
 
 import voluptuous as vol
-from homeassistant import config_entries
+from homeassistant import config_entries, data_entry_flow
 from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.config_entries import (
-    SOURCE_USER,
     ConfigEntry,
     ConfigFlowResult,
     ConfigSubentryFlow,
     FlowType,
     OptionsFlow,
-    SubentryFlowContext,
     SubentryFlowResult,
 )
 from homeassistant.core import HomeAssistant, State, callback
@@ -24,6 +23,7 @@ from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
+from homeassistant.helpers import translation as translation_helper
 from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_conversion import PowerConverter
 
@@ -35,6 +35,7 @@ from .const import (
     CONF_CLEAR_INSTALLED_DATE,
     CONF_CONFIRM_DISPOSED,
     CONF_CONFIRM_AREA_CLEAR,
+    CONF_CONFIRM_QUICK_ADD,
     CONF_CONFIRM_VOID,
     CONF_CURRENCY,
     CONF_DEPLOYMENT_STATE,
@@ -63,6 +64,7 @@ from .const import (
     CONF_REPLACEMENT_REASON,
     CONF_REPLACEMENT_TARGET_ASSET_UUID,
     CONF_REPLACEMENT_UUID,
+    CONF_RETIRE_PREDECESSOR,
     CONF_RUNTIME_DATA_VERSION,
     CONF_RUNTIME_MODE,
     CONF_SELLER,
@@ -70,6 +72,7 @@ from .const import (
     CONF_SOURCE_ENTITY_ID,
     CONF_SW_VERSION,
     CONF_SUCCESSOR_ASSET_UUID,
+    CONF_UNDEPLOY_PREDECESSOR,
     CONF_VOID_REASON,
     CONF_WARRANTY_TYPE,
     CONF_WARRANTY_UNTIL,
@@ -77,13 +80,18 @@ from .const import (
     DEFAULT_POWER_HYSTERESIS,
     DEFAULT_POWER_THRESHOLD,
     DEPLOYMENT_STATE_NOT_DEPLOYED,
+    DEPLOYMENT_STATE_DEPLOYED,
+    DEPLOYMENT_STATE_UNKNOWN,
     DEPLOYMENT_STATES,
     DOMAIN,
     HA_RELATIONSHIP_ACTION_REPLACE,
     HA_RELATIONSHIP_ACTION_UNLINK,
     HA_RELATIONSHIP_ACTIONS,
     LIFECYCLE_STATUSES,
+    LIFECYCLE_STATUS_ACTIVE,
     LIFECYCLE_STATUS_DISPOSED,
+    LIFECYCLE_STATUS_RETIRED,
+    LIFECYCLE_STATUS_UNKNOWN,
     REPLACEMENT_ACTION_CORRECT,
     REPLACEMENT_ACTION_VOID,
     REPLACEMENT_ACTIONS,
@@ -101,10 +109,25 @@ from .const import (
     WARRANTY_TYPES,
 )
 from .models import AssetData, PurchaseData, ReplacementRecordData
-from .storage import AssetStoreError, AssetStoreManager
+from .storage import (
+    FIELD_SOURCE_HOME_ASSISTANT,
+    FIELD_SOURCE_USER,
+    AssetStoreError,
+    AssetStoreManager,
+    QuickAssetCreateRequest,
+    add_calendar_years,
+    home_assistant_asset_metadata,
+)
 
 MAIN_UNIQUE_ID = "device_lifecycle_main"
 NO_PURCHASE_SELECTION = "__no_purchase__"
+NO_REPLACEMENT_SELECTION = "__no_replacement__"
+
+QUICK_SECTION_IDENTITY = "identity"
+QUICK_SECTION_DETAILS = "details"
+QUICK_SECTION_LIFECYCLE = "lifecycle"
+QUICK_SECTION_WARRANTY = "warranty"
+QUICK_SECTION_RELATIONSHIPS = "relationships"
 
 ASSET_METADATA_FIELDS = (
     CONF_ASSET_NAME,
@@ -653,20 +676,7 @@ def _used_runtime_device_ids(
 
 def _add_years(value: str, years: int) -> str | None:
     """Add calendar years to a YYYY-MM-DD date safely."""
-    purchase_date: date | None = dt_util.parse_date(value)
-    if purchase_date is None:
-        return None
-
-    try:
-        result = purchase_date.replace(year=purchase_date.year + years)
-    except ValueError:
-        result = purchase_date.replace(
-            year=purchase_date.year + years,
-            month=2,
-            day=28,
-        )
-
-    return result.isoformat()
+    return add_calendar_years(value, years)
 
 
 def _prepare_purchase_data(
@@ -836,11 +846,7 @@ class DeviceLifecycleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._abort_if_unique_id_configured()
 
         return self.async_create_entry(
-            title=(
-                "Laitteen elinkaari"
-                if self.hass.config.language.lower().startswith("fi")
-                else "Device Lifecycle"
-            ),
+            title="Device Lifecycle",
             data={},
         )
 
@@ -848,14 +854,17 @@ class DeviceLifecycleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self,
         result: ConfigFlowResult,
     ) -> ConfigFlowResult:
-        """Immediately open the first purchase flow after parent creation."""
-        subentry_result = await self.hass.config_entries.subentries.async_init(
-            (result["result"].entry_id, SUBENTRY_TYPE_PURCHASE),
-            context=SubentryFlowContext(source=SOURCE_USER),
+        """Continue a new loaded parent entry directly into Quick Add."""
+        options_result = await self.hass.config_entries.options.async_init(
+            result["result"].entry_id
+        )
+        quick_add_result = await self.hass.config_entries.options.async_configure(
+            options_result["flow_id"],
+            {"next_step_id": "quick_add"},
         )
         result["next_flow"] = (
-            FlowType.CONFIG_SUBENTRIES_FLOW,
-            subentry_result["flow_id"],
+            FlowType.OPTIONS_FLOW,
+            quick_add_result["flow_id"],
         )
         return result
 
@@ -909,6 +918,33 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             for option in self._asset_choices()
             if option["value"] != excluded_asset_uuid
         ]
+
+    def _quick_replacement_choices(self) -> list[selector.SelectOptionDict]:
+        """Return name-first predecessor choices with safe duplicate labels."""
+        assets = self._manager.assets()
+        name_counts: dict[str, int] = {}
+        for asset in assets:
+            name_counts[asset["name"]] = name_counts.get(asset["name"], 0) + 1
+        choices = [
+            selector.SelectOptionDict(
+                value=NO_REPLACEMENT_SELECTION,
+                label=self._localized_label("No replacement", "Ei korvaamista"),
+            )
+        ]
+        for asset in sorted(
+            assets,
+            key=lambda item: (item["name"].casefold(), item["asset_id"]),
+        ):
+            label = asset["name"]
+            if name_counts[label] > 1:
+                label = f"{label} · {asset['asset_id']}"
+            choices.append(
+                selector.SelectOptionDict(
+                    value=asset["asset_uuid"],
+                    label=label,
+                )
+            )
+        return choices
 
     def _replacement_record_label(self, record: ReplacementRecordData) -> str:
         """Return a stable Asset-ID label for one replacement record."""
@@ -967,13 +1003,29 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         if isinstance(err, AssetStoreError):
             structured_codes = {
                 "asset_missing",
+                "device_already_linked",
+                "device_lifecycle_device_not_allowed",
+                "device_missing",
+                "invalid_area",
+                "invalid_deployment_state",
+                "invalid_installed_date",
                 "invalid_lifecycle_effective_date",
                 "invalid_lifecycle_status",
+                "invalid_purchase",
+                "invalid_quick_create_request",
                 "invalid_replacement_effective_date",
                 "invalid_replacement_reason",
+                "invalid_warranty_date",
+                "invalid_warranty_type",
                 "lifecycle_chain_invalid",
                 "lifecycle_date_in_future",
                 "persistence_error",
+                "predecessor_changed",
+                "purchase_changed",
+                "purchase_date_required_for_warranty",
+                "purchase_missing",
+                "purchase_not_configured",
+                "quick_create_idempotency_conflict",
                 "replacement_cycle",
                 "replacement_date_in_future",
                 "replacement_graph_invalid",
@@ -982,6 +1034,9 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 "replacement_self_reference",
                 "replacement_successor_conflict",
                 "replacement_void_reason_required",
+                "manual_warranty_date_required",
+                "non_physical_device_not_allowed",
+                "service_device_not_allowed",
             }
             if err.code in structured_codes:
                 return err.code
@@ -1141,6 +1196,533 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         self.hass.config_entries.async_schedule_reload(self.config_entry.entry_id)
         return result
 
+    def _finish_quick_add(self, asset: AssetData) -> ConfigFlowResult:
+        """Finish Quick Add with one Store-owned reload and unchanged options."""
+        result = self.async_create_entry(
+            title="",
+            data=dict(self.config_entry.options),
+            description="quick_asset_created",
+            description_placeholders={"asset_name": asset["name"]},
+        )
+        self.hass.config_entries.async_schedule_reload(self.config_entry.entry_id)
+        return result
+
+    def _ensure_quick_asset_uuid(self) -> None:
+        """Allocate one flow-local idempotency UUID, never a DL identity."""
+        if not hasattr(self, "_quick_asset_uuid"):
+            self._quick_asset_uuid = str(uuid4())
+
+    @staticmethod
+    def _flatten_quick_sections(user_input: dict[str, Any]) -> dict[str, Any]:
+        """Flatten one level of Data Entry Flow sections for Asset Core."""
+        flattened = {
+            key: value
+            for key, value in user_input.items()
+            if key
+            not in {
+                QUICK_SECTION_IDENTITY,
+                QUICK_SECTION_DETAILS,
+                QUICK_SECTION_LIFECYCLE,
+                QUICK_SECTION_WARRANTY,
+                QUICK_SECTION_RELATIONSHIPS,
+            }
+        }
+        for section_key in (
+            QUICK_SECTION_IDENTITY,
+            QUICK_SECTION_DETAILS,
+            QUICK_SECTION_LIFECYCLE,
+            QUICK_SECTION_WARRANTY,
+            QUICK_SECTION_RELATIONSHIPS,
+        ):
+            section_values = user_input.get(section_key)
+            if isinstance(section_values, dict):
+                flattened.update(section_values)
+        return flattened
+
+    @staticmethod
+    def _nest_quick_details(values: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        """Return flat reviewed values in the section shape expected by HA."""
+        groups = {
+            QUICK_SECTION_IDENTITY: (
+                CONF_ASSET_NAME,
+                CONF_CATEGORY,
+                CONF_MANUFACTURER,
+                CONF_MODEL,
+            ),
+            QUICK_SECTION_DETAILS: (
+                CONF_MODEL_ID,
+                CONF_SERIAL_NUMBER,
+                CONF_SW_VERSION,
+                CONF_HW_VERSION,
+                CONF_NOTES,
+            ),
+            QUICK_SECTION_LIFECYCLE: (
+                CONF_LIFECYCLE_STATUS,
+                CONF_EFFECTIVE_DATE,
+                CONF_DEPLOYMENT_STATE,
+                CONF_INSTALLED_DATE,
+                CONF_HA_AREA_ID,
+            ),
+            QUICK_SECTION_WARRANTY: (
+                CONF_WARRANTY_TYPE,
+                CONF_WARRANTY_UNTIL,
+            ),
+            QUICK_SECTION_RELATIONSHIPS: (
+                CONF_PURCHASE_UUID,
+                CONF_REPLACEMENT_TARGET_ASSET_UUID,
+            ),
+        }
+        return {
+            section_key: {
+                key: values[key]
+                for key in keys
+                if key in values and values[key] is not None
+            }
+            for section_key, keys in groups.items()
+        }
+
+    def _quick_metadata_and_sources(
+        self,
+        values: dict[str, Any],
+    ) -> tuple[dict[str, str | None], dict[str, str]]:
+        """Normalize editable metadata and preserve exact field provenance."""
+        metadata: dict[str, str | None] = {}
+        sources: dict[str, str] = {}
+        original = getattr(self, "_quick_original_prefill", {})
+        for field in ASSET_METADATA_FIELDS:
+            submitted = values.get(field)
+            if submitted in (None, ""):
+                normalized = None
+            elif not isinstance(submitted, str):
+                raise AssetStoreError(
+                    "Quick Add metadata must be text",
+                    code="invalid_quick_create_request",
+                )
+            elif field == CONF_ASSET_NAME:
+                normalized = submitted.strip()
+            else:
+                normalized = submitted
+            if field == CONF_ASSET_NAME and not normalized:
+                raise AssetStoreError(
+                    "Quick Add name is required",
+                    code="invalid_quick_create_request",
+                )
+            metadata[field] = normalized
+
+            original_value = original.get(field)
+            if original_value is not None:
+                sources[field] = (
+                    FIELD_SOURCE_HOME_ASSISTANT
+                    if normalized == original_value
+                    else FIELD_SOURCE_USER
+                )
+            elif normalized is not None:
+                sources[field] = FIELD_SOURCE_USER
+        return metadata, sources
+
+    @staticmethod
+    def _quick_canonical_date(
+        value: Any,
+        *,
+        invalid_code: str,
+        reject_future: bool = False,
+    ) -> str | None:
+        """Normalize one optional canonical date for local flow validation."""
+        if value in (None, ""):
+            return None
+        if not isinstance(value, str):
+            raise AssetStoreError("Date must use YYYY-MM-DD", code=invalid_code)
+        try:
+            parsed = date.fromisoformat(value)
+        except ValueError as err:
+            raise AssetStoreError(
+                "Date must use YYYY-MM-DD",
+                code=invalid_code,
+            ) from err
+        if parsed.isoformat() != value:
+            raise AssetStoreError("Date must use YYYY-MM-DD", code=invalid_code)
+        if reject_future and parsed > dt_util.now().date():
+            future_code = (
+                "replacement_date_in_future"
+                if invalid_code == "invalid_replacement_effective_date"
+                else "lifecycle_date_in_future"
+            )
+            raise AssetStoreError("Date cannot be in the future", code=future_code)
+        return value
+
+    def _quick_details_schema(self) -> vol.Schema:
+        """Build the single-level sectioned Quick Add details form."""
+        original = getattr(self, "_quick_original_prefill", {})
+        name_marker: Any = vol.Required(CONF_ASSET_NAME)
+        if original.get(CONF_ASSET_NAME):
+            name_marker = vol.Required(
+                CONF_ASSET_NAME,
+                default=original[CONF_ASSET_NAME],
+            )
+        source = getattr(self, "_quick_source", "manual")
+        deployment_default = (
+            DEPLOYMENT_STATE_DEPLOYED
+            if source == "home_assistant"
+            else DEPLOYMENT_STATE_NOT_DEPLOYED
+        )
+        return vol.Schema(
+            {
+                vol.Required(QUICK_SECTION_IDENTITY): data_entry_flow.section(
+                    vol.Schema(
+                        {
+                            name_marker: _text_selector(),
+                            vol.Optional(CONF_CATEGORY): _text_selector(),
+                            vol.Optional(CONF_MANUFACTURER): _text_selector(),
+                            vol.Optional(CONF_MODEL): _text_selector(),
+                        }
+                    ),
+                    {"collapsed": False},
+                ),
+                vol.Required(QUICK_SECTION_DETAILS): data_entry_flow.section(
+                    vol.Schema(
+                        {
+                            vol.Optional(CONF_MODEL_ID): _text_selector(),
+                            vol.Optional(CONF_SERIAL_NUMBER): _text_selector(),
+                            vol.Optional(CONF_SW_VERSION): _text_selector(),
+                            vol.Optional(CONF_HW_VERSION): _text_selector(),
+                            vol.Optional(CONF_NOTES): _text_selector(multiline=True),
+                        }
+                    ),
+                    {"collapsed": False},
+                ),
+                vol.Required(QUICK_SECTION_LIFECYCLE): data_entry_flow.section(
+                    vol.Schema(
+                        {
+                            vol.Required(
+                                CONF_LIFECYCLE_STATUS,
+                                default=LIFECYCLE_STATUS_ACTIVE,
+                            ): selector.SelectSelector(
+                                selector.SelectSelectorConfig(
+                                    options=list(LIFECYCLE_STATUSES),
+                                    translation_key="lifecycle_status",
+                                    mode=selector.SelectSelectorMode.DROPDOWN,
+                                )
+                            ),
+                            vol.Optional(CONF_EFFECTIVE_DATE): selector.DateSelector(),
+                            vol.Required(
+                                CONF_DEPLOYMENT_STATE,
+                                default=deployment_default,
+                            ): selector.SelectSelector(
+                                selector.SelectSelectorConfig(
+                                    options=list(DEPLOYMENT_STATES),
+                                    translation_key="deployment_state",
+                                    mode=selector.SelectSelectorMode.DROPDOWN,
+                                )
+                            ),
+                            vol.Optional(CONF_INSTALLED_DATE): selector.DateSelector(),
+                            vol.Optional(CONF_HA_AREA_ID): selector.AreaSelector(),
+                        }
+                    ),
+                    {"collapsed": False},
+                ),
+                vol.Required(QUICK_SECTION_WARRANTY): data_entry_flow.section(
+                    vol.Schema(
+                        {
+                            vol.Required(
+                                CONF_WARRANTY_TYPE,
+                                default=WARRANTY_NONE,
+                            ): selector.SelectSelector(
+                                selector.SelectSelectorConfig(
+                                    options=list(WARRANTY_TYPES),
+                                    translation_key="warranty_type",
+                                    mode=selector.SelectSelectorMode.DROPDOWN,
+                                )
+                            ),
+                            vol.Optional(CONF_WARRANTY_UNTIL): selector.DateSelector(),
+                        }
+                    ),
+                    {"collapsed": False},
+                ),
+                vol.Required(QUICK_SECTION_RELATIONSHIPS): data_entry_flow.section(
+                    vol.Schema(
+                        {
+                            vol.Required(
+                                CONF_PURCHASE_UUID,
+                                default=NO_PURCHASE_SELECTION,
+                            ): selector.SelectSelector(
+                                selector.SelectSelectorConfig(
+                                    options=self._purchase_choices(),
+                                    mode=selector.SelectSelectorMode.DROPDOWN,
+                                )
+                            ),
+                            vol.Required(
+                                CONF_REPLACEMENT_TARGET_ASSET_UUID,
+                                default=NO_REPLACEMENT_SELECTION,
+                            ): selector.SelectSelector(
+                                selector.SelectSelectorConfig(
+                                    options=self._quick_replacement_choices(),
+                                    mode=selector.SelectSelectorMode.DROPDOWN,
+                                )
+                            ),
+                        }
+                    ),
+                    {"collapsed": False},
+                ),
+            }
+        )
+
+    def _show_quick_details(
+        self,
+        *,
+        errors: dict[str, str] | None = None,
+    ) -> ConfigFlowResult:
+        """Show Quick Add details with preserved prefill and retry values."""
+        suggested = dict(getattr(self, "_quick_original_prefill", {}))
+        suggested.update(getattr(self, "_quick_details_input", {}))
+        return self.async_show_form(
+            step_id="quick_add_details",
+            data_schema=self.add_suggested_values_to_schema(
+                self._quick_details_schema(),
+                self._nest_quick_details(suggested),
+            ),
+            errors=errors or {},
+        )
+
+    def _quick_predecessor_snapshot(self, asset: AssetData) -> dict[str, Any]:
+        """Capture every predecessor field required for review TOCTOU checks."""
+        return {
+            "asset_uuid": asset["asset_uuid"],
+            "name": asset["name"],
+            "lifecycle_status": asset["lifecycle"]["status"],
+            "current_event_uuid": asset["lifecycle"]["current_event_uuid"],
+            "deployment_state": asset[CONF_DEPLOYMENT_STATE],
+            "ha_area_id": asset[CONF_HA_AREA_ID],
+        }
+
+    def _show_quick_replacement(
+        self,
+        *,
+        errors: dict[str, str] | None = None,
+    ) -> ConfigFlowResult:
+        """Show optional predecessor mutations before final review."""
+        predecessor = self._quick_predecessor
+        defaults = dict(getattr(self, "_quick_replacement_input", {}))
+        defaults.setdefault(CONF_REPLACEMENT_REASON, "unknown")
+        defaults.setdefault(
+            CONF_RETIRE_PREDECESSOR,
+            predecessor["lifecycle_status"]
+            in (LIFECYCLE_STATUS_ACTIVE, LIFECYCLE_STATUS_UNKNOWN),
+        )
+        defaults.setdefault(
+            CONF_UNDEPLOY_PREDECESSOR,
+            predecessor["deployment_state"]
+            in (DEPLOYMENT_STATE_DEPLOYED, DEPLOYMENT_STATE_UNKNOWN),
+        )
+        schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_REPLACEMENT_REASON,
+                    default="unknown",
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=list(REPLACEMENT_REASONS),
+                        translation_key="replacement_reason",
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+                vol.Optional(CONF_EFFECTIVE_DATE): selector.DateSelector(),
+                vol.Optional(CONF_NOTES): _text_selector(multiline=True),
+                vol.Required(
+                    CONF_RETIRE_PREDECESSOR,
+                    default=defaults[CONF_RETIRE_PREDECESSOR],
+                ): selector.BooleanSelector(),
+                vol.Required(
+                    CONF_UNDEPLOY_PREDECESSOR,
+                    default=defaults[CONF_UNDEPLOY_PREDECESSOR],
+                ): selector.BooleanSelector(),
+            }
+        )
+        return self.async_show_form(
+            step_id="quick_add_replacement",
+            data_schema=self.add_suggested_values_to_schema(schema, defaults),
+            errors=errors or {},
+            description_placeholders={"predecessor_name": predecessor["name"]},
+        )
+
+    def _quick_display_value(self, value: str | None) -> str:
+        """Return a human-readable empty value for review placeholders."""
+        if value is not None:
+            return value
+        return self._localized_label("Not specified", "Ei määritetty")
+
+    def _quick_purchase_label(self) -> str:
+        """Return the selected Purchase's display label without its UUID."""
+        purchase_uuid = self._quick_details["purchase_uuid"]
+        if purchase_uuid is None:
+            return self._localized_label("No Purchase", "Ei ostosta")
+        purchase = self._manager.purchase(purchase_uuid)
+        if purchase is None:
+            return self._localized_label("Unavailable Purchase", "Osto ei saatavilla")
+        return _stored_purchase_label(purchase)
+
+    def _quick_area_name(self, area_id: str | None) -> str:
+        """Return an Area name without exposing the registry identifier."""
+        if area_id is None:
+            return self._localized_label("No Area", "Ei aluetta")
+        area = ar.async_get(self.hass).async_get_area(area_id)
+        if area is None:
+            return self._localized_label("Unavailable Area", "Alue ei saatavilla")
+        return area.name
+
+    def _quick_device_name(self, device_id: str | None) -> str:
+        """Return an HA device name without exposing its registry identifier."""
+        if device_id is None:
+            return self._localized_label("No HA device", "Ei HA-laitetta")
+        device = dr.async_get(self.hass).async_get(device_id)
+        if device is None:
+            return self._localized_label("Unavailable HA device", "HA-laite ei saatavilla")
+        name = (
+            getattr(device, "name_by_user", None)
+            or getattr(device, "name", None)
+            or getattr(device, "model", None)
+        )
+        if name not in (None, ""):
+            return str(name)
+        return self._localized_label("Unnamed HA device", "Nimetön HA-laite")
+
+    async def _quick_selector_label(self, selector_key: str, value: str) -> str:
+        """Resolve one canonical selector value through HA translations."""
+        translations = await translation_helper.async_get_translations(
+            self.hass,
+            self.hass.config.language,
+            "selector",
+            integrations={DOMAIN},
+        )
+        return translations.get(
+            f"component.{DOMAIN}.selector.{selector_key}.options.{value}",
+            value,
+        )
+
+    async def _show_quick_confirm(
+        self,
+        *,
+        errors: dict[str, str] | None = None,
+    ) -> ConfigFlowResult:
+        """Show a read-only human review followed by explicit confirmation."""
+        details = self._quick_details
+        metadata = details["metadata"]
+        predecessor = getattr(self, "_quick_predecessor", None)
+        replacement = getattr(self, "_quick_replacement", None)
+        predecessor_lifecycle = self._localized_label("Unchanged", "Ei muutosta")
+        predecessor_deployment = predecessor_lifecycle
+        predecessor_area = predecessor_lifecycle
+        predecessor_name = self._localized_label("None", "Ei mitään")
+        replacement_reason = self._localized_label("None", "Ei mitään")
+        replacement_date = self._quick_display_value(None)
+        lifecycle_label = await self._quick_selector_label(
+            "lifecycle_status",
+            details["lifecycle_status"],
+        )
+        deployment_label = await self._quick_selector_label(
+            "deployment_state",
+            details["deployment_state"],
+        )
+        if predecessor is not None and replacement is not None:
+            predecessor_name = predecessor["name"]
+            replacement_reason = await self._quick_selector_label(
+                "replacement_reason",
+                replacement[CONF_REPLACEMENT_REASON],
+            )
+            replacement_date = self._quick_display_value(
+                replacement[CONF_EFFECTIVE_DATE]
+            )
+            if replacement[CONF_RETIRE_PREDECESSOR] and predecessor[
+                "lifecycle_status"
+            ] in (LIFECYCLE_STATUS_ACTIVE, LIFECYCLE_STATUS_UNKNOWN):
+                old_lifecycle = await self._quick_selector_label(
+                    "lifecycle_status",
+                    predecessor["lifecycle_status"],
+                )
+                retired = await self._quick_selector_label(
+                    "lifecycle_status",
+                    LIFECYCLE_STATUS_RETIRED,
+                )
+                predecessor_lifecycle = (
+                    f"{old_lifecycle} → {retired}"
+                )
+            if replacement[CONF_UNDEPLOY_PREDECESSOR] and predecessor[
+                "deployment_state"
+            ] in (DEPLOYMENT_STATE_DEPLOYED, DEPLOYMENT_STATE_UNKNOWN):
+                old_deployment = await self._quick_selector_label(
+                    "deployment_state",
+                    predecessor["deployment_state"],
+                )
+                not_deployed = await self._quick_selector_label(
+                    "deployment_state",
+                    DEPLOYMENT_STATE_NOT_DEPLOYED,
+                )
+                predecessor_deployment = (
+                    f"{old_deployment} → {not_deployed}"
+                )
+                if predecessor["ha_area_id"] is not None:
+                    predecessor_area = (
+                        f"{self._quick_area_name(predecessor['ha_area_id'])} → "
+                        f"{self._localized_label('removed', 'poistetaan')}"
+                    )
+        warranty = await self._quick_selector_label(
+            "warranty_type",
+            details["warranty_type"],
+        )
+        if details["warranty_until"] is not None:
+            warranty = f"{warranty} — {details['warranty_until']}"
+        return self.async_show_form(
+            step_id="quick_add_confirm",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_CONFIRM_QUICK_ADD,
+                        default=False,
+                    ): selector.BooleanSelector()
+                }
+            ),
+            errors=errors or {},
+            description_placeholders={
+                "asset_name": metadata[CONF_ASSET_NAME],
+                "manufacturer_model": " ".join(
+                    value
+                    for value in (
+                        metadata[CONF_MANUFACTURER],
+                        metadata[CONF_MODEL],
+                    )
+                    if value
+                )
+                or self._quick_display_value(None),
+                "lifecycle": lifecycle_label,
+                "lifecycle_date": self._quick_display_value(
+                    details["lifecycle_effective_date"]
+                ),
+                "deployment": deployment_label,
+                "installed_date": self._quick_display_value(
+                    details["installed_date"]
+                ),
+                "area": self._quick_area_name(details["ha_area_id"]),
+                "purchase": self._quick_purchase_label(),
+                "warranty": warranty,
+                "ha_device": self._quick_device_name(
+                    getattr(self, "_quick_primary_device_id", None)
+                ),
+                "predecessor_name": predecessor_name,
+                "predecessor_lifecycle": predecessor_lifecycle,
+                "predecessor_deployment": predecessor_deployment,
+                "predecessor_area": predecessor_area,
+                "replacement_reason": replacement_reason,
+                "replacement_date": replacement_date,
+                "disposed_warning": (
+                    self._localized_label(
+                        "This Asset will be created as disposed.",
+                        "Laite luodaan hävitetyksi.",
+                    )
+                    if details["lifecycle_status"] == LIFECYCLE_STATUS_DISPOSED
+                    else ""
+                ),
+            },
+        )
+
     def _show_asset_selection(
         self,
         *,
@@ -1172,62 +1754,461 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         """Show the extensible Asset management entry menu."""
         return self.async_show_menu(
             step_id="init",
-            menu_options=["create_manual_asset", "manage_asset"],
+            menu_options=["quick_add", "manage_asset"],
         )
 
-    async def async_step_create_manual_asset(
+    async def async_step_quick_add(
         self,
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
-        """Create one ordinary Asset Core record without requiring an HA device."""
-        errors: dict[str, str] = {}
-        purchase_choices = self._purchase_choices()
-
-        if user_input is not None:
-            purchase_uuid = str(
-                user_input.get(CONF_PURCHASE_UUID) or NO_PURCHASE_SELECTION
-            )
-            valid_purchase_uuids = {
-                option["value"] for option in purchase_choices
-            }
-            if purchase_uuid not in valid_purchase_uuids:
-                errors["base"] = "invalid_purchase"
-            else:
-                pending_asset_uuid = getattr(
-                    self,
-                    "_pending_created_asset_uuid",
-                    None,
-                )
-                try:
-                    if pending_asset_uuid is None:
-                        asset = await self._manager.async_create_manual_asset(
-                            **self._metadata_input(user_input)
-                        )
-                        self._pending_created_asset_uuid = asset["asset_uuid"]
-                    else:
-                        asset = await self._manager.async_update_asset_metadata(
-                            pending_asset_uuid,
-                            **self._metadata_input(user_input),
-                        )
-
-                    if purchase_uuid != NO_PURCHASE_SELECTION:
-                        asset = await self._manager.async_set_asset_purchase(
-                            asset["asset_uuid"],
-                            purchase_uuid,
-                        )
-                except (AssetStoreError, OSError) as err:
-                    errors["base"] = self._storage_error_key(err)
-                else:
-                    return self._finish_asset_action(asset, "asset_created")
-
-        schema = _asset_metadata_schema(purchase_choices)
-        suggested = dict(user_input or {})
-        suggested.setdefault(CONF_PURCHASE_UUID, NO_PURCHASE_SELECTION)
-        return self.async_show_form(
-            step_id="create_manual_asset",
-            data_schema=self.add_suggested_values_to_schema(schema, suggested),
-            errors=errors,
+        """Choose whether Quick Add starts from HA or manual metadata."""
+        return self.async_show_menu(
+            step_id="quick_add",
+            menu_options=["quick_add_from_ha", "quick_add_manual"],
         )
+
+    async def async_step_quick_add_manual(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Start manual Quick Add directly at the details form."""
+        self._ensure_quick_asset_uuid()
+        self._quick_source = "manual"
+        self._quick_primary_device_id = None
+        self._quick_original_prefill = {}
+        return self._show_quick_details()
+
+    async def async_step_quick_add_from_ha(
+        self,
+        user_input: dict[str, Any] | None = None,
+        *,
+        errors: dict[str, str] | None = None,
+    ) -> ConfigFlowResult:
+        """Select and conservatively validate one physical HA device."""
+        flow_errors = dict(errors or {})
+        if user_input is not None and not flow_errors:
+            device_id = str(user_input.get(CONF_DEVICE_ID) or "")
+            device, validation_error = self._validate_ha_link_target(device_id)
+            if validation_error is not None:
+                flow_errors["base"] = validation_error
+            elif self._manager.asset_for_primary_device_id(device_id) is not None:
+                flow_errors["base"] = "device_already_linked"
+            else:
+                self._ensure_quick_asset_uuid()
+                self._quick_source = "home_assistant"
+                self._quick_primary_device_id = device_id
+                self._quick_original_prefill = home_assistant_asset_metadata(
+                    device,
+                    device_id,
+                )
+                return self._show_quick_details()
+
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_DEVICE_ID): _physical_device_selector(
+                    self.hass,
+                    multiple=False,
+                )
+            }
+        )
+        if user_input is not None:
+            schema = self.add_suggested_values_to_schema(schema, user_input)
+        return self.async_show_form(
+            step_id="quick_add_from_ha",
+            data_schema=schema,
+            errors=flow_errors,
+        )
+
+    async def async_step_quick_add_details(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Review all new-Asset domains without mutating canonical Store."""
+        if user_input is None:
+            return self._show_quick_details()
+
+        values = self._flatten_quick_sections(user_input)
+        self._quick_details_input = dict(values)
+        try:
+            metadata, field_sources = self._quick_metadata_and_sources(values)
+            lifecycle_status = str(
+                values.get(CONF_LIFECYCLE_STATUS, LIFECYCLE_STATUS_ACTIVE)
+            )
+            if lifecycle_status not in LIFECYCLE_STATUSES:
+                raise AssetStoreError(
+                    "Invalid Lifecycle status",
+                    code="invalid_lifecycle_status",
+                )
+            lifecycle_date = self._quick_canonical_date(
+                values.get(CONF_EFFECTIVE_DATE),
+                invalid_code="invalid_lifecycle_effective_date",
+                reject_future=True,
+            )
+            deployment_state = str(
+                values.get(
+                    CONF_DEPLOYMENT_STATE,
+                    DEPLOYMENT_STATE_DEPLOYED
+                    if self._quick_source == "home_assistant"
+                    else DEPLOYMENT_STATE_NOT_DEPLOYED,
+                )
+            )
+            if deployment_state not in DEPLOYMENT_STATES:
+                raise AssetStoreError(
+                    "Invalid Deployment state",
+                    code="invalid_deployment_state",
+                )
+            installed_date = self._quick_canonical_date(
+                values.get(CONF_INSTALLED_DATE),
+                invalid_code="invalid_installed_date",
+            )
+            area_id = values.get(CONF_HA_AREA_ID)
+            if area_id in (None, ""):
+                area_id = None
+            elif not isinstance(area_id, str) or (
+                ar.async_get(self.hass).async_get_area(area_id) is None
+            ):
+                raise AssetStoreError("Invalid Area", code="invalid_area")
+            if (
+                deployment_state == DEPLOYMENT_STATE_NOT_DEPLOYED
+                and area_id is not None
+            ):
+                raise AssetStoreError(
+                    "A not-deployed Asset cannot have an Area",
+                    code="invalid_area",
+                )
+
+            purchase_selection = str(
+                values.get(CONF_PURCHASE_UUID) or NO_PURCHASE_SELECTION
+            )
+            purchase_uuid = (
+                None
+                if purchase_selection == NO_PURCHASE_SELECTION
+                else purchase_selection
+            )
+            purchase = (
+                None
+                if purchase_uuid is None
+                else self._manager.purchase(purchase_uuid)
+            )
+            if purchase_uuid is not None and purchase is None:
+                raise AssetStoreError(
+                    "Selected Purchase no longer exists",
+                    code="purchase_missing",
+                )
+            if purchase is not None and not purchase.get("configured"):
+                raise AssetStoreError(
+                    "Selected Purchase is not configured",
+                    code="purchase_not_configured",
+                )
+
+            warranty_type = str(values.get(CONF_WARRANTY_TYPE, WARRANTY_NONE))
+            if warranty_type not in WARRANTY_TYPES:
+                raise AssetStoreError(
+                    "Invalid warranty type",
+                    code="invalid_warranty_type",
+                )
+            warranty_until: str | None = None
+            expected_purchase_date: str | None = None
+            if warranty_type == WARRANTY_MANUAL:
+                warranty_until = self._quick_canonical_date(
+                    values.get(CONF_WARRANTY_UNTIL),
+                    invalid_code="invalid_warranty_date",
+                )
+                if warranty_until is None:
+                    raise AssetStoreError(
+                        "A manual warranty date is required",
+                        code="manual_warranty_date_required",
+                    )
+            elif warranty_type in (WARRANTY_ONE_YEAR, WARRANTY_TWO_YEARS):
+                if purchase is None:
+                    raise AssetStoreError(
+                        "A Purchase is required for calculated warranty",
+                        code="purchase_date_required_for_warranty",
+                    )
+                purchase_date = purchase.get(CONF_PURCHASE_DATE)
+                if not isinstance(purchase_date, str):
+                    raise AssetStoreError(
+                        "The Purchase has no usable date",
+                        code="purchase_date_required_for_warranty",
+                    )
+                years = 1 if warranty_type == WARRANTY_ONE_YEAR else 2
+                warranty_until = add_calendar_years(purchase_date, years)
+                if warranty_until is None:
+                    raise AssetStoreError(
+                        "The Purchase date is invalid",
+                        code="purchase_date_required_for_warranty",
+                    )
+                expected_purchase_date = purchase_date
+                self._quick_details_input[CONF_WARRANTY_UNTIL] = warranty_until
+
+            replacement_selection = str(
+                values.get(CONF_REPLACEMENT_TARGET_ASSET_UUID)
+                or NO_REPLACEMENT_SELECTION
+            )
+            predecessor = (
+                None
+                if replacement_selection == NO_REPLACEMENT_SELECTION
+                else self._manager.asset(replacement_selection)
+            )
+            if (
+                replacement_selection != NO_REPLACEMENT_SELECTION
+                and predecessor is None
+            ):
+                raise AssetStoreError(
+                    "Selected predecessor no longer exists",
+                    code="asset_missing",
+                )
+            if (
+                predecessor is not None
+                and self._quick_source == "manual"
+                and deployment_state == DEPLOYMENT_STATE_NOT_DEPLOYED
+                and not getattr(
+                    self,
+                    "_quick_replacement_deployment_reviewed",
+                    False,
+                )
+            ):
+                # The predecessor is chosen on the same form as Deployment, so
+                # render the replacement-aware default visibly before review.
+                # A second submission may explicitly choose any valid state.
+                self._quick_replacement_deployment_reviewed = True
+                self._quick_details_input[CONF_DEPLOYMENT_STATE] = (
+                    DEPLOYMENT_STATE_DEPLOYED
+                )
+                return self._show_quick_details(
+                    errors={"base": "review_replacement_deployment"}
+                )
+        except AssetStoreError as err:
+            return self._show_quick_details(
+                errors={"base": self._storage_error_key(err)}
+            )
+
+        self._quick_details = {
+            "metadata": metadata,
+            "field_sources": field_sources,
+            "lifecycle_status": lifecycle_status,
+            "lifecycle_effective_date": lifecycle_date,
+            "deployment_state": deployment_state,
+            "installed_date": installed_date,
+            "ha_area_id": area_id,
+            "warranty_type": warranty_type,
+            "warranty_until": warranty_until,
+            "purchase_uuid": purchase_uuid,
+            "expected_purchase_date": expected_purchase_date,
+        }
+        if predecessor is None:
+            self._quick_predecessor = None
+            self._quick_replacement = None
+            return await self._show_quick_confirm()
+        self._quick_predecessor = self._quick_predecessor_snapshot(predecessor)
+        return self._show_quick_replacement()
+
+    async def async_step_quick_add_replacement(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Review replacement history and optional predecessor state changes."""
+        if user_input is None:
+            return self._show_quick_replacement()
+        self._quick_replacement_input = dict(user_input)
+        try:
+            reason = str(user_input.get(CONF_REPLACEMENT_REASON) or "")
+            if reason not in REPLACEMENT_REASONS:
+                raise AssetStoreError(
+                    "Invalid replacement reason",
+                    code="invalid_replacement_reason",
+                )
+            effective_date = self._quick_canonical_date(
+                user_input.get(CONF_EFFECTIVE_DATE),
+                invalid_code="invalid_replacement_effective_date",
+                reject_future=True,
+            )
+            notes_value = user_input.get(CONF_NOTES)
+            if notes_value in (None, ""):
+                notes = None
+            elif not isinstance(notes_value, str):
+                raise AssetStoreError(
+                    "Replacement notes must be text",
+                    code="invalid_quick_create_request",
+                )
+            else:
+                notes = notes_value
+        except AssetStoreError as err:
+            return self._show_quick_replacement(
+                errors={"base": self._storage_error_key(err)}
+            )
+        self._quick_replacement = {
+            CONF_REPLACEMENT_REASON: reason,
+            CONF_EFFECTIVE_DATE: effective_date,
+            CONF_NOTES: notes,
+            CONF_RETIRE_PREDECESSOR: bool(
+                user_input.get(CONF_RETIRE_PREDECESSOR, False)
+            ),
+            CONF_UNDEPLOY_PREDECESSOR: bool(
+                user_input.get(CONF_UNDEPLOY_PREDECESSOR, False)
+            ),
+        }
+        return await self._show_quick_confirm()
+
+    def _quick_create_request(self) -> QuickAssetCreateRequest:
+        """Build one immutable canonical command from reviewed flow state."""
+        details = self._quick_details
+        predecessor = getattr(self, "_quick_predecessor", None)
+        replacement = getattr(self, "_quick_replacement", None)
+        return QuickAssetCreateRequest(
+            asset_uuid=self._quick_asset_uuid,
+            primary_device_id=self._quick_primary_device_id,
+            metadata=details["metadata"],
+            field_sources=details["field_sources"],
+            initial_lifecycle_status=details["lifecycle_status"],
+            initial_lifecycle_effective_date=details["lifecycle_effective_date"],
+            deployment_state=details["deployment_state"],
+            installed_date=details["installed_date"],
+            ha_area_id=details["ha_area_id"],
+            warranty_type=details["warranty_type"],
+            warranty_until=details["warranty_until"],
+            purchase_uuid=details["purchase_uuid"],
+            expected_purchase_date=details["expected_purchase_date"],
+            predecessor_asset_uuid=(
+                None if predecessor is None else predecessor["asset_uuid"]
+            ),
+            expected_predecessor_lifecycle_status=(
+                None if predecessor is None else predecessor["lifecycle_status"]
+            ),
+            expected_predecessor_current_event_uuid=(
+                None if predecessor is None else predecessor["current_event_uuid"]
+            ),
+            expected_predecessor_deployment_state=(
+                None if predecessor is None else predecessor["deployment_state"]
+            ),
+            expected_predecessor_ha_area_id=(
+                None if predecessor is None else predecessor["ha_area_id"]
+            ),
+            replacement_reason=(
+                None if replacement is None else replacement[CONF_REPLACEMENT_REASON]
+            ),
+            replacement_effective_date=(
+                None if replacement is None else replacement[CONF_EFFECTIVE_DATE]
+            ),
+            replacement_notes=(
+                None if replacement is None else replacement[CONF_NOTES]
+            ),
+            retire_predecessor=(
+                False
+                if replacement is None
+                else replacement[CONF_RETIRE_PREDECESSOR]
+            ),
+            undeploy_predecessor=(
+                False
+                if replacement is None
+                else replacement[CONF_UNDEPLOY_PREDECESSOR]
+            ),
+        )
+
+    async def async_step_quick_add_confirm(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Commit one reviewed Quick Add command exactly once."""
+        if user_input is None:
+            return await self._show_quick_confirm()
+        if not user_input.get(CONF_CONFIRM_QUICK_ADD):
+            return await self._show_quick_confirm(
+                errors={"base": "confirmation_required"}
+            )
+
+        device_id = self._quick_primary_device_id
+        if device_id is not None:
+            _device, validation_error = self._validate_ha_link_target(device_id)
+            if validation_error is not None:
+                return await self.async_step_quick_add_from_ha(
+                    {CONF_DEVICE_ID: device_id},
+                    errors={"base": validation_error},
+                )
+            if self._manager.asset_for_primary_device_id(device_id) is not None:
+                return await self.async_step_quick_add_from_ha(
+                    {CONF_DEVICE_ID: device_id},
+                    errors={"base": "device_already_linked"},
+                )
+        area_id = self._quick_details["ha_area_id"]
+        if area_id is not None and (
+            ar.async_get(self.hass).async_get_area(area_id) is None
+        ):
+            return self._show_quick_details(errors={"base": "invalid_area"})
+
+        try:
+            result = await self._manager.async_quick_create_asset(
+                self._quick_create_request()
+            )
+        except (AssetStoreError, OSError) as err:
+            error_key = self._storage_error_key(err)
+            if error_key in {
+                "device_missing",
+                "device_already_linked",
+                "service_device_not_allowed",
+                "non_physical_device_not_allowed",
+                "device_lifecycle_device_not_allowed",
+            } and device_id is not None:
+                return await self.async_step_quick_add_from_ha(
+                    {CONF_DEVICE_ID: device_id},
+                    errors={"base": error_key},
+                )
+            if error_key in {
+                "asset_missing",
+                "predecessor_changed",
+                "invalid_replacement_reason",
+                "invalid_replacement_effective_date",
+                "replacement_date_in_future",
+                "replacement_predecessor_conflict",
+                "replacement_successor_conflict",
+                "replacement_cycle",
+                "replacement_graph_invalid",
+            } and getattr(self, "_quick_predecessor", None) is not None:
+                predecessor = self._manager.asset(
+                    self._quick_predecessor["asset_uuid"]
+                )
+                if predecessor is not None:
+                    self._quick_predecessor = self._quick_predecessor_snapshot(
+                        predecessor
+                    )
+                return self._show_quick_replacement(errors={"base": error_key})
+            if error_key in {
+                "invalid_quick_create_request",
+                "invalid_purchase",
+                "purchase_missing",
+                "purchase_not_configured",
+                "purchase_changed",
+                "invalid_lifecycle_status",
+                "invalid_lifecycle_effective_date",
+                "lifecycle_date_in_future",
+                "invalid_deployment_state",
+                "invalid_installed_date",
+                "invalid_area",
+                "invalid_warranty_type",
+                "invalid_warranty_date",
+                "purchase_date_required_for_warranty",
+                "manual_warranty_date_required",
+            }:
+                if error_key == "purchase_changed":
+                    purchase_uuid = self._quick_details["purchase_uuid"]
+                    purchase = self._manager.purchase(purchase_uuid)
+                    if purchase is not None:
+                        purchase_date = purchase.get(CONF_PURCHASE_DATE)
+                        years = (
+                            1
+                            if self._quick_details["warranty_type"]
+                            == WARRANTY_ONE_YEAR
+                            else 2
+                        )
+                        recalculated = (
+                            add_calendar_years(purchase_date, years)
+                            if isinstance(purchase_date, str)
+                            else None
+                        )
+                        self._quick_details_input[CONF_WARRANTY_UNTIL] = recalculated
+                return self._show_quick_details(errors={"base": error_key})
+            return await self._show_quick_confirm(errors={"base": error_key})
+        return self._finish_quick_add(result.asset)
 
     async def async_step_manage_asset(
         self,

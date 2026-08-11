@@ -162,13 +162,14 @@
       "asset_replacement_updated": "The replacement relationship for {asset_id} — {asset_name} was updated.",
       "asset_related_device_added": "A related Home Assistant device was added to {asset_id} — {asset_name}.",
       "asset_related_device_removed": "A related Home Assistant device was removed from {asset_id} — {asset_name}.",
-      "asset_updated": "Asset {asset_id} — {asset_name} was updated."
+      "asset_updated": "Asset {asset_id} — {asset_name} was updated.",
+      "quick_asset_created": "{asset_name} was added to Device Lifecycle."
     },
     "error": {
       "asset_missing": "The selected Asset no longer exists.",
       "asset_store_error": "The change could not be saved. Nothing was changed.",
       "confirmation_required": "Confirm this operation to continue.",
-      "device_already_linked": "The selected Home Assistant device is already linked to Asset {owner_asset_id}.",
+      "device_already_linked": "The selected Home Assistant device is already linked to another Asset.",
       "device_lifecycle_device_not_allowed": "The selected device is not eligible to be linked as an external Home Assistant device.",
       "device_missing": "The selected Home Assistant device is missing or unavailable.",
       "ha_device_purchase_dependency": "An active Purchase still uses the linked device. Remove it from that Purchase before unlinking or replacing it.",
@@ -181,8 +182,11 @@
       "invalid_lifecycle_effective_date": "Enter the Lifecycle effective date in YYYY-MM-DD format.",
       "invalid_lifecycle_status": "Select a valid Lifecycle status.",
       "invalid_purchase": "The selected Purchase cannot be linked to this Asset.",
+      "invalid_quick_create_request": "Review the entered Asset details and try again.",
       "invalid_replacement_effective_date": "Enter the replacement effective date in YYYY-MM-DD format.",
       "invalid_replacement_reason": "Select a valid replacement reason.",
+      "invalid_warranty_date": "Enter a valid warranty end date in YYYY-MM-DD format.",
+      "invalid_warranty_type": "Select a valid warranty type.",
       "lifecycle_chain_invalid": "The Lifecycle history is inconsistent. Nothing was changed.",
       "lifecycle_date_in_future": "The Lifecycle effective date cannot be in the future.",
       "lifecycle_no_change": "The selected Lifecycle status is already current. Nothing was changed.",
@@ -190,6 +194,13 @@
       "non_physical_device_not_allowed": "Select a physical Home Assistant device provided by another integration.",
       "purchase_conflict": "This Asset is already linked to a different Purchase. Review its current Purchase and try again.",
       "persistence_error": "The change could not be durably verified. Nothing was published.",
+      "predecessor_changed": "The predecessor Asset changed while this form was open. Review the replacement again.",
+      "purchase_changed": "The selected Purchase date changed while this form was open. Review the recalculated warranty.",
+      "purchase_date_required_for_warranty": "A 1 or 2 year warranty requires a configured Purchase with a valid purchase date.",
+      "purchase_missing": "The selected Purchase no longer exists.",
+      "purchase_not_configured": "The selected Purchase is no longer configured.",
+      "quick_create_idempotency_conflict": "This Quick Add request conflicts with an existing persisted Asset. Nothing was changed.",
+      "review_replacement_deployment": "A replacement was selected. Review the new Asset's visible Deployment default, now Deployed, and continue.",
       "related_device_is_primary": "The selected Home Assistant device is already the primary device for this Asset.",
       "related_device_not_found": "The selected related relationship no longer exists. Review the current relationships and try again.",
       "replacement_cycle": "This relationship would create a replacement cycle.",
@@ -200,6 +211,7 @@
       "replacement_self_reference": "An Asset cannot replace itself.",
       "replacement_successor_conflict": "The successor Asset already has an active predecessor.",
       "replacement_void_reason_required": "Enter a non-empty reason for voiding the relationship.",
+      "manual_warranty_date_required": "Enter a manual warranty end date.",
       "service_device_not_allowed": "The selected item is a Home Assistant service rather than a physical device."
     },
     "step": {
@@ -243,21 +255,105 @@
         "description": "Asset: {asset}. Current Purchase: {current_purchase}. A previous unavailable Purchase is shown only when already linked to this Asset. Select a configured Purchase or No Purchase.",
         "title": "Change Purchase"
       },
-      "create_manual_asset": {
-        "data": {
-          "category": "Category",
-          "hw_version": "Hardware version",
-          "manufacturer": "Manufacturer",
-          "model": "Model",
-          "model_id": "Model ID",
-          "name": "Display name",
-          "notes": "Notes",
-          "purchase_uuid": "Purchase",
-          "serial_number": "Serial number",
-          "sw_version": "Software version"
+      "quick_add": {
+        "menu_options": {
+          "quick_add_from_ha": "From Home Assistant device",
+          "quick_add_manual": "Manually"
         },
-        "description": "Create a physical Asset without a Home Assistant device or Purchase. A persistent Asset ID is assigned automatically and remains unchanged if you link a Home Assistant device later.",
-        "title": "Create Asset"
+        "title": "Add device"
+      },
+      "quick_add_from_ha": {
+        "data": {
+          "device_id": "Home Assistant device"
+        },
+        "data_description": {
+          "device_id": "Select one physical device owned by another Home Assistant integration."
+        },
+        "description": "Choose a Home Assistant device to prefill editable physical details. The external device remains independently owned.",
+        "title": "Add from Home Assistant"
+      },
+      "quick_add_details": {
+        "description": "Review the physical Asset before permanent identity is created. Suggested values remain editable, and no data is stored until final confirmation.",
+        "sections": {
+          "identity": {
+            "name": "Identity",
+            "data": {
+              "name": "Name",
+              "category": "Category",
+              "manufacturer": "Manufacturer",
+              "model": "Model"
+            }
+          },
+          "details": {
+            "name": "Details",
+            "data": {
+              "model_id": "Model ID",
+              "serial_number": "Serial number",
+              "sw_version": "Software version",
+              "hw_version": "Hardware version",
+              "notes": "Notes"
+            }
+          },
+          "lifecycle": {
+            "name": "Lifecycle and deployment",
+            "data": {
+              "lifecycle_status": "Lifecycle",
+              "effective_date": "Lifecycle effective date",
+              "deployment_state": "Deployment",
+              "installed_date": "Installation date",
+              "ha_area_id": "Home Assistant Area"
+            },
+            "data_description": {
+              "effective_date": "Optional; no date is inferred from Purchase, installation, replacement, or today.",
+              "ha_area_id": "Optional Asset location. The external Home Assistant device is not moved."
+            }
+          },
+          "warranty": {
+            "name": "Warranty",
+            "data": {
+              "warranty_type": "Warranty",
+              "warranty_until": "Manual warranty end date"
+            },
+            "data_description": {
+              "warranty_type": "1 and 2 year warranties require a configured Purchase and are calculated from its purchase date.",
+              "warranty_until": "Required only for Manual warranty."
+            }
+          },
+          "relationships": {
+            "name": "Relationships",
+            "data": {
+              "purchase_uuid": "Purchase",
+              "replacement_target_asset_uuid": "Asset this device replaces"
+            },
+            "data_description": {
+              "purchase_uuid": "Select an existing configured Purchase or No Purchase.",
+              "replacement_target_asset_uuid": "Optional physical predecessor Asset. Replacement never transfers Purchase, warranty, Runtime, Area, or Home Assistant relationships."
+            }
+          }
+        },
+        "title": "Device details"
+      },
+      "quick_add_replacement": {
+        "data": {
+          "replacement_reason": "Replacement reason",
+          "effective_date": "Effective date",
+          "notes": "Notes",
+          "retire_predecessor": "Retire predecessor where applicable",
+          "undeploy_predecessor": "Mark predecessor not deployed where applicable"
+        },
+        "data_description": {
+          "effective_date": "Optional. The same date is used for predecessor retirement if selected.",
+          "notes": "Stored only on the immutable replacement record."
+        },
+        "description": "Review how {predecessor_name} is replaced. Disposed and lost predecessors are never automatically retired; installation date is preserved.",
+        "title": "Replacement details"
+      },
+      "quick_add_confirm": {
+        "data": {
+          "confirm_quick_add": "Confirm and add device"
+        },
+        "description": "**New device**\n\nName: {asset_name}\n\nManufacturer / model: {manufacturer_model}\n\nLifecycle: {lifecycle}\n\nLifecycle effective date: {lifecycle_date}\n\nDeployment: {deployment}\n\nInstallation date: {installed_date}\n\nArea: {area}\n\nPurchase: {purchase}\n\nWarranty: {warranty}\n\nHome Assistant device: {ha_device}\n\n{disposed_warning}\n\n**Replacement review**\n\nOld device: {predecessor_name}\n\nLifecycle: {predecessor_lifecycle}\n\nDeployment: {predecessor_deployment}\n\nArea: {predecessor_area}\n\nReason: {replacement_reason}\n\nEffective date: {replacement_date}\n\nNothing is stored until you confirm.",
+        "title": "Confirm device"
       },
       "confirm_not_deployed": {
         "data": {
@@ -341,8 +437,8 @@
       },
       "init": {
         "menu_options": {
-          "create_manual_asset": "Create Asset",
-          "manage_asset": "Manage Asset"
+          "quick_add": "Add device",
+          "manage_asset": "Manage devices"
         },
         "title": "Asset management"
       },

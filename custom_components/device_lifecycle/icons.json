@@ -1,4 +1,17 @@
 {
+  "options": {
+    "step": {
+      "quick_add_details": {
+        "sections": {
+          "identity": "mdi:card-account-details-outline",
+          "details": "mdi:text-box-outline",
+          "lifecycle": "mdi:timeline-clock-outline",
+          "warranty": "mdi:shield-check-outline",
+          "relationships": "mdi:link-variant"
+        }
+      }
+    }
+  },
   "entity": {
     "sensor": {
       "lifecycle_status": {

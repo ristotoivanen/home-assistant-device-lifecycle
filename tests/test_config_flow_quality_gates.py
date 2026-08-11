@@ -326,7 +326,7 @@ def test_service_device_runtime_title_and_flow_error_mapping(
     } == legacy
 
 
-async def test_finnish_dynamic_label_and_invalid_manual_purchase_selection(
+async def test_finnish_dynamic_label_and_invalid_quick_purchase_selection(
     hass: HomeAssistant,
 ) -> None:
     """Dynamic labels localize and stale Purchase UUIDs fail before Asset creation."""
@@ -334,19 +334,20 @@ async def test_finnish_dynamic_label_and_invalid_manual_purchase_selection(
     with patch.object(hass.config, "language", "fi"):
         assert flow._localized_label("English", "Suomi") == "Suomi"
 
-    result = await flow.async_step_create_manual_asset(
+    await flow.async_step_quick_add_manual()
+    result = await flow.async_step_quick_add_details(
         {
             CONF_ASSET_NAME: "Invalid purchase target",
             CONF_PURCHASE_UUID: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
         }
     )
-    assert result["errors"] == {"base": "invalid_purchase"}
+    assert result["errors"] == {"base": "purchase_missing"}
 
 
-async def test_parent_config_flow_creation_and_first_subentry_dispatch(
+async def test_parent_config_flow_creation_and_quick_add_dispatch(
     hass: HomeAssistant,
 ) -> None:
-    """Parent creation preserves ConfigEntry v4 and dispatches the first Purchase flow."""
+    """Parent creation preserves ConfigEntry v4 and dispatches Quick Add."""
     flow = DeviceLifecycleConfigFlow()
     flow.hass = hass
     result_entry = SimpleNamespace(entry_id="new-parent")
@@ -363,12 +364,20 @@ async def test_parent_config_flow_creation_and_first_subentry_dispatch(
     assert flow.VERSION == CONFIG_ENTRY_VERSION == 4
 
     with patch.object(
-        hass.config_entries.subentries,
+        hass.config_entries.options,
         "async_init",
-        AsyncMock(return_value={"flow_id": "purchase-flow"}),
-    ):
+        AsyncMock(return_value={"flow_id": "options-flow"}),
+    ), patch.object(
+        hass.config_entries.options,
+        "async_configure",
+        AsyncMock(return_value={"flow_id": "options-flow"}),
+    ) as configure:
         dispatched = await flow.async_on_create_entry(result)
-    assert dispatched["next_flow"][1] == "purchase-flow"
+    assert dispatched["next_flow"][1] == "options-flow"
+    configure.assert_awaited_once_with(
+        "options-flow",
+        {"next_step_id": "quick_add"},
+    )
 
 
 async def test_options_stale_asset_and_no_asset_recovery_forms(

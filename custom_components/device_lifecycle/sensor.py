@@ -944,6 +944,9 @@ class DeviceReplacementSensor(SensorEntity):
         self._successor_asset_ids = (
             [successor["asset_id"]] if successor is not None else []
         )
+        self._attr_entity_registry_enabled_default = (
+            predecessor is not None or successor is not None
+        )
         self.device_entry = device_entry
         self._attr_unique_id = replacement_unique_id(asset["asset_uuid"])
 

@@ -19,6 +19,9 @@ _LOGGER = logging.getLogger(__name__)
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up the single Device Lifecycle parent entry."""
+    if entry.title == "Laitteen elinkaari":
+        hass.config_entries.async_update_entry(entry, title="Device Lifecycle")
+
     manager = AssetStoreManager(hass)
     await manager.async_setup()
     await manager.async_reconcile_entry(entry)

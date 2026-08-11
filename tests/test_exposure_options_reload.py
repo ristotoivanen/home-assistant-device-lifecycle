@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from copy import deepcopy
+import logging
 from unittest.mock import AsyncMock, patch
 
 from homeassistant.const import Platform
@@ -15,10 +16,10 @@ from homeassistant.helpers import entity_registry as er
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.device_lifecycle.config_flow import NO_PURCHASE_SELECTION
 from custom_components.device_lifecycle.const import (
     CONF_ASSET_NAME,
     CONF_ASSET_UUID,
+    CONF_CONFIRM_QUICK_ADD,
     CONF_DEVICE_IDS,
     CONF_DEPLOYMENT_STATE,
     CONF_DEVICE_ID,
@@ -28,7 +29,8 @@ from custom_components.device_lifecycle.const import (
     CONF_PURCHASE_DATE,
     CONF_PURCHASE_NAME,
     CONF_PURCHASE_PRICE,
-    CONF_PURCHASE_UUID,
+    CONF_REPLACEMENT_REASON,
+    CONF_REPLACEMENT_TARGET_ASSET_UUID,
     CONF_RECEIPT_REFERENCE,
     CONF_RECEIPT_URL,
     CONF_SELLER,
@@ -58,6 +60,7 @@ from custom_components.device_lifecycle.storage import (
 )
 
 from .conftest import ASSET_UUID
+from .test_quick_add_options_flow import _details
 
 
 def _relationship_free_store(data: AssetStoreData) -> AssetStoreData:
@@ -177,13 +180,15 @@ def _purchase_edit_input(
     return result
 
 
-async def test_create_asset_flow_reload_exposes_device_and_five_entities(
+async def test_quick_add_reload_exposes_device_and_seven_entities(
     hass: HomeAssistant,
     hass_storage: dict,
     device_registry: dr.DeviceRegistry,
     entity_registry: er.EntityRegistry,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A successful real create flow schedules one reload and exposes the Asset."""
+    caplog.set_level(logging.WARNING)
     entry = await _setup_loaded_entry(
         hass,
         hass_storage,
@@ -197,11 +202,21 @@ async def test_create_asset_flow_reload_exposes_device_and_five_entities(
     )
     initial = await hass.config_entries.options.async_init(entry.entry_id)
     flow_id = initial["flow_id"]
+    source_menu = await hass.config_entries.options.async_configure(
+        flow_id,
+        {"next_step_id": "quick_add"},
+    )
     create_form = await hass.config_entries.options.async_configure(
         flow_id,
-        {"next_step_id": "create_manual_asset"},
+        {"next_step_id": "quick_add_manual"},
     )
+    confirm = await hass.config_entries.options.async_configure(
+        flow_id,
+        _details(name="Immediately exposed Asset"),
+    )
+    assert source_menu["type"] is FlowResultType.MENU
     assert create_form["type"] is FlowResultType.FORM
+    assert confirm["step_id"] == "quick_add_confirm"
     original_schedule_reload = hass.config_entries.async_schedule_reload
 
     with (
@@ -214,10 +229,7 @@ async def test_create_asset_flow_reload_exposes_device_and_five_entities(
     ):
         completed = await hass.config_entries.options.async_configure(
             flow_id,
-            {
-                CONF_ASSET_NAME: "Immediately exposed Asset",
-                CONF_PURCHASE_UUID: NO_PURCHASE_SELECTION,
-            },
+            {CONF_CONFIRM_QUICK_ADD: True},
         )
         assert completed["type"] is FlowResultType.CREATE_ENTRY
         schedule_reload.assert_called_once_with(entry.entry_id)
@@ -270,6 +282,82 @@ async def test_create_asset_flow_reload_exposes_device_and_five_entities(
         _entity_id(entity_registry, replacement_unique_id(asset_uuid))
     )
     assert replacement_entry.disabled_by is er.RegistryEntryDisabler.INTEGRATION
+    assert entry.options == {}
+    assert not any(
+        record.name.startswith("custom_components.device_lifecycle")
+        and (
+            "deprecated" in record.getMessage().lower()
+            or "will be removed" in record.getMessage().lower()
+        )
+        for record in caplog.records
+    )
+
+
+async def test_manage_replacement_reload_enables_canonical_entities(
+    hass: HomeAssistant,
+    hass_storage: dict,
+    entity_registry: er.EntityRegistry,
+    asset_store_data: AssetStoreData,
+) -> None:
+    """The standalone replacement flow receives canonical visibility on reload."""
+    successor_uuid = "44444444-4444-4444-8444-444444444444"
+    data = _relationship_free_store(asset_store_data)
+    successor = deepcopy(data["assets"][ASSET_UUID])
+    successor.update(
+        {
+            "asset_uuid": successor_uuid,
+            "asset_id": "DL0008",
+            "name": "Replacement Asset",
+        }
+    )
+    data["assets"][successor_uuid] = successor
+    data["next_asset_number"] = 9
+    entry = await _setup_loaded_entry(hass, hass_storage, data)
+    for asset_uuid in (ASSET_UUID, successor_uuid):
+        replacement_entry = entity_registry.async_get(
+            _entity_id(entity_registry, replacement_unique_id(asset_uuid))
+        )
+        assert replacement_entry is not None
+        assert replacement_entry.disabled_by is er.RegistryEntryDisabler.INTEGRATION
+
+    flow_id = await _start_asset_action(
+        hass,
+        entry,
+        ASSET_UUID,
+        "asset_replacement",
+    )
+    replacement_form = await hass.config_entries.options.async_configure(
+        flow_id,
+        {"next_step_id": "replacement_replaced_by"},
+    )
+    assert replacement_form["type"] is FlowResultType.FORM
+    original_schedule_reload = hass.config_entries.async_schedule_reload
+
+    with (
+        _verified_store_readback(hass_storage),
+        patch.object(
+            hass.config_entries,
+            "async_schedule_reload",
+            wraps=original_schedule_reload,
+        ) as schedule_reload,
+    ):
+        completed = await hass.config_entries.options.async_configure(
+            flow_id,
+            {
+                CONF_REPLACEMENT_TARGET_ASSET_UUID: successor_uuid,
+                CONF_REPLACEMENT_REASON: "failure",
+            },
+        )
+        assert completed["type"] is FlowResultType.CREATE_ENTRY
+        schedule_reload.assert_called_once_with(entry.entry_id)
+        await hass.async_block_till_done()
+
+    for asset_uuid in (ASSET_UUID, successor_uuid):
+        replacement_entry = entity_registry.async_get(
+            _entity_id(entity_registry, replacement_unique_id(asset_uuid))
+        )
+        assert replacement_entry is not None
+        assert replacement_entry.disabled_by is None
     assert entry.options == {}
 
 

@@ -21,29 +21,21 @@ from custom_components.device_lifecycle.const import (
     CONF_ASSET_NAME,
     CONF_ASSET_UUID,
     CONF_CATEGORY,
-    CONF_CURRENCY,
-    CONF_DEVICE_IDS,
     CONF_HW_VERSION,
     CONF_MANUFACTURER,
     CONF_MODEL,
     CONF_MODEL_ID,
     CONF_NOTES,
-    CONF_PURCHASE_NAME,
     CONF_PURCHASE_UUID,
     CONF_SERIAL_NUMBER,
     CONF_SW_VERSION,
-    CONF_WARRANTY_TYPE,
-    DEPLOYMENT_STATE_NOT_DEPLOYED,
     DOMAIN,
-    SUBENTRY_TYPE_PURCHASE,
-    WARRANTY_NONE,
 )
 from custom_components.device_lifecycle.models import (
     AssetStoreData,
     PurchaseData,
 )
 from custom_components.device_lifecycle.storage import (
-    AssetStoreError,
     AssetStoreManager,
 )
 
@@ -166,108 +158,7 @@ async def test_parent_options_flow_opens_asset_menu(
     assert isinstance(flow, DeviceLifecycleOptionsFlow)
     assert result["type"] is FlowResultType.MENU
     assert result["step_id"] == "init"
-    assert result["menu_options"] == ["create_manual_asset", "manage_asset"]
-
-
-async def test_create_manual_asset_menu_path(
-    hass: HomeAssistant,
-) -> None:
-    """The Home Assistant flow manager dispatches the create menu action."""
-    manager = _manager(hass)
-    _flow, entry = _options_flow(hass, manager)
-    initial = await hass.config_entries.options.async_init(entry.entry_id)
-
-    create_form = await hass.config_entries.options.async_configure(
-        initial["flow_id"],
-        {"next_step_id": "create_manual_asset"},
-    )
-    completed = await hass.config_entries.options.async_configure(
-        initial["flow_id"],
-        {
-            CONF_ASSET_NAME: "Flow manager Asset",
-            CONF_PURCHASE_UUID: NO_PURCHASE_SELECTION,
-        },
-    )
-
-    assert create_form["type"] is FlowResultType.FORM
-    assert create_form["step_id"] == "create_manual_asset"
-    assert completed["type"] is FlowResultType.CREATE_ENTRY
-    assert manager.assets()[0]["name"] == "Flow manager Asset"
-
-
-async def test_create_name_only_allocates_one_identity_and_no_subentry(
-    hass: HomeAssistant,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Name-only creation allocates one UUID/DL ID and no config subentry."""
-    manager = _manager(hass)
-    uuid_factory = Mock(return_value=UUID(MANUAL_ASSET_UUID))
-    monkeypatch.setattr(
-        "custom_components.device_lifecycle.storage.uuid4",
-        uuid_factory,
-    )
-    flow, entry = _options_flow(hass, manager)
-    subentry_count = len(entry.subentries)
-
-    result = await flow.async_step_create_manual_asset(
-        {
-            CONF_ASSET_NAME: "Shelf bulb",
-            CONF_PURCHASE_UUID: NO_PURCHASE_SELECTION,
-        }
-    )
-
-    asset = manager.asset(MANUAL_ASSET_UUID)
-    assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["description"] == "asset_created"
-    assert result["description_placeholders"]["asset_id"] == "DL0001"
-    assert uuid_factory.call_count == 1
-    assert asset["asset_id"] == "DL0001"
-    assert asset["purchase_uuid"] is None
-    assert asset["ha_device_refs"] == []
-    assert asset["deployment_state"] == DEPLOYMENT_STATE_NOT_DEPLOYED
-    assert manager._data["next_asset_number"] == 2
-    assert len(entry.subentries) == subentry_count == 0
-
-
-async def test_create_manual_asset_with_full_metadata(
-    hass: HomeAssistant,
-) -> None:
-    """Every approved physical metadata field reaches Asset Core."""
-    manager = _manager(hass)
-    flow, _entry = _options_flow(hass, manager)
-    user_input = {
-        **_full_metadata(),
-        CONF_PURCHASE_UUID: NO_PURCHASE_SELECTION,
-    }
-
-    await flow.async_step_create_manual_asset(user_input)
-
-    asset = manager.assets()[0]
-    for field, value in _full_metadata().items():
-        assert asset[field] == value
-        assert asset["field_sources"][field] == "user"
-    assert asset["purchase_uuid"] is None
-
-
-async def test_create_manual_asset_with_configured_purchase(
-    hass: HomeAssistant,
-) -> None:
-    """Creation uses the transactional Purchase relationship API."""
-    manager = _manager(hass, _store_with_purchase())
-    flow, _entry = _options_flow(hass, manager)
-
-    await flow.async_step_create_manual_asset(
-        {
-            CONF_ASSET_NAME: "Purchased spare",
-            CONF_PURCHASE_UUID: PURCHASE_UUID,
-        }
-    )
-
-    asset = manager.assets()[0]
-    assert asset["purchase_uuid"] == PURCHASE_UUID
-    assert asset["field_sources"]["purchase_uuid"] == "user"
-    assert manager.purchase(PURCHASE_UUID)["asset_uuids"] == [asset["asset_uuid"]]
-    assert manager._store.async_save.await_count == 2
+    assert result["menu_options"] == ["quick_add", "manage_asset"]
 
 
 async def test_uuid_and_dl_id_are_not_editable_fields(
@@ -277,13 +168,10 @@ async def test_uuid_and_dl_id_are_not_editable_fields(
     manager = _manager(hass)
     flow, _entry = _options_flow(hass, manager)
 
-    create_form = await flow.async_step_create_manual_asset()
     created = await manager.async_create_manual_asset(name="Identity protected")
     await flow.async_step_manage_asset({CONF_ASSET_UUID: created["asset_uuid"]})
     edit_form = await flow.async_step_edit_asset_metadata()
 
-    assert CONF_ASSET_UUID not in _schema_keys(create_form)
-    assert "asset_id" not in _schema_keys(create_form)
     assert CONF_ASSET_UUID not in _schema_keys(edit_form)
     assert "asset_id" not in _schema_keys(edit_form)
 
@@ -349,17 +237,8 @@ async def test_missing_asset_and_validation_failures_return_flow_errors(
     missing = await flow.async_step_manage_asset(
         {CONF_ASSET_UUID: MANUAL_ASSET_UUID}
     )
-    invalid = await flow.async_step_create_manual_asset(
-        {
-            CONF_ASSET_NAME: "",
-            CONF_PURCHASE_UUID: NO_PURCHASE_SELECTION,
-        }
-    )
-
     assert missing["type"] is FlowResultType.FORM
     assert missing["errors"] == {"base": "asset_missing"}
-    assert invalid["type"] is FlowResultType.FORM
-    assert invalid["errors"] == {"base": "asset_store_error"}
     assert manager.asset_count == 0
 
 
@@ -516,99 +395,3 @@ async def test_historical_purchase_is_visible_but_not_a_new_target(
     assert invalid["type"] is FlowResultType.FORM
     assert invalid["errors"] == {"base": "invalid_purchase"}
     assert manager.asset(manual["asset_uuid"])["purchase_uuid"] is None
-
-
-async def test_purchase_first_manual_asset_workflow_end_to_end(
-    hass: HomeAssistant,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """An empty Purchase receives a manual Asset without any HA device."""
-    manager = _manager(hass)
-    uuid_factory = Mock(
-        side_effect=[UUID(PURCHASE_UUID), UUID(MANUAL_ASSET_UUID)]
-    )
-    monkeypatch.setattr(
-        "custom_components.device_lifecycle.storage.uuid4",
-        uuid_factory,
-    )
-    subentries_data = (
-        {
-            "data": {
-                CONF_DEVICE_IDS: [],
-                CONF_PURCHASE_NAME: "Purchase first",
-                CONF_CURRENCY: "EUR",
-                CONF_WARRANTY_TYPE: WARRANTY_NONE,
-            },
-            "subentry_type": SUBENTRY_TYPE_PURCHASE,
-            "title": "Purchase first",
-            "unique_id": None,
-        },
-    )
-    flow, entry = _options_flow(
-        hass,
-        manager,
-        subentries_data=subentries_data,
-    )
-
-    await manager.async_reconcile_entry(entry)
-    purchase_uuid_before = manager.purchases()[0]["purchase_uuid"]
-    counter_before = manager._data["next_asset_number"]
-    subentry_count = len(entry.subentries)
-
-    result = await flow.async_step_create_manual_asset(
-        {
-            CONF_ASSET_NAME: "Received equipment",
-            CONF_PURCHASE_UUID: purchase_uuid_before,
-        }
-    )
-
-    asset = manager.asset(MANUAL_ASSET_UUID)
-    purchase = manager.purchase(purchase_uuid_before)
-    assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert purchase_uuid_before == PURCHASE_UUID
-    assert uuid_factory.call_count == 2
-    assert asset["asset_id"] == "DL0001"
-    assert manager._data["next_asset_number"] == counter_before + 1
-    assert asset["purchase_uuid"] == purchase_uuid_before
-    assert asset["ha_device_refs"] == []
-    assert purchase["asset_uuids"] == [MANUAL_ASSET_UUID]
-    assert len(entry.subentries) == subentry_count == 1
-
-
-async def test_purchase_assignment_error_is_flow_safe_and_does_not_duplicate_asset(
-    hass: HomeAssistant,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Retry after a relationship error reuses the already-created Asset UUID."""
-    manager = _manager(hass, _store_with_purchase())
-    uuid_factory = Mock(return_value=UUID(MANUAL_ASSET_UUID))
-    monkeypatch.setattr(
-        "custom_components.device_lifecycle.storage.uuid4",
-        uuid_factory,
-    )
-    flow, _entry = _options_flow(hass, manager)
-    user_input = {
-        CONF_ASSET_NAME: "Retry relationship",
-        CONF_PURCHASE_UUID: PURCHASE_UUID,
-    }
-
-    with patch.object(
-        manager,
-        "async_set_asset_purchase",
-        new=AsyncMock(
-            side_effect=AssetStoreError("conflicting Purchase relationship")
-        ),
-    ):
-        failed = await flow.async_step_create_manual_asset(user_input)
-
-    assert failed["type"] is FlowResultType.FORM
-    assert failed["errors"] == {"base": "purchase_conflict"}
-    assert manager.asset_count == 1
-    assert uuid_factory.call_count == 1
-
-    completed = await flow.async_step_create_manual_asset(user_input)
-
-    assert completed["type"] is FlowResultType.CREATE_ENTRY
-    assert manager.asset_count == 1
-    assert uuid_factory.call_count == 1
-    assert manager.purchase(PURCHASE_UUID)["asset_uuids"] == [MANUAL_ASSET_UUID]

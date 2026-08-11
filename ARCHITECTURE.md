@@ -1,6 +1,6 @@
 # Device Lifecycle architecture
 
-This document defines the Asset Core and Asset Exposure invariants through Device Lifecycle 0.7.0. Future releases must extend the model through explicit migrations instead of replacing Asset identity.
+This document defines the Asset Core and Asset Exposure invariants through Device Lifecycle 0.7.1. Future releases must extend the model through explicit migrations instead of replacing Asset identity.
 
 ## Core concepts
 
@@ -43,7 +43,7 @@ Asset Core uses one private, atomic, versioned Home Assistant Store:
 device_lifecycle.assets
 ```
 
-Device Lifecycle 0.7.0 uses Store major version `3`, minor version `1`. Asset Exposure remains derived and adds no stored projection IDs, exposure state, or alternate Asset identity.
+Device Lifecycle 0.7.1 uses Store major version `3`, minor version `1`. Asset Exposure remains derived and adds no stored projection IDs, exposure state, workflow drafts, or alternate Asset identity. Version 0.7.1 requires no Store or ConfigEntry migration.
 
 Conceptual payload:
 
@@ -163,6 +163,8 @@ Asset fields discovered or projected from another source record provenance in `f
 
 Automatic metadata refresh never overwrites a field whose source is `user`. This includes user-cleared fields: an explicit clear remains user-owned and is not repopulated from Home Assistant.
 
+Quick Add preserves the same rule: an unchanged normalized Home Assistant suggestion remains `home_assistant`, while a changed or explicitly cleared suggestion becomes `user`. Default absence is not an override. In particular, a new Asset with no Purchase stores `purchase_uuid: null` without a `purchase_uuid` provenance entry; selecting an existing configured Purchase records `user` provenance.
+
 Purchase relationship ownership is explicit:
 
 ```text
@@ -205,6 +207,18 @@ If mutation, validation, save, or verification fails, the published Store remain
 Returned Asset, Purchase, and Store-derived values are detached snapshots and cannot mutate the manager's internal state.
 
 The manager passes only its detached, unpublished candidate snapshot to Home Assistant Store and awaits serialization, write, and direct readback before publishing it. Therefore Store 3.1 safely uses `serialize_in_event_loop=False`; the snapshot cannot be concurrently mutated during executor serialization.
+
+### Atomic Quick Create
+
+Quick Add is a flow orchestration layer over one canonical `async_quick_create_asset` mutation. Its immutable request contains the proposed Asset UUID and reviewed canonical outcome; it contains no UI source concept. Within the existing mutation lock, the manager validates references and expected review snapshots, allocates the next permanent `DLxxxx` identity, creates the Asset, applies Purchase membership, metadata/provenance, Lifecycle, Deployment, warranty, and optional replacement changes, validates the complete Store, saves once, verifies direct readback, and only then publishes.
+
+The proposed UUID is the idempotency key and is generated before confirmation, but is not persisted and consumes no Asset number until the transaction. A replay whose persisted final state exactly matches the request returns the existing result without another Asset ID, lifecycle event, replacement record, or Purchase membership. A UUID with a different final state fails with `quick_create_idempotency_conflict`.
+
+If the write outcome is ambiguous, Quick Create performs one direct recovery read. A matching persisted result is returned as a successful replay; definite absence is treated as not committed; an unreadable outcome fails closed with `persistence_error`. It never blindly issues a second write after an ambiguous first write. Deterministic validation and known persistence failures leave the entire published snapshot, including `next_asset_number`, unchanged.
+
+Quick Add may select an existing configured Purchase but never creates a Purchase or ConfigSubentry. One- and two-year warranty dates use calendar-year arithmetic from the reviewed Purchase date, which is revalidated at commit; manual warranty remains possible without a Purchase. Quick Add does not read, initialize, transfer, or otherwise mutate Runtime totals or Runtime configuration.
+
+An optional replacement remains one physical Asset-to-Asset record. The same transaction can apply explicitly reviewed predecessor retirement and undeployment: only `active` or `unknown` Lifecycle becomes `retired`; `retired`, `disposed`, and `lost` are not rewritten. Only `deployed` or `unknown` Deployment becomes `not_deployed`, and an actual undeploy clears Asset Area while preserving Installation date. The replacement and any retirement event use the same optional effective date and common transaction `recorded_at`; replacement notes stay only on the replacement record. Purchase, warranty, external relationships, and Runtime never transfer.
 
 ## Purchase creation and reconciliation
 
@@ -383,7 +397,7 @@ Asset ID is an enabled-by-default diagnostic sensor whose state is the permanent
 
 Lifecycle Status is an enabled-by-default normal enum sensor. Its English machine states exactly match canonical Lifecycle values; Home Assistant translation infrastructure localizes state presentation. It exposes at most the current event's optional effective date, never full history.
 
-Replacement is a disabled-by-default diagnostic enum sensor with states `none`, `replaces`, `replaced_by`, and `chain_member`. It exposes only active predecessor/successor Asset IDs, always as lists. Historical and voided records are not entity attributes.
+Replacement is a diagnostic enum sensor with states `none`, `replaces`, `replaced_by`, and `chain_member`. A new instance defaults disabled when no active relationship exists and enabled when active replacement context exists. During canonical exposure reconciliation, an active relationship enables an existing entry only when `disabled_by` is `INTEGRATION`; user- and ConfigEntry-disabled entries are untouched. Voiding later never automatically disables the entity. Its unique ID remains `<asset_uuid>_replacement`, and it exposes only active predecessor/successor Asset IDs as lists. Historical and voided records are not entity attributes.
 
 Home Assistant 2026.8 restricts a Device Registry device to one owning config entry. Eligibility validation uses the device's `config_entry_id` and its current owner config entry. Device Lifecycle rejects its own devices, service devices, conservative software/system exclusions, devices with no valid owner, and missing device IDs without using deprecated multi-config-entry ownership assumptions.
 
@@ -510,7 +524,7 @@ Future functionality attaches to `asset_uuid`; it must not introduce another phy
 
 Examples from the existing roadmap include:
 
-- Quick Asset Entry -> reuse the existing canonical creation/lifecycle initialization mutation; no alternate Asset identity or Store
+- Quick Asset Entry -> one composite canonical Store transaction using the same snapshot primitives; no alternate Asset identity or Store
 - maintenance schedules and history -> Asset UUID, with growing history in a future explicit Store schema
 - Asset-owned Runtime totals and any future corrections -> Asset UUID
 - future RMA cases -> replacement UUID, without redefining Purchase or Asset identity
@@ -520,6 +534,22 @@ Examples from the existing roadmap include:
 Growing histories do not belong in ConfigSubentries. ConfigSubentries remain suitable for active user configuration; persistent history belongs in explicitly versioned Device Lifecycle storage.
 
 These boundaries reserve 0.8.x for Maintenance, 0.9.x for Portability & Hardening, and a later release for Documents. None is represented by placeholder 3.1 records.
+
+## 0.7.1 workflow and schema impact
+
+Device Lifecycle 0.7.1 adds Quick Add and related projection/UI behavior without changing canonical schemas:
+
+- Store remains `3.1`
+- ConfigEntry remains version `4`
+- no Store or ConfigEntry migration runs
+- first setup creates and loads the single parent entry, then continues through Home Assistant's supported next-flow mechanism into Quick Add
+- Quick Add supports a conservatively validated Home Assistant physical-device source or manual entry and always requires final confirmation
+- no Store write, `DLxxxx` allocation, lifecycle event, Purchase membership, or replacement record exists before confirmation
+- the Home Assistant Device Registry is revalidated immediately before commit but is not transactionally locked with Asset Store
+- all existing entity unique IDs, entity IDs, registry customizations, and Recorder continuity remain unchanged
+- the exact old Finnish default parent title is normalized to `Device Lifecycle`; custom entry titles and Asset names are untouched
+
+Quick Add drafts are flow-local and never canonical data. UI section payloads are flattened before the manager request; Asset Core has no knowledge of manual versus Home Assistant source. Confirmation uses human-readable names rather than raw UUIDs, and `DLxxxx` appears only when needed to distinguish duplicate predecessor names.
 
 ## 0.7.0 schema and migration impact
 
@@ -558,3 +588,7 @@ Device Lifecycle 0.7.0 does not add:
 It also does not add Asset deletion/purge/merge, RMA cases, Maintenance, maintenance history or schedules, Runtime reset/manual editing, Runtime-based maintenance, Recorder migration, Device Registry Area synchronization, Repairs, notifications, custom frontend surfaces, Documents, automatic Purchase/warranty/HA-relationship/Runtime/Deployment/Lifecycle transfer, or automatic lifecycle change when a replacement is created.
 
 The 0.7.0 acceptance contract extends the existing Asset without replacing it: `asset_uuid` remains the only canonical technical identity; Store is 3.1 and ConfigEntry stays 4; the Asset Device is a recomputable projection; the old warranty Lifecycle remains continuous; Lifecycle Status and Replacement are new deterministic projections; Runtime configuration stays subentry-owned while history stays Asset-owned; external devices stay untouched references; ambiguous registry identity fails closed; and partial derived projection state remains deterministically recoverable.
+
+## Explicit non-goals for 0.7.1
+
+Version 0.7.1 does not add bulk Asset creation, Purchase creation inside Quick Add, a new warranty model, Runtime transfer or editing, automatic Area inference, automatic external-device matching, Maintenance, Documents, RMA cases, export/import, notifications, a custom frontend, or dashboard work. It does not change normal standalone Lifecycle/Deployment independence or ordinary replacement side-effect isolation; only the explicit, confirmed composite Quick Add request can bundle the predecessor changes described above.

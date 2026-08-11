@@ -928,6 +928,93 @@ def test_new_entity_foreign_collision_fails_exposure_preflight(
         )
 
 
+@pytest.mark.parametrize(
+    ("disabled_by", "expected"),
+    [
+        (er.RegistryEntryDisabler.INTEGRATION, None),
+        (
+            er.RegistryEntryDisabler.USER,
+            er.RegistryEntryDisabler.USER,
+        ),
+        (
+            er.RegistryEntryDisabler.CONFIG_ENTRY,
+            er.RegistryEntryDisabler.CONFIG_ENTRY,
+        ),
+    ],
+)
+async def test_active_replacement_enables_only_integration_disabled_entry(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+    entity_registry: er.EntityRegistry,
+    asset_store_data: AssetStoreData,
+    disabled_by: er.RegistryEntryDisabler,
+    expected: er.RegistryEntryDisabler | None,
+) -> None:
+    """Canonical exposure respects user/config-entry disable decisions."""
+    manager = _manager(hass, asset_store_data)
+    successor = await manager.async_create_manual_asset(name="Replacement")
+    await manager.async_create_asset_replacement(
+        ASSET_UUID,
+        successor["asset_uuid"],
+        reason="failure",
+        effective_date=None,
+        notes=None,
+    )
+    entry = _entry(hass)
+    registry_entry = entity_registry.async_get_or_create(
+        Platform.SENSOR,
+        DOMAIN,
+        replacement_unique_id(ASSET_UUID),
+        config_entry=entry,
+        suggested_object_id="replacement_visibility",
+        disabled_by=disabled_by,
+    )
+
+    await async_reconcile_exposure_registry(hass, entry, manager)
+
+    updated = entity_registry.async_get(registry_entry.entity_id)
+    assert updated is not None
+    assert updated.disabled_by is expected
+
+
+async def test_voided_replacement_does_not_automatically_disable_entry(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+    entity_registry: er.EntityRegistry,
+    asset_store_data: AssetStoreData,
+) -> None:
+    """An enabled relationship projection remains enabled after later voiding."""
+    manager = _manager(hass, asset_store_data)
+    successor = await manager.async_create_manual_asset(name="Replacement")
+    record = await manager.async_create_asset_replacement(
+        ASSET_UUID,
+        successor["asset_uuid"],
+        reason="failure",
+        effective_date=None,
+        notes=None,
+    )
+    entry = _entry(hass)
+    registry_entry = entity_registry.async_get_or_create(
+        Platform.SENSOR,
+        DOMAIN,
+        replacement_unique_id(ASSET_UUID),
+        config_entry=entry,
+        suggested_object_id="replacement_stays_enabled",
+        disabled_by=er.RegistryEntryDisabler.INTEGRATION,
+    )
+    await async_reconcile_exposure_registry(hass, entry, manager)
+    await manager.async_void_asset_replacement(
+        record["replacement_uuid"],
+        void_reason="Incorrect link",
+    )
+
+    await async_reconcile_exposure_registry(hass, entry, manager)
+
+    updated = entity_registry.async_get(registry_entry.entity_id)
+    assert updated is not None
+    assert updated.disabled_by is None
+
+
 async def test_full_setup_creates_parent_owned_entities_after_registry_gate(
     hass: HomeAssistant,
     hass_storage,
