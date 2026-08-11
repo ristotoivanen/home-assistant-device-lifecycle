@@ -1859,7 +1859,14 @@ class AssetStoreManager:
             invalid_code="invalid_replacement_effective_date",
             future_code="replacement_date_in_future",
         )
-        self._normalize_history_notes(request.replacement_notes)
+        if request.replacement_notes is not None and (
+            not isinstance(request.replacement_notes, str)
+            or request.replacement_notes == ""
+        ):
+            raise AssetStoreError(
+                "Quick Create replacement notes are not canonical",
+                code="invalid_quick_create_request",
+            )
 
     def _quick_create_sources(
         self,
@@ -2206,6 +2213,23 @@ class AssetStoreManager:
                 raise AssetStoreError(
                     "The predecessor changed after review",
                     code="predecessor_changed",
+                )
+            current_event = data["lifecycle_events"].get(
+                lifecycle["current_event_uuid"] or ""
+            )
+            if (
+                request.retire_predecessor
+                and lifecycle["status"]
+                in (LIFECYCLE_STATUS_ACTIVE, LIFECYCLE_STATUS_UNKNOWN)
+                and request.replacement_effective_date is not None
+                and current_event is not None
+                and current_event["effective_date"] is not None
+                and request.replacement_effective_date
+                < current_event["effective_date"]
+            ):
+                raise AssetStoreError(
+                    "Replacement date precedes the predecessor Lifecycle date",
+                    code="replacement_date_before_predecessor_lifecycle",
                 )
 
         recorded_at = datetime.now(UTC).isoformat()

@@ -204,6 +204,7 @@
       "related_device_is_primary": "Valittu Home Assistant -laite on jo tämän laitteen ensisijainen laite.",
       "related_device_not_found": "Valittua liittyvää laitelinkkiä ei enää ole. Tarkista nykyiset linkit ja yritä uudelleen.",
       "replacement_cycle": "Tämä suhde muodostaisi korvausketjuun silmukan.",
+      "replacement_date_before_predecessor_lifecycle": "Korvauksen voimaantulopäivä ei voi olla aikaisempi kuin edeltävän laitteen nykyisen elinkaaritilan voimaantulopäivä.",
       "replacement_date_in_future": "Korvauksen voimaantulopäivä ei voi olla tulevaisuudessa.",
       "replacement_graph_invalid": "Korvausketju on ristiriitainen. Mitään ei muutettu.",
       "replacement_missing": "Valittua aktiivista korvaussuhdetta ei enää ole.",

@@ -204,6 +204,7 @@
       "related_device_is_primary": "The selected Home Assistant device is already the primary device for this Asset.",
       "related_device_not_found": "The selected related relationship no longer exists. Review the current relationships and try again.",
       "replacement_cycle": "This relationship would create a replacement cycle.",
+      "replacement_date_before_predecessor_lifecycle": "The replacement effective date cannot be earlier than the predecessor's current Lifecycle effective date.",
       "replacement_date_in_future": "The replacement effective date cannot be in the future.",
       "replacement_graph_invalid": "The replacement graph is inconsistent. Nothing was changed.",
       "replacement_missing": "The selected active replacement relationship no longer exists.",

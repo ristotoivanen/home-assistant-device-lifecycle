@@ -732,6 +732,35 @@ async def test_quick_create_ambiguous_persisted_write_recovers_as_replay(
     manager._store.async_load_persisted_snapshot.assert_awaited_once()
 
 
+async def test_quick_replacement_ambiguous_write_replays_canonical_notes(
+    hass: HomeAssistant,
+) -> None:
+    """Canonical replacement notes survive an ambiguous write and exact replay."""
+    manager = _manager(hass)
+    _predecessor, request = await _predecessor_request(manager)
+    persisted: AssetStoreData | None = None
+
+    async def _ambiguous_save(data: AssetStoreData) -> None:
+        nonlocal persisted
+        persisted = deepcopy(data)
+        raise AssetStorePersistenceError("readback failed", ambiguous=True)
+
+    manager._store.async_save = AsyncMock(side_effect=_ambiguous_save)
+    manager._store.async_load_persisted_snapshot = AsyncMock(
+        side_effect=lambda: deepcopy(persisted)
+    )
+
+    result = await manager.async_quick_create_asset(request)
+
+    assert result.replayed is True
+    assert result.replacement is not None
+    assert result.replacement["notes"] == request.replacement_notes
+    assert manager.asset(QUICK_UUID) == result.asset
+    assert manager._data["next_asset_number"] == 3
+    manager._store.async_save.assert_awaited_once()
+    manager._store.async_load_persisted_snapshot.assert_awaited_once()
+
+
 async def test_quick_create_ambiguous_nonpersisted_write_allows_same_uuid_retry(
     hass: HomeAssistant,
 ) -> None:
@@ -983,7 +1012,7 @@ def _invalid_request_cases() -> list[tuple[QuickAssetCreateRequest, str]]:
                 _request(),
                 **(predecessor_fields | {"replacement_notes": 7}),
             ),  # type: ignore[arg-type]
-            "asset_store_error",
+            "invalid_quick_create_request",
         ),
     ]
 
@@ -1006,6 +1035,32 @@ async def test_quick_create_rejects_malformed_commands_without_mutation(
     manager._store.async_save.assert_not_awaited()
 
 
+@pytest.mark.parametrize("replacement_notes", ["", 7])
+async def test_quick_create_rejects_noncanonical_replacement_notes_before_save(
+    hass: HomeAssistant,
+    replacement_notes: object,
+) -> None:
+    """The immutable command rejects notes that cannot replay byte-for-byte."""
+    manager = _manager(hass)
+    predecessor, request = await _predecessor_request(manager)
+    request = replace(
+        request,
+        replacement_notes=replacement_notes,  # type: ignore[arg-type]
+    )
+    before = deepcopy(manager._data)
+    manager._store.async_save.reset_mock()
+
+    with pytest.raises(AssetStoreError) as raised:
+        await manager.async_quick_create_asset(request)
+
+    assert raised.value.code == "invalid_quick_create_request"
+    assert manager._data == before
+    assert manager._data["next_asset_number"] == 2
+    assert manager.asset(predecessor["asset_uuid"]) == predecessor
+    assert manager.asset(QUICK_UUID) is None
+    manager._store.async_save.assert_not_awaited()
+
+
 async def test_quick_create_rejects_non_command_object(
     hass: HomeAssistant,
 ) -> None:
@@ -1017,6 +1072,92 @@ async def test_quick_create_rejects_non_command_object(
 
     assert raised.value.code == "invalid_quick_create_request"
     manager._store.async_save.assert_not_awaited()
+
+
+async def test_quick_replacement_rejects_date_before_predecessor_lifecycle(
+    hass: HomeAssistant,
+) -> None:
+    """An earlier retirement date fails before Asset allocation or Store save."""
+    manager = _manager(hass)
+    predecessor = await manager.async_create_manual_asset(
+        name="Dated predecessor",
+        initial_lifecycle_status=LIFECYCLE_STATUS_UNKNOWN,
+    )
+    predecessor = await manager.async_set_asset_lifecycle(
+        predecessor["asset_uuid"],
+        LIFECYCLE_STATUS_ACTIVE,
+        effective_date="2026-08-05",
+        notes=None,
+    )
+    request = _request(
+        deployment_state=DEPLOYMENT_STATE_DEPLOYED,
+        predecessor_asset_uuid=predecessor["asset_uuid"],
+        expected_predecessor_lifecycle_status=LIFECYCLE_STATUS_ACTIVE,
+        expected_predecessor_current_event_uuid=predecessor["lifecycle"][
+            "current_event_uuid"
+        ],
+        expected_predecessor_deployment_state=predecessor["deployment_state"],
+        expected_predecessor_ha_area_id=predecessor["ha_area_id"],
+        replacement_reason="failure",
+        replacement_effective_date="2026-08-04",
+        replacement_notes=None,
+        retire_predecessor=True,
+        undeploy_predecessor=False,
+    )
+    before = deepcopy(manager._data)
+    manager._store.async_save.reset_mock()
+
+    with pytest.raises(AssetStoreError) as raised:
+        await manager.async_quick_create_asset(request)
+
+    assert raised.value.code == "replacement_date_before_predecessor_lifecycle"
+    assert manager._data == before
+    assert manager._data["next_asset_number"] == 2
+    assert manager.asset(QUICK_UUID) is None
+    manager._store.async_save.assert_not_awaited()
+
+
+@pytest.mark.parametrize("replacement_date", ["2026-08-05", "2026-08-06", None])
+async def test_quick_replacement_allows_non_decreasing_or_unknown_retirement_date(
+    hass: HomeAssistant,
+    replacement_date: str | None,
+) -> None:
+    """Equal, later, and unknown dates retain the existing lifecycle semantics."""
+    manager = _manager(hass)
+    predecessor = await manager.async_create_manual_asset(
+        name="Dated predecessor",
+        initial_lifecycle_status=LIFECYCLE_STATUS_UNKNOWN,
+    )
+    predecessor = await manager.async_set_asset_lifecycle(
+        predecessor["asset_uuid"],
+        LIFECYCLE_STATUS_ACTIVE,
+        effective_date="2026-08-05",
+        notes=None,
+    )
+    manager._store.async_save.reset_mock()
+
+    result = await manager.async_quick_create_asset(
+        _request(
+            deployment_state=DEPLOYMENT_STATE_DEPLOYED,
+            predecessor_asset_uuid=predecessor["asset_uuid"],
+            expected_predecessor_lifecycle_status=LIFECYCLE_STATUS_ACTIVE,
+            expected_predecessor_current_event_uuid=predecessor["lifecycle"][
+                "current_event_uuid"
+            ],
+            expected_predecessor_deployment_state=predecessor["deployment_state"],
+            expected_predecessor_ha_area_id=predecessor["ha_area_id"],
+            replacement_reason="failure",
+            replacement_effective_date=replacement_date,
+            replacement_notes=None,
+            retire_predecessor=True,
+            undeploy_predecessor=False,
+        )
+    )
+
+    assert result.predecessor_lifecycle_changed is True
+    assert result.predecessor["lifecycle"]["status"] == LIFECYCLE_STATUS_RETIRED
+    assert result.replacement["effective_date"] == replacement_date
+    manager._store.async_save.assert_awaited_once()
 
 
 def test_home_assistant_metadata_has_stable_missing_device_fallback() -> None:

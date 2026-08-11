@@ -459,6 +459,69 @@ async def test_replacement_review_defaults_and_duplicate_name_labels(
         f"Same name · {second['asset_id']}",
     ]
     assert replacement["step_id"] == "quick_add_replacement"
+    selected_label = f"Same name · {first['asset_id']}"
+    assert replacement["description_placeholders"]["predecessor_name"] == (
+        selected_label
+    )
+
+    confirm = await flow.async_step_quick_add_replacement(
+        {
+            CONF_REPLACEMENT_REASON: "upgrade",
+            CONF_RETIRE_PREDECESSOR: False,
+            CONF_UNDEPLOY_PREDECESSOR: False,
+        }
+    )
+
+    assert confirm["description_placeholders"]["predecessor_name"] == selected_label
+    assert first["asset_uuid"] not in str(confirm["description_placeholders"])
+
+
+async def test_unique_predecessor_name_stays_plain_through_review(
+    hass: HomeAssistant,
+) -> None:
+    """A unique human name never gains an unnecessary DL identifier."""
+    manager = _manager(hass)
+    predecessor = await manager.async_create_manual_asset(
+        name="Shelly Plug S autotalli"
+    )
+    flow, _entry = _flow(hass, manager)
+    await flow.async_step_quick_add_manual()
+    details_form = await flow.async_step_quick_add_details()
+    relationships = details_form["data_schema"].schema[
+        QUICK_SECTION_RELATIONSHIPS
+    ].schema.schema
+    target_selector = next(
+        validator
+        for marker, validator in relationships.items()
+        if getattr(marker, "schema", marker)
+        == CONF_REPLACEMENT_TARGET_ASSET_UUID
+    )
+    option = next(
+        choice
+        for choice in target_selector.config["options"]
+        if choice["value"] == predecessor["asset_uuid"]
+    )
+
+    replacement = await flow.async_step_quick_add_details(
+        _details(
+            deployment_state=DEPLOYMENT_STATE_DEPLOYED,
+            predecessor_uuid=predecessor["asset_uuid"],
+        )
+    )
+    confirm = await flow.async_step_quick_add_replacement(
+        {
+            CONF_REPLACEMENT_REASON: "upgrade",
+            CONF_RETIRE_PREDECESSOR: False,
+            CONF_UNDEPLOY_PREDECESSOR: False,
+        }
+    )
+
+    assert option["label"] == "Shelly Plug S autotalli"
+    assert replacement["description_placeholders"]["predecessor_name"] == option[
+        "label"
+    ]
+    assert confirm["description_placeholders"]["predecessor_name"] == option["label"]
+    assert predecessor["asset_id"] not in str(confirm["description_placeholders"])
 
 
 async def test_replacement_commit_and_stale_predecessor_return_to_review(
@@ -507,6 +570,227 @@ async def test_replacement_commit_and_stale_predecessor_return_to_review(
     )
     assert retry["step_id"] == "quick_add_replacement"
     assert retry["errors"] == {"base": "predecessor_changed"}
+
+
+async def test_missing_predecessor_returns_to_details_and_can_finish(
+    hass: HomeAssistant,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A removed target is cleared while all unrelated reviewed details survive."""
+    manager = _manager(hass)
+    predecessor = await manager.async_create_manual_asset(name="Disappearing old")
+    flow, _entry = _flow(hass, manager)
+    uuid_factory = Mock(return_value=UUID(QUICK_UUID))
+    monkeypatch.setattr(
+        "custom_components.device_lifecycle.config_flow.uuid4",
+        uuid_factory,
+    )
+    monkeypatch.setattr(hass.config_entries, "async_schedule_reload", Mock())
+    await flow.async_step_quick_add_manual()
+    await flow.async_step_quick_add_details(
+        _details(
+            name="Preserved new name",
+            deployment_state=DEPLOYMENT_STATE_DEPLOYED,
+            predecessor_uuid=predecessor["asset_uuid"],
+        )
+    )
+    await flow.async_step_quick_add_replacement(
+        {
+            CONF_REPLACEMENT_REASON: "failure",
+            CONF_NOTES: "Preserved replacement review",
+            CONF_RETIRE_PREDECESSOR: True,
+            CONF_UNDEPLOY_PREDECESSOR: True,
+        }
+    )
+    event_uuid = predecessor["lifecycle"]["current_event_uuid"]
+    manager._data["assets"].pop(predecessor["asset_uuid"])
+    manager._data["lifecycle_events"].pop(event_uuid)
+    before = deepcopy(manager._data)
+    manager._store.async_save.reset_mock()
+
+    retry = await flow.async_step_quick_add_confirm(
+        {CONF_CONFIRM_QUICK_ADD: True}
+    )
+
+    assert retry["step_id"] == "quick_add_details"
+    assert retry["errors"] == {"base": "asset_missing"}
+    assert flow._quick_details_input[CONF_ASSET_NAME] == "Preserved new name"
+    assert (
+        flow._quick_details_input[CONF_REPLACEMENT_TARGET_ASSET_UUID]
+        == NO_REPLACEMENT_SELECTION
+    )
+    assert flow._quick_asset_uuid == QUICK_UUID
+    assert manager._data == before
+    assert manager._data["next_asset_number"] == 2
+    manager._store.async_save.assert_not_awaited()
+
+    confirm = await flow.async_step_quick_add_details(
+        _details(
+            name="Preserved new name",
+            deployment_state=DEPLOYMENT_STATE_DEPLOYED,
+        )
+    )
+    result = await flow.async_step_quick_add_confirm(
+        {CONF_CONFIRM_QUICK_ADD: True}
+    )
+
+    assert confirm["step_id"] == "quick_add_confirm"
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert manager.asset(QUICK_UUID)["name"] == "Preserved new name"
+    assert manager.asset(QUICK_UUID)["asset_id"] == "DL0002"
+    assert uuid_factory.call_count == 1
+
+
+async def test_predecessor_conflict_returns_to_details_and_can_choose_another(
+    hass: HomeAssistant,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An outgoing-edge conflict keeps its target visible and permits recovery."""
+    manager = _manager(hass)
+    conflicted = await manager.async_create_manual_asset(name="Conflicted old")
+    alternative = await manager.async_create_manual_asset(name="Alternative old")
+    flow, _entry = _flow(hass, manager)
+    monkeypatch.setattr(
+        "custom_components.device_lifecycle.config_flow.uuid4",
+        Mock(return_value=UUID(QUICK_UUID)),
+    )
+    monkeypatch.setattr(hass.config_entries, "async_schedule_reload", Mock())
+    await flow.async_step_quick_add_manual()
+    await flow.async_step_quick_add_details(
+        _details(
+            deployment_state=DEPLOYMENT_STATE_DEPLOYED,
+            predecessor_uuid=conflicted["asset_uuid"],
+        )
+    )
+    await flow.async_step_quick_add_replacement(
+        {
+            CONF_REPLACEMENT_REASON: "failure",
+            CONF_RETIRE_PREDECESSOR: False,
+            CONF_UNDEPLOY_PREDECESSOR: False,
+        }
+    )
+    existing_successor = await manager.async_create_manual_asset(name="Already new")
+    await manager.async_create_asset_replacement(
+        conflicted["asset_uuid"],
+        existing_successor["asset_uuid"],
+        reason="failure",
+        effective_date=None,
+        notes=None,
+    )
+    before_retry = deepcopy(manager._data)
+    manager._store.async_save.reset_mock()
+
+    retry = await flow.async_step_quick_add_confirm(
+        {CONF_CONFIRM_QUICK_ADD: True}
+    )
+
+    assert retry["step_id"] == "quick_add_details"
+    assert retry["errors"] == {"base": "replacement_predecessor_conflict"}
+    assert (
+        flow._quick_details_input[CONF_REPLACEMENT_TARGET_ASSET_UUID]
+        == conflicted["asset_uuid"]
+    )
+    assert flow._quick_asset_uuid == QUICK_UUID
+    assert manager._data == before_retry
+    manager._store.async_save.assert_not_awaited()
+
+    replacement = await flow.async_step_quick_add_details(
+        _details(
+            deployment_state=DEPLOYMENT_STATE_DEPLOYED,
+            predecessor_uuid=alternative["asset_uuid"],
+        )
+    )
+    confirm = await flow.async_step_quick_add_replacement(
+        {
+            CONF_REPLACEMENT_REASON: "upgrade",
+            CONF_RETIRE_PREDECESSOR: False,
+            CONF_UNDEPLOY_PREDECESSOR: False,
+        }
+    )
+    result = await flow.async_step_quick_add_confirm(
+        {CONF_CONFIRM_QUICK_ADD: True}
+    )
+
+    assert replacement["step_id"] == "quick_add_replacement"
+    assert confirm["step_id"] == "quick_add_confirm"
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    created = manager.asset(QUICK_UUID)
+    assert created is not None
+    assert manager.active_replacement_predecessor(QUICK_UUID) == alternative
+    manager._store.async_save.assert_awaited_once()
+
+
+async def test_predecessor_lifecycle_date_error_is_local_and_recoverable(
+    hass: HomeAssistant,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An earlier retirement date returns to its editable step without mutation."""
+    manager = _manager(hass)
+    predecessor = await manager.async_create_manual_asset(
+        name="Dated old",
+        initial_lifecycle_status="unknown",
+    )
+    predecessor = await manager.async_set_asset_lifecycle(
+        predecessor["asset_uuid"],
+        LIFECYCLE_STATUS_ACTIVE,
+        effective_date="2026-08-05",
+        notes=None,
+    )
+    flow, _entry = _flow(hass, manager)
+    monkeypatch.setattr(
+        "custom_components.device_lifecycle.config_flow.uuid4",
+        Mock(return_value=UUID(QUICK_UUID)),
+    )
+    monkeypatch.setattr(hass.config_entries, "async_schedule_reload", Mock())
+    await flow.async_step_quick_add_manual()
+    await flow.async_step_quick_add_details(
+        _details(
+            deployment_state=DEPLOYMENT_STATE_DEPLOYED,
+            predecessor_uuid=predecessor["asset_uuid"],
+        )
+    )
+    await flow.async_step_quick_add_replacement(
+        {
+            CONF_REPLACEMENT_REASON: "failure",
+            CONF_EFFECTIVE_DATE: "2026-08-04",
+            CONF_RETIRE_PREDECESSOR: True,
+            CONF_UNDEPLOY_PREDECESSOR: False,
+        }
+    )
+    before = deepcopy(manager._data)
+    next_asset_number = manager._data["next_asset_number"]
+    proposed_uuid = flow._quick_asset_uuid
+    manager._store.async_save.reset_mock()
+
+    retry = await flow.async_step_quick_add_confirm(
+        {CONF_CONFIRM_QUICK_ADD: True}
+    )
+
+    assert retry["step_id"] == "quick_add_replacement"
+    assert retry["errors"] == {
+        "base": "replacement_date_before_predecessor_lifecycle"
+    }
+    assert manager._data == before
+    assert manager._data["next_asset_number"] == next_asset_number
+    assert flow._quick_asset_uuid == proposed_uuid == QUICK_UUID
+    manager._store.async_save.assert_not_awaited()
+
+    confirm = await flow.async_step_quick_add_replacement(
+        {
+            CONF_REPLACEMENT_REASON: "failure",
+            CONF_EFFECTIVE_DATE: "2026-08-05",
+            CONF_RETIRE_PREDECESSOR: True,
+            CONF_UNDEPLOY_PREDECESSOR: False,
+        }
+    )
+    result = await flow.async_step_quick_add_confirm(
+        {CONF_CONFIRM_QUICK_ADD: True}
+    )
+
+    assert confirm["step_id"] == "quick_add_confirm"
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert manager.asset(proposed_uuid) is not None
+    assert manager.asset(proposed_uuid)["asset_uuid"] == proposed_uuid
 
 
 async def test_manager_failure_has_no_reload_and_uuid_is_reused(
@@ -854,6 +1138,7 @@ async def test_missing_ha_device_at_commit_returns_to_source(
         ("device_missing", "quick_add_from_ha"),
         ("purchase_missing", "quick_add_details"),
         ("replacement_cycle", "quick_add_replacement"),
+        ("lifecycle_chain_invalid", "quick_add_replacement"),
         ("persistence_error", "quick_add_confirm"),
     ],
 )
@@ -1129,7 +1414,7 @@ async def test_predecessor_disappearance_after_manager_validation_error(
     hass: HomeAssistant,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Replacement recovery keeps the reviewed label when the Asset disappeared."""
+    """A manager-reported missing target clears the stale predecessor selection."""
     manager = _manager(hass)
     predecessor = await manager.async_create_manual_asset(name="Old")
     flow, _entry = _flow(hass, manager)
@@ -1158,8 +1443,54 @@ async def test_predecessor_disappearance_after_manager_validation_error(
         {CONF_CONFIRM_QUICK_ADD: True}
     )
 
+    assert result["step_id"] == "quick_add_details"
+    assert result["errors"] == {"base": "asset_missing"}
+    assert (
+        flow._quick_details_input[CONF_REPLACEMENT_TARGET_ASSET_UUID]
+        == NO_REPLACEMENT_SELECTION
+    )
+    assert flow._quick_predecessor is None
+
+
+async def test_replacement_error_keeps_review_when_target_snapshot_is_unavailable(
+    hass: HomeAssistant,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A defensive graph-error fallback retains the already reviewed safe label."""
+    manager = _manager(hass)
+    predecessor = await manager.async_create_manual_asset(name="Reviewed old")
+    flow, _entry = _flow(hass, manager)
+    await flow.async_step_quick_add_manual()
+    await flow.async_step_quick_add_details(
+        _details(
+            deployment_state=DEPLOYMENT_STATE_DEPLOYED,
+            predecessor_uuid=predecessor["asset_uuid"],
+        )
+    )
+    await flow.async_step_quick_add_replacement(
+        {
+            CONF_REPLACEMENT_REASON: "failure",
+            CONF_RETIRE_PREDECESSOR: True,
+            CONF_UNDEPLOY_PREDECESSOR: True,
+        }
+    )
+    manager._data["assets"].pop(predecessor["asset_uuid"])
+    monkeypatch.setattr(
+        manager,
+        "async_quick_create_asset",
+        AsyncMock(
+            side_effect=AssetStoreError("invalid", code="lifecycle_chain_invalid")
+        ),
+    )
+
+    result = await flow.async_step_quick_add_confirm(
+        {CONF_CONFIRM_QUICK_ADD: True}
+    )
+
     assert result["step_id"] == "quick_add_replacement"
-    assert result["description_placeholders"]["predecessor_name"] == "Old"
+    assert result["errors"] == {"base": "lifecycle_chain_invalid"}
+    assert result["description_placeholders"]["predecessor_name"] == "Reviewed old"
+    assert predecessor["asset_uuid"] not in str(result["description_placeholders"])
 
 
 @pytest.mark.parametrize("purchase_state", ["missing", "date_missing"])

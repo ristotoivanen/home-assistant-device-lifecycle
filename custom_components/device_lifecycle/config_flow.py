@@ -935,16 +935,29 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             assets,
             key=lambda item: (item["name"].casefold(), item["asset_id"]),
         ):
-            label = asset["name"]
-            if name_counts[label] > 1:
-                label = f"{label} · {asset['asset_id']}"
             choices.append(
                 selector.SelectOptionDict(
                     value=asset["asset_uuid"],
-                    label=label,
+                    label=self._quick_asset_display_label(asset, name_counts),
                 )
             )
         return choices
+
+    def _quick_asset_display_label(
+        self,
+        asset: AssetData,
+        name_counts: dict[str, int] | None = None,
+    ) -> str:
+        """Return an unambiguous name-first label without technical UUIDs."""
+        if name_counts is None:
+            name_counts = {}
+            for candidate in self._manager.assets():
+                name = candidate["name"]
+                name_counts[name] = name_counts.get(name, 0) + 1
+        label = asset["name"]
+        if name_counts[label] > 1:
+            return f"{label} · {asset['asset_id']}"
+        return label
 
     def _replacement_record_label(self, record: ReplacementRecordData) -> str:
         """Return a stable Asset-ID label for one replacement record."""
@@ -1027,6 +1040,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 "purchase_not_configured",
                 "quick_create_idempotency_conflict",
                 "replacement_cycle",
+                "replacement_date_before_predecessor_lifecycle",
                 "replacement_date_in_future",
                 "replacement_graph_invalid",
                 "replacement_missing",
@@ -1488,6 +1502,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         return {
             "asset_uuid": asset["asset_uuid"],
             "name": asset["name"],
+            "display_label": self._quick_asset_display_label(asset),
             "lifecycle_status": asset["lifecycle"]["status"],
             "current_event_uuid": asset["lifecycle"]["current_event_uuid"],
             "deployment_state": asset[CONF_DEPLOYMENT_STATE],
@@ -1541,7 +1556,9 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             step_id="quick_add_replacement",
             data_schema=self.add_suggested_values_to_schema(schema, defaults),
             errors=errors or {},
-            description_placeholders={"predecessor_name": predecessor["name"]},
+            description_placeholders={
+                "predecessor_name": predecessor["display_label"]
+            },
         )
 
     def _quick_display_value(self, value: str | None) -> str:
@@ -1623,7 +1640,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             details["deployment_state"],
         )
         if predecessor is not None and replacement is not None:
-            predecessor_name = predecessor["name"]
+            predecessor_name = predecessor["display_label"]
             replacement_reason = await self._quick_selector_label(
                 "replacement_reason",
                 replacement[CONF_REPLACEMENT_REASON],
@@ -2153,19 +2170,41 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                     {CONF_DEVICE_ID: device_id},
                     errors={"base": error_key},
                 )
+            quick_predecessor = getattr(self, "_quick_predecessor", None)
             if error_key in {
                 "asset_missing",
+                "replacement_predecessor_conflict",
+            } and quick_predecessor is not None:
+                predecessor = self._manager.asset(
+                    quick_predecessor["asset_uuid"]
+                )
+                if predecessor is None:
+                    self._quick_details_input[
+                        CONF_REPLACEMENT_TARGET_ASSET_UUID
+                    ] = NO_REPLACEMENT_SELECTION
+                    self._quick_predecessor = None
+                    self._quick_replacement = None
+                else:
+                    self._quick_details_input[
+                        CONF_REPLACEMENT_TARGET_ASSET_UUID
+                    ] = predecessor["asset_uuid"]
+                    self._quick_predecessor = self._quick_predecessor_snapshot(
+                        predecessor
+                    )
+                return self._show_quick_details(errors={"base": error_key})
+            if error_key in {
                 "predecessor_changed",
                 "invalid_replacement_reason",
                 "invalid_replacement_effective_date",
+                "lifecycle_chain_invalid",
+                "replacement_date_before_predecessor_lifecycle",
                 "replacement_date_in_future",
-                "replacement_predecessor_conflict",
                 "replacement_successor_conflict",
                 "replacement_cycle",
                 "replacement_graph_invalid",
-            } and getattr(self, "_quick_predecessor", None) is not None:
+            } and quick_predecessor is not None:
                 predecessor = self._manager.asset(
-                    self._quick_predecessor["asset_uuid"]
+                    quick_predecessor["asset_uuid"]
                 )
                 if predecessor is not None:
                     self._quick_predecessor = self._quick_predecessor_snapshot(
