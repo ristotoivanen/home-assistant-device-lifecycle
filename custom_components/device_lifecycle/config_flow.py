@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 from math import isfinite
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 import voluptuous as vol
@@ -3162,12 +3162,6 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             )
 
         if action == HA_RELATIONSHIP_ACTION_UNLINK:
-            if current_device_id is None:
-                return self._show_primary_device_form(
-                    asset,
-                    user_input=user_input,
-                    errors={"base": "device_missing"},
-                )
             if dependency_error := self._ha_relationship_dependency_error(
                 current_device_id
             ):
@@ -3444,7 +3438,8 @@ class PurchaseSubentryFlow(ConfigSubentryFlow):
                 )
                 if error:
                     errors["base"] = error
-                elif clean is not None:
+                else:
+                    clean = cast(dict[str, Any], clean)
                     return self.async_create_entry(
                         title=_purchase_title(clean),
                         data=clean,
@@ -3498,7 +3493,8 @@ class PurchaseSubentryFlow(ConfigSubentryFlow):
                 )
                 if error:
                     errors["base"] = error
-                elif clean is not None:
+                else:
+                    clean = cast(dict[str, Any], clean)
                     return self.async_update_and_abort(
                         entry,
                         subentry,
@@ -3620,7 +3616,8 @@ class RuntimeSubentryFlow(ConfigSubentryFlow):
                 clean, error = _prepare_runtime_data(combined)
                 if error:
                     errors["base"] = error
-                elif clean is not None:
+                else:
+                    clean = cast(dict[str, Any], clean)
                     clean[CONF_RUNTIME_DATA_VERSION] = RUNTIME_DATA_VERSION
                     registry = dr.async_get(self.hass)
                     return self.async_create_entry(
@@ -3719,7 +3716,8 @@ class RuntimeSubentryFlow(ConfigSubentryFlow):
                 )
                 if error:
                     errors["base"] = error
-                elif clean is not None:
+                else:
+                    clean = cast(dict[str, Any], clean)
                     if CONF_RUNTIME_DATA_VERSION in subentry.data:
                         clean[CONF_RUNTIME_DATA_VERSION] = subentry.data[
                             CONF_RUNTIME_DATA_VERSION
