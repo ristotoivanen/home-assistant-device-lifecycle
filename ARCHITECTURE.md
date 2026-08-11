@@ -1,6 +1,6 @@
 # Device Lifecycle architecture
 
-This document defines the Asset Core and Asset Exposure invariants through Device Lifecycle 0.6.1. Future releases must extend the model through explicit migrations instead of replacing Asset identity.
+This document defines the Asset Core and Asset Exposure invariants through Device Lifecycle 0.7.0. Future releases must extend the model through explicit migrations instead of replacing Asset identity.
 
 ## Core concepts
 
@@ -13,6 +13,8 @@ The model deliberately separates:
 - **Home Assistant relationship**: an instance-specific reference to an external Home Assistant device
 - **Runtime configuration**: an active measurement rule stored in a config subentry
 - **Runtime total**: cumulative Asset-owned history stored in Asset Core
+- **Lifecycle state/history**: current Asset state plus an immutable Asset-specific transition chain
+- **Replacement**: a historical directed relationship between predecessor and successor physical Assets
 - **Entity**: Home Assistant presentation of Asset data, never the sole source of Asset identity
 
 A Purchase is not the Asset identity. A Home Assistant Device Registry entry is not the Asset identity. Asset identity remains stable when either relationship changes.
@@ -33,7 +35,7 @@ Rules:
 5. A missing, linked, unlinked, replaced, or recreated Home Assistant device does not redefine Asset identity.
 6. Storage corruption must not silently restart Asset numbering; setup fails instead of risking ID reuse.
 
-## Asset Store schema 2.1
+## Asset Store schema 3.1
 
 Asset Core uses one private, atomic, versioned Home Assistant Store:
 
@@ -41,7 +43,7 @@ Asset Core uses one private, atomic, versioned Home Assistant Store:
 device_lifecycle.assets
 ```
 
-Device Lifecycle 0.6.1 uses Store major version `2`, minor version `1`. Asset Exposure is derived entirely from this existing payload and adds no stored projection IDs, exposure state, migration markers, or persistent relationship fields.
+Device Lifecycle 0.7.0 uses Store major version `3`, minor version `1`. Asset Exposure remains derived and adds no stored projection IDs, exposure state, or alternate Asset identity.
 
 Conceptual payload:
 
@@ -51,6 +53,10 @@ purchases
   purchase_uuid -> Purchase
 assets
   asset_uuid -> Asset
+lifecycle_events
+  event_uuid -> LifecycleEvent
+replacement_records
+  replacement_uuid -> ReplacementRecord
 ```
 
 The Store wrapper owns the major/minor version. Every payload change requires an explicit migration. Store data is validated as one complete structure before it is published in memory.
@@ -82,7 +88,7 @@ asset_uuids: []
 
 No Asset UUID, Asset ID, or `next_asset_number` increment is allocated merely because a Purchase exists.
 
-An Asset can point to at most one acquisition Purchase in Store 2.1.
+An Asset can point to at most one acquisition Purchase in Store 3.1.
 
 ### Asset
 
@@ -98,6 +104,7 @@ An Asset contains:
 - `ha_area_id`
 - warranty object
 - Runtime object
+- Lifecycle object
 - manufacturer
 - model and model ID
 - serial number
@@ -111,6 +118,10 @@ Runtime is represented as:
 ```text
 runtime:
   total_seconds: decimal string | null
+
+lifecycle:
+  status: unknown | active | retired | disposed | lost
+  current_event_uuid: UUID | null
 ```
 
 The value is finite, non-negative cumulative seconds. `null` means canonical Runtime is not initialized yet; it never means zero. Persistent Runtime arithmetic uses `Decimal`, and normal operation never decreases the total.
@@ -125,7 +136,7 @@ not_deployed
 deployed
 ```
 
-Store 2.1 explicitly supports a relationship-free physical Asset:
+Store 3.1 explicitly supports a relationship-free physical Asset:
 
 ```text
 purchase_uuid: null
@@ -135,9 +146,12 @@ installed_date: null
 ha_area_id: null
 runtime:
   total_seconds: null
+lifecycle:
+  status: active
+  current_event_uuid: <initial event UUID>
 ```
 
-This is the normal initial relationship state of a manually created Asset.
+This is the normal initial relationship state of a newly created Asset. A creation path that explicitly requests Lifecycle `unknown` stores `current_event_uuid: null` and creates no same-state event. Assets migrated into 3.1 also use that unknown/no-event state.
 
 ## Metadata and relationship provenance
 
@@ -167,13 +181,14 @@ Existing warranty data and Purchase projection behavior remain unchanged in 0.6.
 `AssetStoreManager` owns one `asyncio.Lock` used by every Store mutation, including reconciliation. A successful mutation follows this contract:
 
 1. Acquire the mutation lock.
-2. Deep-copy the current Store snapshot.
-3. Apply the mutation to the copy.
-4. Validate the complete resulting Store.
-5. Atomically save the complete Store.
-6. Read the Store file directly and verify the complete versioned envelope and payload.
-7. Publish the new in-memory snapshot only after verification.
-8. Release the lock.
+2. If persistence is uncertain, directly read and validate the persisted 3.1 snapshot first.
+3. Deep-copy the current published Store snapshot.
+4. Validate requested inputs and apply the mutation to the copy.
+5. Validate the complete resulting Store, including every lifecycle chain and the whole replacement graph.
+6. Atomically save the complete Store.
+7. Read the Store file directly and verify the complete versioned envelope and exact payload.
+8. Publish the new in-memory snapshot only after verification.
+9. Release the lock.
 
 Home Assistant 2026.8 may catch and log an underlying `WriteError` inside `Store.async_save()`. Device Lifecycle therefore does not treat a normal return as acknowledgement. Failed verification leaves the published snapshot unchanged. If read-back itself fails and persistence is ambiguous, the manager reloads and validates the direct Store snapshot before another mutation; Runtime compare-and-set semantics then recognize an already-landed delta without adding it twice.
 
@@ -183,9 +198,13 @@ If mutation, validation, save, or verification fails, the published Store remain
 - consume an Asset UUID or `DLxxxx` ID
 - leave a half-updated Purchase-to-Asset relationship
 - leave a half-replaced Home Assistant device relationship
+- leave a half-appended lifecycle transition
+- publish a void without its corrected replacement record
 - expose a partially changed in-memory snapshot
 
 Returned Asset, Purchase, and Store-derived values are detached snapshots and cannot mutate the manager's internal state.
+
+The manager passes only its detached, unpublished candidate snapshot to Home Assistant Store and awaits serialization, write, and direct readback before publishing it. Therefore Store 3.1 safely uses `serialize_in_event_loop=False`; the snapshot cannot be concurrently mutated during executor serialization.
 
 ## Purchase creation and reconciliation
 
@@ -226,11 +245,58 @@ No Deployment status is inferred from:
 
 Changing an Asset with an Area to `not_deployed` requires explicit confirmation before `ha_area_id` is cleared. `installed_date` remains unchanged unless the user explicitly edits it.
 
-Store 2.1 contains only current Deployment status, Installation date, and Area. There is no deployment history in 0.6.0.
+Store 3.1 contains only current Deployment status, Installation date, and Area. There is no deployment history in 0.7.0.
+
+## Canonical lifecycle state and event chain
+
+Lifecycle and Deployment are independent domains. Lifecycle status is exactly one of `unknown`, `active`, `retired`, `disposed`, or `lost`. No `stored`, `replaced`, or `returned` lifecycle values exist. Every explicit corrective transition is permitted; terminal-looking states are not irreversible.
+
+`asset.lifecycle` stores only the current state and current event pointer. Growing history lives in top-level `lifecycle_events`, never a ConfigSubentry. Each immutable event contains:
+
+```text
+event_uuid
+asset_uuid
+previous_event_uuid
+from_status
+to_status
+effective_date
+recorded_at
+notes
+```
+
+`effective_date` is an optional non-future Home Assistant local calendar date. `recorded_at` is generated by Device Lifecycle as an aware UTC timestamp. Users cannot edit or delete events. A mistake is corrected by appending another transition. A same-state request appends nothing, writes nothing, and triggers no reload.
+
+Complete Store validation proves that all event and Asset UUIDs are canonical, keys equal embedded IDs, every event's Asset and previous event exist, previous events belong to the same Asset, adjacent statuses and known dates are continuous/non-decreasing, recorded timestamps are valid UTC and non-decreasing, no branch/cycle/orphan exists, and all events for each Asset form one chain ending at `current_event_uuid`. The current event must end in the Asset's current status. An Asset with no events must be `unknown` with a null current pointer.
+
+New ordinary Assets create `unknown` → `active` in the same canonical creation mutation. Migration never fabricates an event: every existing Asset enters 3.1 as unknown with a null pointer.
+
+## Physical replacement graph
+
+Top-level `replacement_records` stores permanent directed records from `predecessor_asset_uuid` to `successor_asset_uuid`. The schema is a dictionary of records and does not encode the 0.7.0 cardinality limit. Each record contains:
+
+```text
+replacement_uuid
+predecessor_asset_uuid
+successor_asset_uuid
+reason
+effective_date
+recorded_at
+notes
+voided_at
+void_reason
+```
+
+Reasons are `unknown`, `planned_refresh`, `upgrade`, `failure`, `warranty_rma`, and `other`. `warranty_rma` is only a reason; 0.7.0 has no RMA case model. Both endpoints must be distinct existing Assets. Effective dates are optional and non-future. Integration timestamps are aware UTC.
+
+Only records with `voided_at: null` participate in the active graph. Store 3.1 retains all voided records permanently. Version 0.7.0 whole-graph validation enforces at most one active outgoing and one active incoming edge per Asset, rejects duplicate active edges and self-links, detects cycles of every length, and requires known effective dates to be non-decreasing along consecutive active edges. Unknown dates never imply order.
+
+Voiding requires a non-empty reason. Correction is one serialized mutation: mark the old record void, create the new record, validate the complete graph, perform one verified save, then publish. Any mutation, graph, persistence, or readback failure leaves the old published relationship active.
+
+Replacement never changes Lifecycle, Deployment, Installation Date, Area, Purchase, warranty, external Home Assistant relationships, Runtime, maintenance, or documents. In particular, a `warranty_rma` successor does not inherit the predecessor's acquisition Purchase or warranty.
 
 ## Home Assistant relationships
 
-`ha_device_refs` stores relationships from an Asset to Home Assistant Device Registry devices. In 0.5.7, related relationships are explicitly user-managed. Primary relationships may be established through Asset management or the existing Purchase and Runtime reconciliation paths. The relationship representation in Store 2.1 remains:
+`ha_device_refs` stores relationships from an Asset to Home Assistant Device Registry devices. In 0.5.7, related relationships became explicitly user-managed. Primary relationships may be established through Asset management or the existing Purchase and Runtime reconciliation paths. The relationship representation remains unchanged in Store 3.1:
 
 ```text
 ha_device_refs:
@@ -295,13 +361,15 @@ Device Lifecycle owns only these deterministic projection devices. External Home
 
 ## Asset exposure entities
 
-Every valid Asset exposes five parent-owned entities on its Asset Device, regardless of Purchase, external relationship, Runtime configuration, or deployment state:
+Every valid Asset exposes seven parent-owned entities on its Asset Device, regardless of Purchase, external relationship, Runtime configuration, or deployment state:
 
 - Lifecycle, with stable unique ID `<asset_uuid>_lifecycle`
 - Deployment, with stable unique ID `<asset_uuid>_deployment`
 - Installation Date, with stable unique ID `<asset_uuid>_installed_date`
 - Relationships, with stable unique ID `<asset_uuid>_relationships`
 - Asset ID, with stable unique ID `<asset_uuid>_asset_id`
+- Lifecycle Status, with stable unique ID `<asset_uuid>_lifecycle_status`
+- Replacement, with stable unique ID `<asset_uuid>_replacement`
 
 Lifecycle retains its existing state and warranty behavior, existing attributes, unique ID, entity ID, user naming, enabled state, options, and Recorder identity. It no longer belongs to a Purchase subentry. An Asset with no Purchase or warranty still exposes Lifecycle with the existing not-specified style state.
 
@@ -313,16 +381,20 @@ Relationships is an enabled-by-default diagnostic enum sensor. Its state is `non
 
 Asset ID is an enabled-by-default diagnostic sensor whose state is the permanent `DLxxxx` value. The short ID is not inserted into the Asset Device name merely to expose it.
 
+Lifecycle Status is an enabled-by-default normal enum sensor. Its English machine states exactly match canonical Lifecycle values; Home Assistant translation infrastructure localizes state presentation. It exposes at most the current event's optional effective date, never full history.
+
+Replacement is a disabled-by-default diagnostic enum sensor with states `none`, `replaces`, `replaced_by`, and `chain_member`. It exposes only active predecessor/successor Asset IDs, always as lists. Historical and voided records are not entity attributes.
+
 Home Assistant 2026.8 restricts a Device Registry device to one owning config entry. Eligibility validation uses the device's `config_entry_id` and its current owner config entry. Device Lifecycle rejects its own devices, service devices, conservative software/system exclusions, devices with no valid owner, and missing device IDs without using deprecated multi-config-entry ownership assumptions.
 
 Related add/remove operations do not mutate Purchase or Runtime config subentries and are not blocked merely because the device is used elsewhere. Removing a related reference uses the stored relationship list, so it remains possible when the Device Registry device no longer exists.
 
-Unlink and replacement are allowed only when the current primary device is not referenced by an active:
+Unlink and primary-device relationship replacement are allowed only when the current primary device is not referenced by an active:
 
 - Purchase subentry through `device_ids`, or
 - Runtime subentry through `device_id`
 
-Dependency conflicts are reported to the user. Device Lifecycle 0.6.0 does not rewrite dependent subentries automatically. Replacement removes the old primary and adds the validated new primary in one serialized Store mutation and one verified atomic save. Failed validation, save, or read-back preserves the published old relationship.
+Dependency conflicts are reported to the user. Device Lifecycle does not rewrite dependent subentries automatically. This Home Assistant relationship operation removes the old primary and adds the validated new primary for the same physical Asset in one serialized Store mutation and one verified atomic save. It is unrelated to the physical Asset-to-Asset replacement graph. Failed validation, save, or read-back preserves the published old relationship.
 
 ## Canonical Runtime ownership
 
@@ -348,7 +420,7 @@ Runtime configuration remains owned by its existing Runtime ConfigSubentry, so t
 
 The 0.6.0 registry migration is deliberately separate from Asset Store migration and from the existing 0.4.x entity unique-ID migration. Setup order is:
 
-1. Load and validate Store 2.1, applying only the already-supported Store 1.1/1.2 migration when required.
+1. Load and validate Store 3.1, explicitly migrating Store 1.1, 1.2, or 2.1 when required.
 2. Reconcile Purchase subentries.
 3. Reconcile Runtime subentries.
 4. Validate the complete canonical Store snapshot and persist reconciliation before publishing it.
@@ -360,7 +432,7 @@ The 0.6.0 registry migration is deliberately separate from Asset Store migration
 10. Publish `runtime_data` and forward sensor platform setup.
 11. Create any missing parent-owned exposure entities and register the centralized relationship listener.
 
-The preflight scans all Assets and all desired entity identities, including `<asset_uuid>_installed_date`, before the first exposure-related Device or Entity Registry mutation. An exact Asset Device identifier may have zero or one active match. Multiple matches, external ownership, additional identifiers or connections, a foreign entity collision, a noncanonical Lifecycle/Runtime unique ID, a mismatched config entry, or multiple Runtime subentries for one Asset fail setup closed. An otherwise exact Device Lifecycle-owned projection found on one of the same parent entry's subentries is an incomplete derived projection and is safely moved back to the parent; metadata is never used to choose between devices or entities.
+The preflight scans all Assets and all desired entity identities, including `<asset_uuid>_installed_date`, `<asset_uuid>_lifecycle_status`, and `<asset_uuid>_replacement`, before the first exposure-related Device or Entity Registry mutation. An exact Asset Device identifier may have zero or one active match. Multiple matches, external ownership, additional identifiers or connections, a foreign entity collision, a noncanonical Lifecycle/Runtime unique ID, a mismatched config entry, or multiple Runtime subentries for one Asset fail setup closed. An otherwise exact Device Lifecycle-owned projection found on one of the same parent entry's subentries is an incomplete derived projection and is safely moved back to the parent; metadata is never used to choose between devices or entities.
 
 Registry reconciliation is idempotent. A valid existing Asset Device is reused; only a missing exact projection is created. Existing entity updates change only `device_id` and `config_subentry_id`; they do not rewrite entity ID, unique ID, name overrides, enabled state, options, categories, labels, or unrelated customization.
 
@@ -378,7 +450,7 @@ Elapsed Runtime uses a monotonic clock and three explicit components: committed 
 
 Each delta carries its expected canonical total. Store equality with the expected value applies the delta; equality with expected plus delta is idempotent success; any other value fails closed. An entity-level lock serializes periodic, source, unload, and shutdown callbacks, while the Store manager mutation lock serializes canonical writes. Failed saves retain sealed pending deltas without leaving the active timer running. Under healthy persistence, a hard crash loses only time since the last successful checkpoint, normally less than the five-minute interval. That bound does not apply while Store writes are failing.
 
-## Store 1.1/1.2 to 2.1 migration
+## Store 1.1/1.2/2.1 to 3.1 migration
 
 The explicit migration preserves exactly:
 
@@ -390,6 +462,7 @@ The explicit migration preserves exactly:
 - config-subentry references
 - Runtime relationships
 - entity unique IDs and legacy restored totals pending import
+- Deployment state, Installation Date, Area, warranty, Runtime total, metadata, and provenance
 
 For every existing 0.5.3 Asset, migration adds:
 
@@ -402,9 +475,17 @@ runtime:
 
 If `purchase_uuid` is non-null and `field_sources["purchase_uuid"]` is absent, the migration records `purchase` provenance. The migration is idempotent and does not infer deployment from any existing relationship or metadata.
 
-Store 1.2 Assets also receive the null Runtime object directly. Migration works on a detached copy and validates the complete Store 2.1 result.
+Store 1.2 Assets also receive the null Runtime object directly. The composable migration first produces the established normalized 2.1 model, then adds to every existing Asset:
 
-After Store migration, downgrading 0.5.7 to 0.5.6 is unsupported. The 0.5.6 Store v1 reader rejects Store major version 2 and must not rewrite it. Restore a backup made before the upgrade for rollback.
+```text
+lifecycle:
+  status: unknown
+  current_event_uuid: null
+```
+
+and adds empty top-level `lifecycle_events` and `replacement_records` dictionaries. It generates no synthetic lifecycle or replacement history. Store 2.1 inputs retain their exact Runtime totals and all other canonical data. Migration works on a detached copy and validates the complete Store 3.1 result.
+
+After Store 3.1 migration, downgrading to Device Lifecycle 0.6.1 is unsupported. The old reader must reject Store major version 3 and must not rewrite it. Restore a complete backup made before the 0.7.0 upgrade for rollback.
 
 ## Reconciliation and persistence ordering
 
@@ -413,7 +494,7 @@ Current setup and legacy normalization follow this order:
 1. Load and validate Asset Store, applying an explicit migration when required.
 2. Reconcile Purchase subentries into Purchase and Asset records.
 3. Reconcile Runtime subentries to existing or new Assets.
-4. Validate all identity, provenance, membership, and relationship invariants.
+4. Validate all identity, provenance, membership, lifecycle-chain, and replacement-graph invariants.
 5. Atomically save Asset Store.
 6. Only after Store persistence succeeds, add generated stable references back to config subentries.
 7. Migrate Entity Registry unique IDs while preserving `entity_id`.
@@ -429,46 +510,51 @@ Future functionality attaches to `asset_uuid`; it must not introduce another phy
 
 Examples from the existing roadmap include:
 
-- maintenance schedules and history -> Asset UUID
-- Asset-owned Runtime totals and corrections -> Asset UUID
-- lifecycle, replacement, and RMA relationships -> Asset UUIDs
+- Quick Asset Entry -> reuse the existing canonical creation/lifecycle initialization mutation; no alternate Asset identity or Store
+- maintenance schedules and history -> Asset UUID, with growing history in a future explicit Store schema
+- Asset-owned Runtime totals and any future corrections -> Asset UUID
+- future RMA cases -> replacement UUID, without redefining Purchase or Asset identity
 - documents -> Purchase UUID or Asset UUID according to scope
 - export/import -> preserve Asset UUID and Asset ID; treat Home Assistant device/entity IDs as instance-specific references
 
 Growing histories do not belong in ConfigSubentries. ConfigSubentries remain suitable for active user configuration; persistent history belongs in explicitly versioned Device Lifecycle storage.
 
-## 0.6.1 schema and migration impact
+These boundaries reserve 0.8.x for Maintenance, 0.9.x for Portability & Hardening, and a later release for Documents. None is represented by placeholder 3.1 records.
 
-Device Lifecycle 0.6.1 adds only a native Home Assistant date projection of the already-canonical Asset `installed_date`. Therefore:
+## 0.7.0 schema and migration impact
 
-- Store major/minor is `2.1`
+Device Lifecycle 0.7.0 adds canonical Lifecycle and Replacement domains. Therefore:
+
+- Store major/minor is `3.1`
 - config entry version remains `4`
-- Store 1.1 and 1.2 migrate explicitly to 2.1
+- Store 1.1, 1.2, and 2.1 migrate explicitly to 3.1
 - no config-entry migration is added
 - Runtime entity unique IDs and entity IDs remain unchanged
 - Lifecycle entity unique IDs and entity IDs remain unchanged
+- Deployment, Installation Date, Relationships, and Asset ID identities remain unchanged
+- new deterministic parent-owned identities are `<asset_uuid>_lifecycle_status` and `<asset_uuid>_replacement`
 - no Device Registry ID or exposure status is stored
-- no installation-date field, provenance rule, Store migration, or ConfigEntry migration is added
+- lifecycle/replacement mutations preserve every other canonical domain
 
-## Explicit non-goals for 0.6.0
+## Explicit non-goals for 0.7.0
 
-Device Lifecycle 0.6.0 does not add:
+Device Lifecycle 0.7.0 does not add:
 
 - Asset archive or delete
 - Asset merge
 - automatic device discovery or metadata matching
 - automatic stale-device rematching
-- relationship history or subtype taxonomy
+- Quick Asset Entry or speculative Quick Add refactoring
 - metadata aggregation from related devices
-- Asset status sensors
+- lifecycle-history attributes or a custom history UI
 - deployment history
 - maintenance schedules or history
 - a general Asset-level warranty editor
 - Runtime reset or manual Runtime editing
 - Recorder/statistics migration
-- Asset-to-Asset or replacement relationships
+- future replacement scheduling or N:M active replacement support
 - export/import
 
-It also does not add Asset deletion/archive/merge, replacement or RMA, Maintenance, maintenance history or schedules, Runtime reset/manual editing, Runtime-based maintenance, Recorder migration, Device Registry Area synchronization, Repairs, notifications, custom frontend surfaces, Documents, or Asset-to-Asset relationships.
+It also does not add Asset deletion/purge/merge, RMA cases, Maintenance, maintenance history or schedules, Runtime reset/manual editing, Runtime-based maintenance, Recorder migration, Device Registry Area synchronization, Repairs, notifications, custom frontend surfaces, Documents, automatic Purchase/warranty/HA-relationship/Runtime/Deployment/Lifecycle transfer, or automatic lifecycle change when a replacement is created.
 
-The 0.6.0 acceptance contract exposes the existing Asset without replacing it: `asset_uuid` remains the only canonical technical identity; Store stays 2.1 and ConfigEntry stays 4; the Asset Device is a recomputable projection; Lifecycle is present for every Asset; Runtime configuration stays subentry-owned while history stays Asset-owned; existing Lifecycle/Runtime identities remain continuous; external devices stay untouched references; ambiguous registry identity fails closed; and partial derived projection state remains deterministically recoverable.
+The 0.7.0 acceptance contract extends the existing Asset without replacing it: `asset_uuid` remains the only canonical technical identity; Store is 3.1 and ConfigEntry stays 4; the Asset Device is a recomputable projection; the old warranty Lifecycle remains continuous; Lifecycle Status and Replacement are new deterministic projections; Runtime configuration stays subentry-owned while history stays Asset-owned; external devices stay untouched references; ambiguous registry identity fails closed; and partial derived projection state remains deterministically recoverable.

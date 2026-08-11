@@ -6,6 +6,15 @@ from typing import Literal, TypedDict
 
 DeploymentState = Literal["unknown", "not_deployed", "deployed"]
 HADeviceRole = Literal["primary", "related"]
+LifecycleStatus = Literal["unknown", "active", "retired", "disposed", "lost"]
+ReplacementReason = Literal[
+    "unknown",
+    "planned_refresh",
+    "upgrade",
+    "failure",
+    "warranty_rma",
+    "other",
+]
 
 
 class HADeviceReference(TypedDict):
@@ -28,6 +37,40 @@ class RuntimeData(TypedDict):
     total_seconds: str | None
 
 
+class AssetLifecycleData(TypedDict):
+    """Current canonical lifecycle state for one Asset."""
+
+    status: LifecycleStatus
+    current_event_uuid: str | None
+
+
+class LifecycleEventData(TypedDict):
+    """One immutable canonical Asset lifecycle transition."""
+
+    event_uuid: str
+    asset_uuid: str
+    previous_event_uuid: str | None
+    from_status: LifecycleStatus
+    to_status: LifecycleStatus
+    effective_date: str | None
+    recorded_at: str
+    notes: str | None
+
+
+class ReplacementRecordData(TypedDict):
+    """One historical physical Asset-to-Asset replacement record."""
+
+    replacement_uuid: str
+    predecessor_asset_uuid: str
+    successor_asset_uuid: str
+    reason: ReplacementReason
+    effective_date: str | None
+    recorded_at: str
+    notes: str | None
+    voided_at: str | None
+    void_reason: str | None
+
+
 class AssetData(TypedDict):
     """One real-world physical Asset.
 
@@ -45,6 +88,7 @@ class AssetData(TypedDict):
     ha_area_id: str | None
     warranty: WarrantyData
     runtime: RuntimeData
+    lifecycle: AssetLifecycleData
     manufacturer: str | None
     model: str | None
     model_id: str | None
@@ -79,3 +123,5 @@ class AssetStoreData(TypedDict):
     next_asset_number: int
     purchases: dict[str, PurchaseData]
     assets: dict[str, AssetData]
+    lifecycle_events: dict[str, LifecycleEventData]
+    replacement_records: dict[str, ReplacementRecordData]

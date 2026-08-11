@@ -27,6 +27,16 @@ TRANSLATION_DIRECTORY = (
 )
 STRINGS_FILE = TRANSLATION_DIRECTORY.parent / "strings.json"
 LANGUAGES = ("en", "fi")
+LIFECYCLE_REPLACEMENT_STEPS = {
+    "asset_lifecycle",
+    "asset_replacement",
+    "confirm_disposed",
+    "confirm_void_replacement",
+    "correct_asset_replacement",
+    "manage_asset_replacement",
+    "replacement_replaced_by",
+    "replacement_replaces",
+}
 
 
 def _translation(language: str) -> dict[str, Any]:
@@ -128,16 +138,56 @@ def test_options_translation_structures_match_and_are_valid_json() -> None:
     assert _key_shape(english["entity"]) == _key_shape(finnish["entity"])
 
 
+@pytest.mark.parametrize("language", LANGUAGES)
+def test_custom_integration_runtime_translation_is_independently_complete(
+    language: str,
+) -> None:
+    """Each runtime translation file contains full non-empty 0.7 UI/entity text."""
+    translation = _translation(language)
+    assert all(value.strip() for value in _string_values(translation))
+
+    steps = translation["options"]["step"]
+    for step_id in LIFECYCLE_REPLACEMENT_STEPS:
+        step = steps[step_id]
+        assert step["title"].strip()
+        assert step["description"].strip()
+        assert all(value.strip() for value in step.get("data", {}).values())
+        assert all(
+            value.strip() for value in step.get("data_description", {}).values()
+        )
+
+    for selector_key in (
+        "lifecycle_status",
+        "replacement_action",
+        "replacement_reason",
+    ):
+        assert all(
+            value.strip()
+            for value in translation["selector"][selector_key]["options"].values()
+        )
+
+    for entity_key in ("lifecycle_status", "replacement"):
+        entity = translation["entity"]["sensor"][entity_key]
+        assert entity["name"].strip()
+        assert all(value.strip() for value in entity["state"].values())
+
+
 def test_strings_source_matches_english_translation() -> None:
-    """Legacy strings remain unchanged while runtime translations add 0.6.1."""
+    """The canonical strings source matches the English translation."""
     with STRINGS_FILE.open(encoding="utf-8") as strings_file:
         strings = json.load(strings_file)
 
-    english = _translation("en")
-    installed_date = english["entity"]["sensor"].pop("installed_date")
-    assert installed_date == {"name": "Installation date"}
-    assert "installed_date" not in strings["entity"]["sensor"]
-    assert strings == english
+    assert strings == _translation("en")
+
+
+@pytest.mark.parametrize("language", LANGUAGES)
+def test_malformed_history_date_errors_are_available_at_runtime(
+    language: str,
+) -> None:
+    """Both custom-integration translation files expose the new stable errors."""
+    errors = _translation(language)["options"]["error"]
+    assert errors["invalid_lifecycle_effective_date"].strip()
+    assert errors["invalid_replacement_effective_date"].strip()
 
 
 def test_exposure_entity_names_and_enum_states_are_translated() -> None:
@@ -158,6 +208,19 @@ def test_exposure_entity_names_and_enum_states_are_translated() -> None:
         "none",
         "present",
         "missing",
+    }
+    assert set(english["lifecycle_status"]["state"]) == {
+        "unknown",
+        "active",
+        "retired",
+        "disposed",
+        "lost",
+    }
+    assert set(english["replacement"]["state"]) == {
+        "none",
+        "replaces",
+        "replaced_by",
+        "chain_member",
     }
     assert _key_shape(english) == _key_shape(finnish)
 
@@ -181,6 +244,8 @@ def test_every_menu_action_and_step_has_translation(language: str) -> None:
     }
     assert set(steps["manage_asset_menu"]["menu_options"]) == {
         "asset_deployment",
+        "asset_lifecycle",
+        "asset_replacement",
         "change_asset_purchase",
         "edit_asset_metadata",
         "ha_relationship",
@@ -190,10 +255,16 @@ def test_every_menu_action_and_step_has_translation(language: str) -> None:
         "manage_primary_device",
         "remove_related_device",
     }
+    assert set(steps["asset_replacement"]["menu_options"]) == {
+        "manage_asset_replacement",
+        "replacement_replaced_by",
+        "replacement_replaces",
+    }
     menu_actions = {
         *steps["init"]["menu_options"],
         *steps["manage_asset_menu"]["menu_options"],
         *steps["ha_relationship"]["menu_options"],
+        *steps["asset_replacement"]["menu_options"],
     }
     assert menu_actions <= set(steps)
 
@@ -211,6 +282,21 @@ def test_deployment_relationship_confirmation_and_results_exist(
     assert set(translation["selector"]["ha_relationship_action"]["options"]) == set(
         HA_RELATIONSHIP_ACTIONS
     )
+    assert set(translation["selector"]["lifecycle_status"]["options"]) == {
+        "unknown",
+        "active",
+        "retired",
+        "disposed",
+        "lost",
+    }
+    assert set(translation["selector"]["replacement_reason"]["options"]) == {
+        "unknown",
+        "planned_refresh",
+        "upgrade",
+        "failure",
+        "warranty_rma",
+        "other",
+    }
     assert translation["options"]["step"]["confirm_not_deployed"]["title"]
     assert translation["options"]["step"]["confirm_not_deployed"]["description"]
     assert _completion_keys() <= set(translation["options"]["create_entry"])

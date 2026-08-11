@@ -1056,7 +1056,7 @@ async def test_v2_downgrade_is_rejected_without_rewrite(
     assert returning.runtime_total_seconds(asset["asset_uuid"]) == Decimal(
         "1234.567"
     )
-    assert STORAGE_VERSION == 2
+    assert STORAGE_VERSION == 3
     assert STORAGE_MINOR_VERSION == 1
 
 
@@ -1086,7 +1086,7 @@ async def test_future_v2_minor_is_rejected_without_rewrite(
 
     with pytest.raises(
         AssetStoreError,
-        match=r"Unsupported Asset Core Store version 2\.2; expected 2\.1",
+        match=r"Unsupported Asset Core Store version 2\.2; expected one of",
     ):
         await store.async_load()
 

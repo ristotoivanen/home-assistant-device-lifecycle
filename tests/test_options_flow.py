@@ -94,6 +94,8 @@ def _store_with_purchase(*, configured: bool = True) -> AssetStoreData:
         "next_asset_number": 1,
         "purchases": {PURCHASE_UUID: purchase},
         "assets": {},
+        "lifecycle_events": {},
+        "replacement_records": {},
     }
 
 

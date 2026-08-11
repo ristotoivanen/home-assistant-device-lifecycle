@@ -15,7 +15,18 @@ Every Asset has two permanent identifiers:
 
 Asset IDs are allocated monotonically and never recycled. The UUID and Asset ID remain unchanged when the Purchase, deployment information, or linked Home Assistant device changes.
 
-Asset Core uses Home Assistant's private, atomic, versioned storage. Its invariants and Store 2.1 schema are documented in [`ARCHITECTURE.md`](ARCHITECTURE.md).
+Asset Core uses Home Assistant's private, atomic, versioned storage. Its invariants and Store 3.1 schema are documented in [`ARCHITECTURE.md`](ARCHITECTURE.md).
+
+## What's new in 0.7.0
+
+Device Lifecycle 0.7.0, **Lifecycle & Replacement**, extends the canonical Asset Core with two independent physical-Asset domains:
+
+- current Lifecycle status plus immutable lifecycle transition history
+- physical predecessor/successor replacement relationships plus permanent void/correction history
+
+Every Asset now has an enabled **Lifecycle Status** enum sensor (`<asset_uuid>_lifecycle_status`) and a disabled-by-default diagnostic **Replacement** enum sensor (`<asset_uuid>_replacement`). Both belong to the parent ConfigEntry and the same deterministic Asset Device as the existing entities. The existing warranty-oriented **Lifecycle** sensor (`<asset_uuid>_lifecycle`) is unchanged.
+
+Store migrates explicitly from 1.1, 1.2, or 2.1 to **3.1**. Existing Assets start with Lifecycle `unknown`, no current event, and no synthetic history. Assets created after the upgrade normally start `active` with one initial `unknown` → `active` event. ConfigEntry remains version 4.
 
 ## What's new in 0.6.1
 
@@ -53,13 +64,15 @@ The Asset deployment Area is intentionally not synchronized to the Asset Device'
 
 ## Exposure entities
 
-Every valid Asset now has these five parent-owned entities on its Asset Device:
+Every valid Asset now has these seven parent-owned entities on its Asset Device:
 
 - **Lifecycle** (`<asset_uuid>_lifecycle`) preserves the existing warranty/state behavior and compatibility attributes. No Purchase or warranty information is required; the entity uses the existing not-specified state in that case.
 - **Deployment** (`<asset_uuid>_deployment`) reports `unknown`, `not_deployed`, or `deployed`. Its attributes continue to expose Installation date and the exact stored Asset Area as `not_set`, `present`, or `missing`. A stale Area ID is preserved and never repaired by name.
 - **Installation Date** (`<asset_uuid>_installed_date`) exposes canonical `asset["installed_date"]` as a native Home Assistant date. It has no independent state or persistence.
 - **Relationships** (`<asset_uuid>_relationships`) reports `none`, `present`, or `missing` from exact stored external Device Registry IDs. It shows primary and related states and current display names without persisting those names or treating registry presence as operational availability.
 - **Asset ID** (`<asset_uuid>_asset_id`) reports the permanent `DLxxxx` value. In Finnish its name is **Elinkaaritunnus**.
+- **Lifecycle Status** (`<asset_uuid>_lifecycle_status`) reports `unknown`, `active`, `retired`, `disposed`, or `lost` from canonical Asset lifecycle state. It is enabled by default and exposes only the current transition's optional effective date.
+- **Replacement** (`<asset_uuid>_replacement`) reports `none`, `replaces`, `replaced_by`, or `chain_member`. It is diagnostic and disabled by default. Its attributes contain only current predecessor/successor Asset IDs as lists.
 
 Relationships remain read-only references. A missing external device stays linked by its stored ID and is never automatically remapped. Related devices never refresh Asset metadata, alter Purchase or Deployment, or become Runtime targets or fallbacks.
 
@@ -118,6 +131,8 @@ Available actions are:
 - **Edit metadata**: change physical details such as name, category, manufacturer, model, serial number, and notes
 - **Change Purchase**: assign a configured Purchase or clear the current Purchase
 - **Deployment status**: edit status, Installation date, and Home Assistant Area
+- **Lifecycle status**: record an explicit current-state transition with optional effective date and notes
+- **Asset replacement**: create, correct, or void a physical predecessor/successor relationship
 - **Home Assistant relationships**: inspect the primary and all related devices
 - **Manage primary device**: link, unlink, replace, or promote a related device
 - **Add related device**: add one non-exclusive relationship
@@ -143,7 +158,29 @@ Changing an Asset with an Area to **Not deployed** opens a separate confirmation
 
 If a stored Area has been deleted, setup and Asset management continue normally. The unavailable Area ID is displayed and preserved until the user explicitly clears it or selects an existing Area. Device Lifecycle never guesses a replacement Area by name.
 
-0.6.0 does not store deployment history.
+0.7.0 does not store deployment history.
+
+## Lifecycle status
+
+Lifecycle status describes whether the physical Asset belongs to actively managed inventory. The canonical values are:
+
+- **Unknown**: the current lifecycle state is not known
+- **Active**: actively managed inventory, whether deployed or not
+- **Retired**: no longer in normal use, but the physical Asset and history remain
+- **Disposed**: permanently left managed inventory
+- **Lost**: physical possession or control is lost
+
+Lifecycle and Deployment are independent. For example, an active Asset may be not deployed, and a retired Asset may retain its Installation Date and Area history. Changing Lifecycle never changes Deployment, Installation Date, Area, Purchase, warranty, Home Assistant relationships, Runtime, or replacement relationships.
+
+Each actual status change appends an immutable event containing the old and new status, optional effective date and notes, an integration-recorded UTC timestamp, and an explicit pointer to the previous event. Same-state changes are no-ops with no event, Store write, or reload. Statuses remain explicitly reversible: corrections such as `lost` → `active` or `disposed` → `active` create a new transition rather than editing history. Selecting `disposed` requires a separate confirmation.
+
+## Physical Asset replacement
+
+A replacement means one physical Asset replaces another physical Asset. An active relationship is directed from predecessor to successor, for example `DL0001 → DL0008`. A valid chain may continue through later replacements. In 0.7.0 each Asset can have at most one active predecessor and one active successor, and the complete active graph must be acyclic.
+
+Replacement reasons are Unknown, Planned refresh, Upgrade, Failure, Warranty RMA, and Other. **Warranty RMA is only a reason label in 0.7.0**; it does not create an RMA case or transfer the predecessor's Purchase or warranty. A successor never automatically inherits Purchase, warranty, Deployment, Installation Date, Area, Home Assistant relationships, Runtime, maintenance data, or documents.
+
+Incorrect records are never deleted. Voiding requires confirmation and a reason, and the record remains in history. Correction atomically voids the old record and creates a new active record in one verified Store save. If validation or persistence fails, the old relationship remains active.
 
 ## Home Assistant device relationships
 
@@ -201,7 +238,7 @@ Existing relationships to historical or no-longer-configured Purchases are prese
 
 ## Storage and migration impact
 
-0.6.1 retains Store 2.1 and ConfigEntry version 4. It only adds a projection of the existing canonical `installed_date`; no Asset Device ID, entity ID, exposure state, migration marker, provenance field, or relationship field is persisted, and there is no config-entry migration.
+0.7.0 uses Store 3.1 and ConfigEntry version 4. Store 3.1 adds `asset.lifecycle`, top-level `lifecycle_events`, and top-level `replacement_records`. It does not persist Asset Device IDs, Entity Registry IDs, exposure state, or alternate identities.
 
 ## Warranty
 
@@ -232,6 +269,12 @@ While active, Runtime checkpoints to Asset Store every five minutes. It also che
 Runtime configuration remains owned by its Runtime subentry, and the external primary relationship remains its configured target. In 0.6.0 only the entity's Device Registry placement changes to the owned Asset Device. Runtime unique ID, entity ID, subentry ID, total, source behavior, initialization, restore import, thresholds, hysteresis, units, precision, state class, checkpointing, and CAS behavior are unchanged.
 
 ## Upgrade notes
+
+### Upgrading from 0.6.1 to 0.7.0
+
+Create a Home Assistant backup before upgrading. Store 1.1, 1.2, and 2.1 are migrated explicitly to Store 3.1. Every existing Asset receives Lifecycle `unknown` with `current_event_uuid: null`; lifecycle and replacement history dictionaries start empty, with no inferred or synthetic events. All existing Asset/Purchase identities, membership/order, ConfigSubentry references, Deployment, Installation Date, Area, warranty, Runtime, metadata, provenance, and Home Assistant device references are preserved.
+
+Downgrading Store 3.1 to Device Lifecycle 0.6.1 is unsupported. To roll back, restore the complete Home Assistant backup made before upgrading; do not copy a 3.1 Store file into a 0.6.1 installation.
 
 ### Upgrading from 0.6.0 to 0.6.1
 
@@ -346,7 +389,7 @@ Removing a Runtime tracking entry removes only that Runtime sensor and active co
 
 Removing a Device Lifecycle Asset Device from Home Assistant does not delete or purge its canonical Asset. The projection can be recreated on reload.
 
-Device Lifecycle 0.6.0 does not provide Asset archive/delete, restore, purge, merge, Runtime reset/manual editing, relationship history, automatic discovery, or stale-device rematching actions.
+Device Lifecycle 0.7.0 does not provide Asset deletion/purge/merge, Runtime reset/manual editing, automatic discovery or stale-device rematching, Quick Asset Entry, Maintenance, RMA cases, Documents, export/import, future replacement scheduling, automatic inheritance/transfer between replacement Assets, a lifecycle-history UI, or full replacement-history attributes. Lifecycle and replacement history remain canonical in Store 3.1 even though 0.7.0 exposes only current state in Home Assistant.
 
 ## Roadmap
 
@@ -355,7 +398,9 @@ Device Lifecycle 0.6.0 does not provide Asset archive/delete, restore, purge, me
 - **0.5.6 — HA Relationships**
 - **0.5.7 — Asset Runtime**
 - **0.6.x — Asset Exposure / UI**
-- **0.7.x — Lifecycle & Replacement**
+- **0.7.0 — Lifecycle & Replacement**
+- **0.7.1 — Quick Asset Entry**
+- **Possible 0.7.2 — Lifecycle UX/history improvements, if justified**
 - **0.8.x — Maintenance**
 - **0.9.x — Portability & Hardening**
 - **Future — Documents**
