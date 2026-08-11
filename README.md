@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="custom_components/device_lifecycle/brand/icon.png" width="128" alt="Device Lifecycle logo">
+  <img src="https://raw.githubusercontent.com/ristotoivanen/home-assistant-device-lifecycle/main/custom_components/device_lifecycle/brand/icon.png" width="128" alt="Device Lifecycle logo">
 </p>
 
 <h1 align="center">Device Lifecycle</h1>
