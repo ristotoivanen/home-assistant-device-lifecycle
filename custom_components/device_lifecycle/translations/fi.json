@@ -153,10 +153,14 @@
     }
   },
   "options": {
+    "abort": {
+      "entry_not_loaded": "Device Lifecycle ei ole tällä hetkellä ladattu. Lataa integraatio uudelleen ja yritä uudelleen."
+    },
     "create_entry": {
       "asset_created": "Laite {asset_id} — {asset_name} luotiin.",
       "asset_deployment_updated": "Laitteen {asset_id} — {asset_name} käyttötila päivitettiin.",
       "asset_ha_relationship_updated": "Laitteen {asset_id} — {asset_name} Home Assistant -laitelinkki päivitettiin.",
+      "asset_lifecycle_unchanged": "Laitteen {asset_id} — {asset_name} elinkaaritila on jo nykyinen. Mitään ei muutettu.",
       "asset_lifecycle_updated": "Laitteen {asset_id} — {asset_name} elinkaaritila päivitettiin.",
       "asset_purchase_updated": "Laitteen {asset_id} — {asset_name} ostos päivitettiin.",
       "asset_replacement_updated": "Laitteen {asset_id} — {asset_name} korvaussuhde päivitettiin.",
@@ -190,7 +194,6 @@
       "lifecycle_chain_invalid": "Elinkaarihistoria on ristiriitainen. Mitään ei muutettu.",
       "lifecycle_date_in_future": "Elinkaaritilan voimaantulopäivä ei voi olla tulevaisuudessa.",
       "lifecycle_date_not_applicable": "Elinkaaritilan voimaantulopäivää ei voi määrittää, kun elinkaaritila on Tuntematon.",
-      "lifecycle_no_change": "Valittu elinkaaritila on jo nykyinen tila. Mitään ei muutettu.",
       "no_assets": "Hallittavia laitteita ei vielä ole.",
       "non_physical_device_not_allowed": "Valitse toisen integraation lisäämä fyysinen Home Assistant -laite.",
       "purchase_conflict": "Laite on jo liitetty toiseen ostokseen. Tarkista nykyinen ostos ja yritä uudelleen.",

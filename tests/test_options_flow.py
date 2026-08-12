@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import UUID
 
 from homeassistant.core import HomeAssistant
-from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.data_entry_flow import FlowResultType, UnknownFlow
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -36,6 +37,7 @@ from custom_components.device_lifecycle.models import (
     PurchaseData,
 )
 from custom_components.device_lifecycle.storage import (
+    AssetStoreError,
     AssetStoreManager,
 )
 
@@ -159,6 +161,75 @@ async def test_parent_options_flow_opens_asset_menu(
     assert result["type"] is FlowResultType.MENU
     assert result["step_id"] == "init"
     assert result["menu_options"] == ["quick_add", "manage_asset"]
+
+
+def _unloaded_parent_entry(hass: HomeAssistant) -> MockConfigEntry:
+    """Return a registered parent entry that was never set up.
+
+    Deliberately does not set ``entry.runtime_data`` — this mirrors an entry
+    that failed setup, was unloaded, or has not finished loading yet
+    (0.7.2 WP3 / 072-05).
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="device_lifecycle_main",
+        version=CONFIG_ENTRY_VERSION,
+        data={},
+        options={},
+    )
+    entry.add_to_hass(hass)
+    return entry
+
+
+async def test_options_flow_init_with_runtime_data_behaves_unchanged(
+    hass: HomeAssistant,
+) -> None:
+    """0.7.2 WP3 / 072-05 Case A: a normally loaded entry is unaffected."""
+    flow, entry = _options_flow(hass, _manager(hass))
+
+    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    assert isinstance(flow, DeviceLifecycleOptionsFlow)
+    assert result["type"] is FlowResultType.MENU
+    assert result["step_id"] == "init"
+    assert result["menu_options"] == ["quick_add", "manage_asset"]
+    reload.assert_not_called()
+
+
+async def test_options_flow_init_without_runtime_data_aborts_cleanly(
+    hass: HomeAssistant,
+) -> None:
+    """0.7.2 WP3 / 072-05 Case B: an unloaded entry aborts instead of raising.
+
+    Opening the OptionsFlow while ``runtime_data`` is absent must not raise
+    an uncaught AttributeError; it must abort cleanly with a translated
+    reason, with no Store mutation and no reload.
+    """
+    entry = _unloaded_parent_entry(hass)
+
+    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "entry_not_loaded"
+    reload.assert_not_called()
+
+
+async def test_options_flow_no_step_reachable_after_runtime_data_abort(
+    hass: HomeAssistant,
+) -> None:
+    """0.7.2 WP3 / 072-05 Case C: no manager-dependent step follows the abort."""
+    entry = _unloaded_parent_entry(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["type"] is FlowResultType.ABORT
+
+    with pytest.raises(UnknownFlow):
+        await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {"next_step_id": "manage_asset"},
+        )
 
 
 async def test_uuid_and_dl_id_are_not_editable_fields(
@@ -326,6 +397,296 @@ async def test_user_metadata_survives_later_ha_refresh(
     assert refreshed["ha_device_refs"] == before["ha_device_refs"]
 
 
+async def test_metadata_true_canonical_noop_writes_and_reloads_nothing(
+    hass: HomeAssistant,
+) -> None:
+    """0.7.2 WP2 / F-2: resubmitting identical, already user-owned metadata is
+    a true canonical no-op — zero Store write and zero reload."""
+    metadata = _full_metadata(name="Shelf bulb")
+    manager = _manager(hass)
+    asset = await manager.async_create_manual_asset(
+        name=metadata[CONF_ASSET_NAME],
+        category=metadata[CONF_CATEGORY],
+        manufacturer=metadata[CONF_MANUFACTURER],
+        model=metadata[CONF_MODEL],
+        model_id=metadata[CONF_MODEL_ID],
+        serial_number=metadata[CONF_SERIAL_NUMBER],
+        sw_version=metadata[CONF_SW_VERSION],
+        hw_version=metadata[CONF_HW_VERSION],
+        notes=metadata[CONF_NOTES],
+    )
+    assert all(
+        asset["field_sources"][field] == "user"
+        for field in (
+            "name",
+            "category",
+            "manufacturer",
+            "model",
+            "model_id",
+            "serial_number",
+            "sw_version",
+            "hw_version",
+            "notes",
+        )
+    )
+    flow, _entry = _options_flow(hass, manager)
+    await flow.async_step_manage_asset({CONF_ASSET_UUID: asset["asset_uuid"]})
+    manager._store.async_save.reset_mock()
+
+    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+        result = await flow.async_step_edit_asset_metadata(metadata)
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert manager.asset(asset["asset_uuid"]) == asset
+    manager._store.async_save.assert_not_awaited()
+    reload.assert_not_called()
+
+
+def _identical_metadata_input(before: dict) -> dict[str, Any]:
+    """Return a full metadata-editor echo of every field's current value.
+
+    Mirrors exactly what the real form resubmits when the user touches
+    nothing: `add_suggested_values_to_schema` prefills every field from the
+    persisted asset, so a genuinely untouched submission still carries all
+    nine keys (0.7.2 WP5 / 072-07).
+    """
+    return {
+        CONF_ASSET_NAME: before["name"],
+        CONF_CATEGORY: before["category"],
+        CONF_MANUFACTURER: before["manufacturer"],
+        CONF_MODEL: before["model"],
+        CONF_MODEL_ID: before["model_id"],
+        CONF_SERIAL_NUMBER: before["serial_number"],
+        CONF_SW_VERSION: before["sw_version"],
+        CONF_HW_VERSION: before["hw_version"],
+        CONF_NOTES: before["notes"],
+    }
+
+
+async def test_metadata_untouched_ha_owned_field_stays_ha_owned_and_is_a_noop(
+    hass: HomeAssistant,
+    asset_store_data: AssetStoreData,
+) -> None:
+    """0.7.2 WP5 / 072-07 Case A: an untouched HA-owned field must NOT be
+    claimed as user-owned merely because the editor echoes its value back.
+
+    Relocates the manager-layer semantic previously (and wrongly) asserted
+    here at the flow level — see
+    `test_manager_explicit_identical_resubmission_still_claims_ha_owned_field`
+    in test_storage_mutations.py for the preserved manager-API behavior.
+    """
+    manager = _manager(hass, asset_store_data)
+    before = manager.asset(ASSET_UUID)
+    assert before["field_sources"]["manufacturer"] == "home_assistant"
+    flow, _entry = _options_flow(hass, manager)
+    await flow.async_step_manage_asset({CONF_ASSET_UUID: ASSET_UUID})
+    manager._store.async_save.reset_mock()
+
+    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+        result = await flow.async_step_edit_asset_metadata(
+            _identical_metadata_input(before)
+        )
+
+    updated = manager.asset(ASSET_UUID)
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert updated["manufacturer"] == before["manufacturer"]
+    assert updated["field_sources"]["manufacturer"] == "home_assistant"
+    manager._store.async_save.assert_not_awaited()
+    reload.assert_not_called()
+
+
+async def test_metadata_untouched_purchase_owned_field_stays_purchase_owned(
+    hass: HomeAssistant,
+    asset_store_data: AssetStoreData,
+) -> None:
+    """0.7.2 WP5 / 072-07 Case B: an untouched purchase-owned field must NOT
+    be claimed as user-owned by an unmodified resubmission."""
+    data = deepcopy(asset_store_data)
+    data["assets"][ASSET_UUID]["field_sources"]["notes"] = "purchase"
+    manager = _manager(hass, data)
+    before = manager.asset(ASSET_UUID)
+    assert before["field_sources"]["notes"] == "purchase"
+    flow, _entry = _options_flow(hass, manager)
+    await flow.async_step_manage_asset({CONF_ASSET_UUID: ASSET_UUID})
+    manager._store.async_save.reset_mock()
+
+    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+        result = await flow.async_step_edit_asset_metadata(
+            _identical_metadata_input(before)
+        )
+
+    updated = manager.asset(ASSET_UUID)
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert updated["notes"] == before["notes"]
+    assert updated["field_sources"]["notes"] == "purchase"
+    manager._store.async_save.assert_not_awaited()
+    reload.assert_not_called()
+
+
+async def test_metadata_untouched_empty_field_does_not_become_user_owned(
+    hass: HomeAssistant,
+) -> None:
+    """0.7.2 WP5 / 072-07 Case C: an untouched empty/absent field must not
+    gain a user-owned `field_sources` entry from a blank resubmission."""
+    manager = _manager(hass)
+    asset = await manager.async_create_manual_asset(name="Bare asset")
+    assert "category" not in asset["field_sources"]
+    assert asset["category"] is None
+    flow, _entry = _options_flow(hass, manager)
+    await flow.async_step_manage_asset({CONF_ASSET_UUID: asset["asset_uuid"]})
+    manager._store.async_save.reset_mock()
+
+    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+        result = await flow.async_step_edit_asset_metadata(
+            _identical_metadata_input(asset)
+        )
+
+    updated = manager.asset(asset["asset_uuid"])
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert updated["category"] is None
+    assert "category" not in updated["field_sources"]
+    manager._store.async_save.assert_not_awaited()
+    reload.assert_not_called()
+
+
+async def test_metadata_user_changes_one_ha_owned_field_value(
+    hass: HomeAssistant,
+    asset_store_data: AssetStoreData,
+) -> None:
+    """0.7.2 WP5 / 072-07 Case D: a genuinely new value for an HA-owned field
+    is a real, deliberate edit — exactly one Store write/reload."""
+    manager = _manager(hass, asset_store_data)
+    before = manager.asset(ASSET_UUID)
+    flow, _entry = _options_flow(hass, manager)
+    await flow.async_step_manage_asset({CONF_ASSET_UUID: ASSET_UUID})
+    manager._store.async_save.reset_mock()
+
+    edit_input = _identical_metadata_input(before)
+    edit_input[CONF_MANUFACTURER] = "New manufacturer"
+
+    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+        result = await flow.async_step_edit_asset_metadata(edit_input)
+
+    updated = manager.asset(ASSET_UUID)
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert updated["manufacturer"] == "New manufacturer"
+    assert updated["field_sources"]["manufacturer"] == "user"
+    manager._store.async_save.assert_awaited_once()
+    reload.assert_called_once()
+
+
+async def test_metadata_user_clears_one_populated_ha_owned_field(
+    hass: HomeAssistant,
+    asset_store_data: AssetStoreData,
+) -> None:
+    """0.7.2 WP5 / 072-07 Case E: deliberately clearing a populated HA-owned
+    field is a real edit — the clear persists and becomes user-owned."""
+    manager = _manager(hass, asset_store_data)
+    before = manager.asset(ASSET_UUID)
+    assert before["serial_number"] == "SERIAL-1"
+    flow, _entry = _options_flow(hass, manager)
+    await flow.async_step_manage_asset({CONF_ASSET_UUID: ASSET_UUID})
+    manager._store.async_save.reset_mock()
+
+    edit_input = _identical_metadata_input(before)
+    edit_input[CONF_SERIAL_NUMBER] = ""
+
+    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+        result = await flow.async_step_edit_asset_metadata(edit_input)
+
+    updated = manager.asset(ASSET_UUID)
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert updated["serial_number"] is None
+    assert updated["field_sources"]["serial_number"] == "user"
+    # Every other untouched field keeps its previous provenance.
+    assert updated["field_sources"]["manufacturer"] == "home_assistant"
+    manager._store.async_save.assert_awaited_once()
+    reload.assert_called_once()
+
+
+async def test_metadata_only_the_changed_fields_become_user_owned(
+    hass: HomeAssistant,
+    asset_store_data: AssetStoreData,
+) -> None:
+    """0.7.2 WP5 / 072-07 Case F: editing several fields at once still leaves
+    every untouched field's provenance alone — one canonical mutation."""
+    manager = _manager(hass, asset_store_data)
+    before = manager.asset(ASSET_UUID)
+    flow, _entry = _options_flow(hass, manager)
+    await flow.async_step_manage_asset({CONF_ASSET_UUID: ASSET_UUID})
+    manager._store.async_save.reset_mock()
+
+    edit_input = _identical_metadata_input(before)
+    edit_input[CONF_MANUFACTURER] = "New manufacturer"
+    edit_input[CONF_MODEL] = "New model"
+
+    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+        result = await flow.async_step_edit_asset_metadata(edit_input)
+
+    updated = manager.asset(ASSET_UUID)
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert updated["manufacturer"] == "New manufacturer"
+    assert updated["model"] == "New model"
+    assert updated["field_sources"]["manufacturer"] == "user"
+    assert updated["field_sources"]["model"] == "user"
+    # Untouched HA-owned fields are unaffected by the two real edits.
+    assert updated["field_sources"]["name"] == "home_assistant"
+    assert updated["field_sources"]["model_id"] == "home_assistant"
+    assert updated["field_sources"]["serial_number"] == "home_assistant"
+    assert updated["field_sources"]["sw_version"] == "home_assistant"
+    assert updated["field_sources"]["hw_version"] == "home_assistant"
+    manager._store.async_save.assert_awaited_once()
+    reload.assert_called_once()
+
+
+async def test_metadata_blank_name_is_rejected_and_leaves_no_trace(
+    hass: HomeAssistant,
+    asset_store_data: AssetStoreData,
+) -> None:
+    """Final audit Finding 1 / WP5 Case C: a whitespace-only Name submission
+    through the real metadata editor flow is rejected as a normal form
+    error, not silently accepted, not a crash, and not a Store write."""
+    manager = _manager(hass, asset_store_data)
+    before = manager.asset(ASSET_UUID)
+    flow, _entry = _options_flow(hass, manager)
+    await flow.async_step_manage_asset({CONF_ASSET_UUID: ASSET_UUID})
+    manager._store.async_save.reset_mock()
+
+    edit_input = _identical_metadata_input(before)
+    edit_input[CONF_ASSET_NAME] = "   "
+
+    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+        result = await flow.async_step_edit_asset_metadata(edit_input)
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "asset_store_error"}
+    assert manager.asset(ASSET_UUID) == before
+    manager._store.async_save.assert_not_awaited()
+    reload.assert_not_called()
+
+
+async def test_changed_metadata_fields_itself_rejects_blank_name(
+    hass: HomeAssistant,
+    asset_store_data: AssetStoreData,
+) -> None:
+    """Final audit Finding 1 / WP5 Case C (isolation): `_changed_metadata_fields`
+    is the exact new WP5 boundary that must reject a blank Name on its own,
+    before ever reaching the manager or `_validate_store_data`'s independent
+    structural safety net — asserted directly so a regression in this
+    specific helper cannot hide behind that separate defense-in-depth check.
+    """
+    manager = _manager(hass, asset_store_data)
+    before = manager.asset(ASSET_UUID)
+    flow, _entry = _options_flow(hass, manager)
+    await flow.async_step_manage_asset({CONF_ASSET_UUID: ASSET_UUID})
+
+    edit_input = _identical_metadata_input(before)
+    edit_input[CONF_ASSET_NAME] = "   "
+
+    with pytest.raises(AssetStoreError, match="Asset name is required"):
+        flow._changed_metadata_fields(before, edit_input)
+
+
 async def test_assign_and_clear_purchase_preserves_manual_asset_identity(
     hass: HomeAssistant,
     monkeypatch: pytest.MonkeyPatch,
@@ -360,6 +721,37 @@ async def test_assign_and_clear_purchase_preserves_manual_asset_identity(
     assert (cleared["asset_uuid"], cleared["asset_id"]) == identity
     assert cleared["purchase_uuid"] is None
     assert manager.purchase(PURCHASE_UUID)["asset_uuids"] == []
+
+
+async def test_purchase_true_canonical_noop_writes_and_reloads_nothing(
+    hass: HomeAssistant,
+) -> None:
+    """0.7.2 WP2 / F-2: resubmitting the same already-assigned Purchase is a
+    true canonical no-op — zero Store write and zero reload."""
+    manager = _manager(hass, _store_with_purchase())
+    asset = await manager.async_create_manual_asset(name="Purchase no-op")
+    flow, _entry = _options_flow(hass, manager)
+    await flow.async_step_manage_asset({CONF_ASSET_UUID: asset["asset_uuid"]})
+    await flow.async_step_change_asset_purchase(
+        {CONF_PURCHASE_UUID: PURCHASE_UUID}
+    )
+    assert (
+        manager.asset(asset["asset_uuid"])["field_sources"]["purchase_uuid"]
+        == "user"
+    )
+
+    same_flow, _entry = _options_flow(hass, manager)
+    await same_flow.async_step_manage_asset({CONF_ASSET_UUID: asset["asset_uuid"]})
+    manager._store.async_save.reset_mock()
+
+    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+        result = await same_flow.async_step_change_asset_purchase(
+            {CONF_PURCHASE_UUID: PURCHASE_UUID}
+        )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    manager._store.async_save.assert_not_awaited()
+    reload.assert_not_called()
 
 
 async def test_historical_purchase_is_visible_but_not_a_new_target(

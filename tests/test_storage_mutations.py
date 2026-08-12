@@ -18,6 +18,7 @@ from custom_components.device_lifecycle.models import AssetStoreData, PurchaseDa
 from custom_components.device_lifecycle.storage import (
     AssetStoreError,
     AssetStoreManager,
+    normalize_asset_metadata_text,
 )
 
 from .conftest import ASSET_UUID, PURCHASE_UUID
@@ -261,6 +262,94 @@ async def test_update_asset_metadata_preserves_identity(
     assert updated["field_sources"]["name"] == "user"
     assert updated["field_sources"]["model"] == "user"
     assert updated["field_sources"]["serial_number"] == "user"
+
+
+async def test_manager_explicit_identical_resubmission_still_claims_ha_owned_field(
+    hass: HomeAssistant,
+    asset_store_data: AssetStoreData,
+) -> None:
+    """0.7.2 WP5 / 072-07 Case G: the manager API's own semantics are
+    untouched by the metadata-editor fix.
+
+    A caller that deliberately submits a field is still claiming it, even
+    when the visible value is unchanged and the field was previously
+    HA-owned — this is the manager-layer half of the semantic WP2 already
+    established and WP5 must not weaken. (Relocated from the OptionsFlow
+    level, where it wrongly locked in the metadata-editor's untouched-field
+    defect — see test_options_flow.py.)
+    """
+    manager = _manager(hass, asset_store_data)
+    before = manager.asset(ASSET_UUID)
+    assert before["field_sources"]["manufacturer"] == "home_assistant"
+
+    updated, changed = await manager.async_update_asset_metadata_reporting(
+        ASSET_UUID,
+        manufacturer=before["manufacturer"],
+    )
+
+    assert changed is True
+    assert updated["manufacturer"] == before["manufacturer"]
+    assert updated["field_sources"]["manufacturer"] == "user"
+    manager._store.async_save.assert_awaited_once()
+
+
+def test_normalize_asset_metadata_text_rejects_none_when_required() -> None:
+    """Final audit Finding 1 / WP5 Case A: the shared canonicalization helper
+    itself rejects a required field submitted as ``None``.
+
+    Both `AssetStoreManager._normalize_user_asset_text` and the OptionsFlow
+    editor's `_changed_metadata_fields` rely on this exact branch, but
+    neither public entry point accepts an untyped ``None`` for a
+    ``str``-typed name parameter — so the helper is exercised directly here
+    instead of via a type-unsafe manager call.
+    """
+    with pytest.raises(AssetStoreError, match="Asset name is required"):
+        normalize_asset_metadata_text(None, "name", required=True)
+
+
+async def test_create_manual_asset_rejects_blank_name(
+    hass: HomeAssistant,
+) -> None:
+    """Final audit Finding 1 / WP5 Case B: an empty Name is rejected at Asset
+    creation through the real manager path, with no Store write."""
+    manager = _manager(hass)
+
+    with pytest.raises(AssetStoreError, match="Asset name is required"):
+        await manager.async_create_manual_asset(name="")
+
+    manager._store.async_save.assert_not_awaited()
+
+
+async def test_update_asset_metadata_rejects_whitespace_only_name(
+    hass: HomeAssistant,
+    asset_store_data: AssetStoreData,
+) -> None:
+    """Final audit Finding 1 / WP5 Case B: a whitespace-only Name is rejected
+    at Asset metadata update through the real manager path — the existing
+    Asset is left unchanged and nothing is written."""
+    manager = _manager(hass, asset_store_data)
+    before = manager.asset(ASSET_UUID)
+
+    with pytest.raises(AssetStoreError, match="Asset name is required"):
+        await manager.async_update_asset_metadata_reporting(ASSET_UUID, name="   ")
+
+    manager._store.async_save.assert_not_awaited()
+    assert manager.asset(ASSET_UUID) == before
+
+
+async def test_create_manual_asset_strips_padded_valid_name(
+    hass: HomeAssistant,
+) -> None:
+    """Final audit Finding 1 / WP5 Case D: a valid Name with leading/trailing
+    whitespace is canonicalized (stripped), not rejected — the positive
+    control for the required-name semantics exercised above."""
+    manager = _manager(hass)
+
+    asset = await manager.async_create_manual_asset(name="  Valid Name  ")
+
+    assert asset["name"] == "Valid Name"
+    assert asset["field_sources"]["name"] == "user"
+    manager._store.async_save.assert_awaited_once()
 
 
 async def test_purchase_assignment_and_clearing_are_atomic(

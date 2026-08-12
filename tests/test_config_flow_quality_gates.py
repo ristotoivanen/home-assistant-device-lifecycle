@@ -12,6 +12,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+import voluptuous as vol
 
 from custom_components.device_lifecycle.config_flow import (
     DeviceLifecycleConfigFlow,
@@ -22,6 +23,7 @@ from custom_components.device_lifecycle.config_flow import (
     _compact_title,
     _entity_platform,
     _infer_warranty_type,
+    _is_retained_legacy_runtime_source,
     _is_service_device,
     _is_valid_runtime_source,
     _prepare_purchase_data,
@@ -194,6 +196,115 @@ def test_runtime_source_errors_are_stable(
     if entity_id != "switch.missing":
         hass.states.async_set(entity_id, "1")
     assert _runtime_source_error(hass, entity_id, mode) == expected
+
+
+def test_runtime_source_schema_retains_missing_persisted_source_as_default(
+    hass: HomeAssistant,
+) -> None:
+    """0.7.2 WP4 / 072-06: reconfigure keeps an already-saved but missing
+    source selectable and default; create never receives that allowance."""
+    hass.states.async_set("switch.machine", "on")
+
+    reconfigure = _runtime_source_schema(
+        hass,
+        RUNTIME_MODE_ON,
+        {CONF_SOURCE_ENTITY_ID: "switch.removed_device"},
+        retained_legacy_source="switch.removed_device",
+    )
+    field, validator = next(
+        (marker, validator)
+        for marker, validator in reconfigure.schema.items()
+        if getattr(marker, "schema", marker) == CONF_SOURCE_ENTITY_ID
+    )
+
+    assert field.default() == "switch.removed_device"
+    assert "switch.removed_device" in validator.config["include_entities"]
+    # The submitted canonical value is the untouched entity_id, never a label.
+    assert validator.config["include_entities"].count("switch.removed_device") == 1
+
+    create = _runtime_source_schema(
+        hass,
+        RUNTIME_MODE_ON,
+        {CONF_SOURCE_ENTITY_ID: "switch.removed_device"},
+    )
+    create_field, create_validator = next(
+        (marker, validator)
+        for marker, validator in create.schema.items()
+        if getattr(marker, "schema", marker) == CONF_SOURCE_ENTITY_ID
+    )
+    assert create_field.default is vol.UNDEFINED
+    assert "switch.removed_device" not in create_validator.config["include_entities"]
+
+
+def test_runtime_source_schema_does_not_duplicate_a_currently_valid_source(
+    hass: HomeAssistant,
+) -> None:
+    """A retained source already in the live candidate list is not duplicated."""
+    hass.states.async_set("switch.machine", "on")
+
+    schema = _runtime_source_schema(
+        hass,
+        RUNTIME_MODE_ON,
+        {CONF_SOURCE_ENTITY_ID: "switch.machine"},
+        retained_legacy_source="switch.machine",
+    )
+    _, validator = next(
+        (marker, validator)
+        for marker, validator in schema.schema.items()
+        if getattr(marker, "schema", marker) == CONF_SOURCE_ENTITY_ID
+    )
+
+    assert validator.config["include_entities"].count("switch.machine") == 1
+
+
+def test_retained_legacy_runtime_source_matches_only_the_exact_persisted_combo(
+    hass: HomeAssistant,
+) -> None:
+    """0.7.2 WP4 / 072-06 WP4D: the retention exception is exact and narrow.
+
+    Only the literal persisted source, under the persisted mode, while it has
+    no HA state, counts as retained. A restored entity, a different entity, a
+    changed mode, or an empty submission all fall through to normal rules.
+    """
+    subentry_data = {
+        CONF_SOURCE_ENTITY_ID: "sensor.removed_power_meter",
+        CONF_RUNTIME_MODE: RUNTIME_MODE_POWER,
+    }
+
+    # The exact persisted source, persisted mode, still missing: retained.
+    assert _is_retained_legacy_runtime_source(
+        hass, subentry_data, RUNTIME_MODE_POWER, "sensor.removed_power_meter"
+    )
+
+    # A different entity_id is never retained, even though it too is missing.
+    assert not _is_retained_legacy_runtime_source(
+        hass, subentry_data, RUNTIME_MODE_POWER, "sensor.some_other_missing"
+    )
+
+    # A changed runtime mode is never retained for the same entity_id.
+    assert not _is_retained_legacy_runtime_source(
+        hass, subentry_data, RUNTIME_MODE_ON, "sensor.removed_power_meter"
+    )
+
+    # An empty/blank submission is never retained.
+    assert not _is_retained_legacy_runtime_source(
+        hass, subentry_data, RUNTIME_MODE_POWER, ""
+    )
+
+    # Once the entity is restored (has a live state again), it is no longer
+    # "missing" and naturally falls back to the normal candidate list instead
+    # of the retention exception.
+    hass.states.async_set(
+        "sensor.removed_power_meter",
+        "5",
+        {"device_class": SensorDeviceClass.POWER, "unit_of_measurement": "W"},
+    )
+    assert not _is_retained_legacy_runtime_source(
+        hass, subentry_data, RUNTIME_MODE_POWER, "sensor.removed_power_meter"
+    )
+    assert _runtime_source_candidates(hass, RUNTIME_MODE_POWER) == [
+        "sensor.removed_power_meter"
+    ]
 
 
 @pytest.mark.parametrize(
@@ -436,7 +547,9 @@ async def test_deployment_confirmation_recovery_and_persistence_error(
         "updates": {CONF_DEPLOYMENT_STATE: "deployed"},
         "area_label": "Area",
     }
-    manager2.async_set_asset_deployment = AsyncMock(side_effect=OSError("save failed"))
+    manager2.async_set_asset_deployment_reporting = AsyncMock(
+        side_effect=OSError("save failed")
+    )
     failed = await flow2.async_step_confirm_not_deployed(
         {CONF_CONFIRM_AREA_CLEAR: True}
     )

@@ -11,6 +11,7 @@ from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import selector
 import pytest
+import voluptuous as vol
 
 from custom_components.device_lifecycle.config_flow import (
     NO_PURCHASE_SELECTION,
@@ -161,7 +162,7 @@ async def test_purchase_change_persistence_conflict_stays_on_form(
     asset = await manager.async_create_manual_asset(name="Purchase failure")
     flow, _entry = _options_flow(hass, manager)
     await flow.async_step_manage_asset({CONF_ASSET_UUID: asset["asset_uuid"]})
-    manager.async_set_asset_purchase = AsyncMock(
+    manager.async_set_asset_purchase_reporting = AsyncMock(
         side_effect=AssetStoreError("Purchase relationship conflict")
     )
 
@@ -171,14 +172,18 @@ async def test_purchase_change_persistence_conflict_stays_on_form(
         )
 
     assert result["errors"] == {"base": "purchase_conflict"}
-    manager.async_set_asset_purchase.assert_awaited_once()
+    manager.async_set_asset_purchase_reporting.assert_awaited_once()
     reload.assert_not_called()
 
 
 async def test_deployment_noop_clear_and_same_values_do_not_write(
     hass: HomeAssistant,
 ) -> None:
-    """Clearing absent values or resubmitting current values is a safe no-op."""
+    """Clearing absent values or resubmitting current values is a safe no-op.
+
+    0.7.2 WP2 / F-2: a canonical Asset no-op must produce zero Store write
+    AND zero reload, not merely zero write.
+    """
     manager = _manager(hass)
     asset = await manager.async_create_manual_asset(name="Deployment no-op")
     flow, _entry = _options_flow(hass, manager)
@@ -196,7 +201,7 @@ async def test_deployment_noop_clear_and_same_values_do_not_write(
 
     assert cleared["type"] is FlowResultType.CREATE_ENTRY
     manager._store.async_save.assert_not_awaited()
-    reload.assert_called_once()
+    reload.assert_not_called()
 
     area = ar.async_get(hass).async_create("Existing Area")
     asset = await manager.async_set_asset_deployment(
@@ -209,15 +214,18 @@ async def test_deployment_noop_clear_and_same_values_do_not_write(
     await same_flow.async_step_manage_asset({CONF_ASSET_UUID: asset["asset_uuid"]})
     manager._store.async_save.reset_mock()
 
-    same = await same_flow.async_step_asset_deployment(
-        {
-            CONF_DEPLOYMENT_STATE: DEPLOYMENT_STATE_DEPLOYED,
-            CONF_INSTALLED_DATE: "2026-08-10",
-            CONF_HA_AREA_ID: area.id,
-        }
-    )
+    with patch.object(hass.config_entries, "async_schedule_reload") as same_reload:
+        same = await same_flow.async_step_asset_deployment(
+            {
+                CONF_DEPLOYMENT_STATE: DEPLOYMENT_STATE_DEPLOYED,
+                CONF_INSTALLED_DATE: "2026-08-10",
+                CONF_HA_AREA_ID: area.id,
+            }
+        )
+
     assert same["type"] is FlowResultType.CREATE_ENTRY
     manager._store.async_save.assert_not_awaited()
+    same_reload.assert_not_called()
 
 
 async def test_deployment_malformed_date_and_not_deployed_area_are_local_errors(
@@ -304,7 +312,7 @@ async def test_primary_relationship_invalid_input_and_unlink_failure_retry(
         "base": "invalid_ha_relationship_action"
     }
 
-    manager.async_unlink_asset_device = AsyncMock(side_effect=OSError("disk"))
+    manager.async_unlink_asset_device_reporting = AsyncMock(side_effect=OSError("disk"))
     with patch.object(hass.config_entries, "async_schedule_reload") as reload:
         failed = await flow.async_step_manage_primary_device(
             {CONF_HA_RELATIONSHIP_ACTION: HA_RELATIONSHIP_ACTION_UNLINK}
@@ -479,6 +487,44 @@ async def test_runtime_create_walks_valid_two_step_flow_and_ignores_malformed_pe
     assert stored[CONF_DEVICE_ID] == device.id
     assert stored[CONF_RUNTIME_MODE] == RUNTIME_MODE_ON
     assert stored[CONF_RUNTIME_DATA_VERSION] == 1
+
+
+async def test_runtime_create_still_rejects_a_missing_source(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+) -> None:
+    """0.7.2 WP4 / 072-06 Case E: creation gains no missing-source allowance.
+
+    The retained-legacy-source exception is reconfigure-only; a brand-new
+    Runtime tracker must still be rejected for a source with no HA state.
+    """
+    _owner, device = _external_device(
+        hass,
+        device_registry,
+        key="runtime-create-missing",
+    )
+    flow = RuntimeSubentryFlow()
+    flow.hass = hass
+    entry = SimpleNamespace(subentries={})
+    with patch.object(flow, "_get_entry", return_value=entry):
+        source_form = await flow.async_step_user(
+            {CONF_DEVICE_ID: device.id, CONF_RUNTIME_MODE: RUNTIME_MODE_ON}
+        )
+    assert source_form["step_id"] == "runtime_source"
+
+    field, validator = next(
+        (marker, validator)
+        for marker, validator in source_form["data_schema"].schema.items()
+        if getattr(marker, "schema", marker) == CONF_SOURCE_ENTITY_ID
+    )
+    assert field.default is vol.UNDEFINED
+    assert "switch.never_existed" not in validator.config["include_entities"]
+
+    result = await flow.async_step_runtime_source(
+        {CONF_SOURCE_ENTITY_ID: "switch.never_existed"}
+    )
+
+    assert result["errors"] == {"base": "source_missing"}
 
 
 async def test_legacy_runtime_reconfigure_source_errors_retry_then_succeed(

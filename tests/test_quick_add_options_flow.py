@@ -254,6 +254,82 @@ async def test_manual_quick_add_is_confirmed_and_committed_once(
     }
 
 
+async def test_quick_add_replay_reloads_but_writes_and_creates_nothing_new(
+    hass: HomeAssistant,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """0.7.2 WP8 / 072-10 Case B: an immediate exact replay of the same
+    already-confirmed Quick Add returns the identical Asset, writes nothing
+    new to the Store, and creates no duplicate — but still schedules a
+    reload under the current, intentional design (see WP8 report: the flow
+    cannot distinguish this from an ambiguous-persistence recovery replay,
+    which genuinely requires the reload for first-time exposure)."""
+    manager = _manager(hass)
+    flow, _entry = _flow(hass, manager)
+    monkeypatch.setattr(
+        "custom_components.device_lifecycle.config_flow.uuid4",
+        Mock(return_value=UUID(QUICK_UUID)),
+    )
+    reload_mock = Mock()
+    monkeypatch.setattr(hass.config_entries, "async_schedule_reload", reload_mock)
+
+    await flow.async_step_quick_add_manual()
+    await flow.async_step_quick_add_details(_details())
+    first = await flow.async_step_quick_add_confirm({CONF_CONFIRM_QUICK_ADD: True})
+    assert first["type"] is FlowResultType.CREATE_ENTRY
+    assert manager._store.async_save.await_count == 1
+    assert reload_mock.call_count == 1
+    canonical_after_first = deepcopy(manager._data)
+
+    replay = await flow.async_step_quick_add_confirm({CONF_CONFIRM_QUICK_ADD: True})
+
+    assert replay["type"] is FlowResultType.CREATE_ENTRY
+    assert manager.asset_count == 1
+    assert manager._data == canonical_after_first
+    # Store behavior matches Store-level replay contract: zero new write.
+    assert manager._store.async_save.await_count == 1
+    # Current, documented reload behavior: replay still schedules a reload.
+    assert reload_mock.call_count == 2
+
+
+async def test_quick_add_repeated_replay_never_duplicates_or_writes(
+    hass: HomeAssistant,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """0.7.2 WP8 / 072-10 Case C: repeating the identical confirmed request
+    several times after canonical state is reached never creates a
+    duplicate Asset or an additional Store write. Each extra reload has no
+    further observable effect once state is already settled — canonical
+    data stays byte-identical across every repetition."""
+    manager = _manager(hass)
+    flow, _entry = _flow(hass, manager)
+    monkeypatch.setattr(
+        "custom_components.device_lifecycle.config_flow.uuid4",
+        Mock(return_value=UUID(QUICK_UUID)),
+    )
+    reload_mock = Mock()
+    monkeypatch.setattr(hass.config_entries, "async_schedule_reload", reload_mock)
+
+    await flow.async_step_quick_add_manual()
+    await flow.async_step_quick_add_details(_details())
+    await flow.async_step_quick_add_confirm({CONF_CONFIRM_QUICK_ADD: True})
+    canonical = deepcopy(manager._data)
+    manager._store.async_save.reset_mock()
+
+    for _ in range(3):
+        result = await flow.async_step_quick_add_confirm(
+            {CONF_CONFIRM_QUICK_ADD: True}
+        )
+        assert result["type"] is FlowResultType.CREATE_ENTRY
+        assert manager.asset_count == 1
+        assert manager._data == canonical
+
+    manager._store.async_save.assert_not_awaited()
+    # 1 initial create + 3 replays: reload fires every time today, but
+    # produces no further Store/identity change after the first replay.
+    assert reload_mock.call_count == 4
+
+
 async def test_ha_prefill_edit_and_clear_provenance(
     hass: HomeAssistant,
     monkeypatch: pytest.MonkeyPatch,

@@ -321,6 +321,267 @@ async def test_repeated_same_device_link_is_idempotent(
     manager._store.async_save.assert_not_awaited()
 
 
+async def test_repeated_same_device_link_is_a_true_noop_including_reload(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+) -> None:
+    """0.7.2 WP7 / 072-09 Case A: an already-canonical same-Primary selection
+    is a true no-op — zero Store write AND zero reload, not merely zero
+    write. Extends `test_repeated_same_device_link_is_idempotent`, which
+    never asserted on reload scheduling."""
+    _entry, device = _external_device(
+        hass,
+        device_registry,
+        key="same-primary-canonical",
+    )
+    manager = _manager(hass)
+    asset = await manager.async_create_manual_asset(name="Canonical primary asset")
+    await manager.async_link_asset_device(
+        asset["asset_uuid"],
+        device.id,
+        device=device,
+    )
+    before = deepcopy(manager._data)
+    manager._store.async_save.reset_mock()
+    flow, _parent = _options_flow(hass, manager)
+    await _select_asset(flow, asset["asset_uuid"])
+
+    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+        result = await flow.async_step_manage_primary_device(
+            {
+                CONF_HA_RELATIONSHIP_ACTION: HA_RELATIONSHIP_ACTION_REPLACE,
+                CONF_DEVICE_ID: device.id,
+            }
+        )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert manager._data == before
+    manager._store.async_save.assert_not_awaited()
+    reload.assert_not_called()
+
+
+async def test_same_primary_non_canonical_persisted_order_normalizes_once(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+) -> None:
+    """0.7.2 WP7 / 072-09 Case B: a same-Primary selection against a
+    structurally valid but non-canonical persisted order (Primary not
+    first) is a real canonical-normalization mutation, not a no-op.
+
+    `_ensure_primary_reference` unconditionally rebuilds
+    ``ha_device_refs`` as ``[primary, *related]``. Nothing in
+    `_validate_store_data` (which only checks uniqueness and at-most-one
+    Primary) or in any reader (`_primary_device_id`/`_related_device_ids`,
+    both role-based, not position-based) requires or depends on this
+    ordering — so it is presentation/write-side canonicalization, not a
+    validated structural invariant. But per WP7C, a normalization write
+    that converges non-canonical persisted data to the shape the write
+    path always produces is not a defect: it is idempotent (a second
+    identical operation becomes a true no-op — see the companion Case E
+    test below), loses no reference, and duplicates nothing.
+    """
+    _entry_a, device_a = _external_device(
+        hass,
+        device_registry,
+        key="noncanon-a",
+    )
+    _entry_b, device_b = _external_device(
+        hass,
+        device_registry,
+        key="noncanon-b",
+    )
+    manager = _manager(hass)
+    asset = await manager.async_create_manual_asset(name="Noncanonical order asset")
+    await manager.async_link_asset_device(asset["asset_uuid"], device_a.id)
+    await manager.async_add_related_device(asset["asset_uuid"], device_b.id)
+    canonical_refs = manager.asset(asset["asset_uuid"])["ha_device_refs"]
+    assert canonical_refs == [
+        {"device_id": device_a.id, "role": "primary"},
+        {"device_id": device_b.id, "role": "related"},
+    ]
+    # Craft a structurally valid but non-canonical persisted order: related
+    # first. `_validate_store_data` does not reject this — it never checks
+    # order, only uniqueness and at-most-one Primary.
+    manager._data["assets"][asset["asset_uuid"]]["ha_device_refs"] = [
+        {"device_id": device_b.id, "role": "related"},
+        {"device_id": device_a.id, "role": "primary"},
+    ]
+    manager._store.async_save.reset_mock()
+    flow, _parent = _options_flow(hass, manager)
+    await _select_asset(flow, asset["asset_uuid"])
+
+    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+        result = await flow.async_step_manage_primary_device(
+            {
+                CONF_HA_RELATIONSHIP_ACTION: HA_RELATIONSHIP_ACTION_REPLACE,
+                CONF_DEVICE_ID: device_a.id,
+            }
+        )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    updated = manager.asset(asset["asset_uuid"])
+    # Canonical order (Primary first) is restored; no reference lost or
+    # duplicated.
+    assert updated["ha_device_refs"] == [
+        {"device_id": device_a.id, "role": "primary"},
+        {"device_id": device_b.id, "role": "related"},
+    ]
+    manager._store.async_save.assert_awaited_once()
+    reload.assert_called_once()
+
+
+async def test_change_primary_a_to_b_drops_old_primary_reference(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+) -> None:
+    """0.7.2 WP7 / 072-09 Case C: replacing Primary A with a brand-new
+    device B removes A from ``ha_device_refs`` entirely — current
+    semantics do not demote the outgoing Primary to related. Exactly one
+    canonical Store mutation and one reload."""
+    _entry_a, device_a = _external_device(hass, device_registry, key="change-a")
+    _entry_b, device_b = _external_device(hass, device_registry, key="change-b")
+    manager = _manager(hass)
+    asset = await manager.async_create_manual_asset(name="Primary change asset")
+    await manager.async_link_asset_device(asset["asset_uuid"], device_a.id)
+    manager._store.async_save.reset_mock()
+    flow, _parent = _options_flow(hass, manager)
+    await _select_asset(flow, asset["asset_uuid"])
+
+    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+        result = await flow.async_step_manage_primary_device(
+            {
+                CONF_HA_RELATIONSHIP_ACTION: HA_RELATIONSHIP_ACTION_REPLACE,
+                CONF_DEVICE_ID: device_b.id,
+            }
+        )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    updated = manager.asset(asset["asset_uuid"])
+    assert updated["ha_device_refs"] == [{"device_id": device_b.id, "role": "primary"}]
+    manager._store.async_save.assert_awaited_once()
+    reload.assert_called_once()
+
+
+async def test_promote_related_device_to_primary_is_one_clean_mutation(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+) -> None:
+    """0.7.2 WP7 / 072-09 Case D: promoting an already-related device to
+    Primary produces no duplicate reference, correct canonical order, and
+    exactly one Store write/reload."""
+    _entry_a, device_a = _external_device(hass, device_registry, key="promote-primary-a")
+    _entry_b, device_b = _external_device(hass, device_registry, key="promote-primary-b")
+    manager = _manager(hass)
+    asset = await manager.async_create_manual_asset(name="Promotion asset")
+    await manager.async_link_asset_device(asset["asset_uuid"], device_a.id)
+    await manager.async_add_related_device(asset["asset_uuid"], device_b.id)
+    manager._store.async_save.reset_mock()
+    flow, _parent = _options_flow(hass, manager)
+    await _select_asset(flow, asset["asset_uuid"])
+
+    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+        result = await flow.async_step_manage_primary_device(
+            {
+                CONF_HA_RELATIONSHIP_ACTION: HA_RELATIONSHIP_ACTION_REPLACE,
+                CONF_DEVICE_ID: device_b.id,
+            }
+        )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    updated = manager.asset(asset["asset_uuid"])
+    assert updated["ha_device_refs"] == [{"device_id": device_b.id, "role": "primary"}]
+    # No duplicate B reference anywhere in the list.
+    assert sum(
+        1 for ref in updated["ha_device_refs"] if ref["device_id"] == device_b.id
+    ) == 1
+    manager._store.async_save.assert_awaited_once()
+    reload.assert_called_once()
+
+
+async def test_repeating_primary_change_after_canonical_state_is_a_true_noop(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+) -> None:
+    """0.7.2 WP7 / 072-09 Case E: once canonical state is reached, repeating
+    the identical primary-change/promotion operation is a true no-op —
+    zero additional Store write and zero additional reload."""
+    _entry_a, device_a = _external_device(hass, device_registry, key="repeat-a")
+    _entry_b, device_b = _external_device(hass, device_registry, key="repeat-b")
+    manager = _manager(hass)
+    asset = await manager.async_create_manual_asset(name="Repeat promotion asset")
+    await manager.async_link_asset_device(asset["asset_uuid"], device_a.id)
+    await manager.async_add_related_device(asset["asset_uuid"], device_b.id)
+    flow, _parent = _options_flow(hass, manager)
+    await _select_asset(flow, asset["asset_uuid"])
+
+    # First promotion: a real, one-time canonical mutation (Case D).
+    first = await flow.async_step_manage_primary_device(
+        {
+            CONF_HA_RELATIONSHIP_ACTION: HA_RELATIONSHIP_ACTION_REPLACE,
+            CONF_DEVICE_ID: device_b.id,
+        }
+    )
+    assert first["type"] is FlowResultType.CREATE_ENTRY
+    canonical = deepcopy(manager._data)
+    manager._store.async_save.reset_mock()
+
+    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+        second = await flow.async_step_manage_primary_device(
+            {
+                CONF_HA_RELATIONSHIP_ACTION: HA_RELATIONSHIP_ACTION_REPLACE,
+                CONF_DEVICE_ID: device_b.id,
+            }
+        )
+
+    assert second["type"] is FlowResultType.CREATE_ENTRY
+    assert manager._data == canonical
+    manager._store.async_save.assert_not_awaited()
+    reload.assert_not_called()
+
+
+async def test_primary_normalization_preserves_unrelated_related_device_order(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+) -> None:
+    """0.7.2 WP7 / 072-09 Case F: touching Primary does not reorder related
+    devices relative to each other — only Primary is moved to the front."""
+    _entry_a, device_a = _external_device(hass, device_registry, key="order-a")
+    _entry_r1, related_one = _external_device(hass, device_registry, key="order-r1")
+    _entry_r2, related_two = _external_device(hass, device_registry, key="order-r2")
+    _entry_r3, related_three = _external_device(hass, device_registry, key="order-r3")
+    manager = _manager(hass)
+    asset = await manager.async_create_manual_asset(name="Related order asset")
+    await manager.async_link_asset_device(asset["asset_uuid"], device_a.id)
+    await manager.async_add_related_device(asset["asset_uuid"], related_one.id)
+    await manager.async_add_related_device(asset["asset_uuid"], related_two.id)
+    await manager.async_add_related_device(asset["asset_uuid"], related_three.id)
+    before_related_order = [
+        ref["device_id"]
+        for ref in manager.asset(asset["asset_uuid"])["ha_device_refs"]
+        if ref["role"] == "related"
+    ]
+    assert before_related_order == [related_one.id, related_two.id, related_three.id]
+    flow, _parent = _options_flow(hass, manager)
+    await _select_asset(flow, asset["asset_uuid"])
+
+    # Reselecting the same canonical Primary must not disturb the relative
+    # order of the untouched related devices.
+    result = await flow.async_step_manage_primary_device(
+        {
+            CONF_HA_RELATIONSHIP_ACTION: HA_RELATIONSHIP_ACTION_REPLACE,
+            CONF_DEVICE_ID: device_a.id,
+        }
+    )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    updated_related_order = [
+        ref["device_id"]
+        for ref in manager.asset(asset["asset_uuid"])["ha_device_refs"]
+        if ref["role"] == "related"
+    ]
+    assert updated_related_order == before_related_order
+
+
 async def test_device_primary_for_another_asset_is_rejected_with_dl_id(
     hass: HomeAssistant,
     device_registry: dr.DeviceRegistry,
@@ -709,6 +970,38 @@ async def test_add_related_uses_device_selector_without_metadata_or_registry_wri
     assert _device_snapshot(current_device) == registry_before
     assert external_entry.data == entry_data_before
     manager._store.async_save.assert_awaited_once()
+
+
+async def test_add_related_device_already_present_is_a_clean_noop(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+) -> None:
+    """0.7.2 WP2 / F-2: adding an already-present related reference is a true
+    canonical no-op — zero Store write and zero reload."""
+    _entry, device = _external_device(
+        hass,
+        device_registry,
+        key="already-related",
+    )
+    manager = _manager(hass)
+    asset = await manager.async_create_manual_asset(name="Already related")
+    await manager.async_add_related_device(asset["asset_uuid"], device.id)
+    flow, _parent = _options_flow(hass, manager)
+    await _select_asset(flow, asset["asset_uuid"])
+    manager._store.async_save.reset_mock()
+
+    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+        result = await flow.async_step_add_related_device(
+            {CONF_DEVICE_ID: device.id}
+        )
+
+    updated = manager.asset(asset["asset_uuid"])
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert updated["ha_device_refs"] == [
+        {"device_id": device.id, "role": "related"}
+    ]
+    manager._store.async_save.assert_not_awaited()
+    reload.assert_not_called()
 
 
 async def test_related_add_allows_primary_owner_elsewhere_but_not_same_asset(

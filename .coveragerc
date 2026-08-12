@@ -1,0 +1,20 @@
+# Coverage configuration for CI (0.7.2 WP9 / 072-12).
+#
+# Branch coverage (not statement-only) and the regression threshold live
+# here centrally so the CI workflow only needs `--cov=<package>` on the
+# command line, per project convention already used throughout 0.7.2.
+
+[run]
+branch = True
+
+[report]
+show_missing = True
+skip_covered = False
+precision = 2
+
+# The current test suite is comfortably above this threshold. Keep the
+# gate below normal coverage while preventing major regressions: it
+# leaves deliberate headroom for normal fluctuation without requiring
+# unrelated test expansion, while still failing CI if a meaningful amount
+# of new code ships without coverage.
+fail_under = 90
