@@ -513,15 +513,27 @@ async def test_repeating_primary_change_after_canonical_state_is_a_true_noop(
     await manager.async_add_related_device(asset["asset_uuid"], device_b.id)
     flow, _parent = _options_flow(hass, manager)
     await _select_asset(flow, asset["asset_uuid"])
+    manager._store.async_save.reset_mock()
 
-    # First promotion: a real, one-time canonical mutation (Case D).
-    first = await flow.async_step_manage_primary_device(
-        {
-            CONF_HA_RELATIONSHIP_ACTION: HA_RELATIONSHIP_ACTION_REPLACE,
-            CONF_DEVICE_ID: device_b.id,
-        }
-    )
+    # First promotion: a real, one-time canonical mutation (Case D). This
+    # must not be allowed to schedule a real, unpatched background reload:
+    # the resulting fire-and-forget task can race a same-test follow-up call
+    # and reload the real integration in-place, replacing
+    # `entry.runtime_data` with an unrelated manager (0.7.2 CI investigation
+    # — test-isolation fix, not a production defect).
+    with patch.object(
+        hass.config_entries,
+        "async_schedule_reload",
+    ) as first_reload:
+        first = await flow.async_step_manage_primary_device(
+            {
+                CONF_HA_RELATIONSHIP_ACTION: HA_RELATIONSHIP_ACTION_REPLACE,
+                CONF_DEVICE_ID: device_b.id,
+            }
+        )
     assert first["type"] is FlowResultType.CREATE_ENTRY
+    first_reload.assert_called_once()
+    manager._store.async_save.assert_awaited_once()
     canonical = deepcopy(manager._data)
     manager._store.async_save.reset_mock()
 
