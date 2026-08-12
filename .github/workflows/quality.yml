@@ -1,0 +1,89 @@
+name: Quality gates
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: pytest, coverage, Ruff, dashboard, diff
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          # Full history is required so the diff-check step below can
+          # compare against an arbitrary base/before commit, not just the
+          # single commit a shallow checkout would provide.
+          fetch-depth: 0
+
+      - name: Check whitespace/diff errors in the actual change range
+        # A bare `git diff --check` on a fresh checkout compares the
+        # working tree to itself and always passes trivially. Instead,
+        # check only the lines this push/PR actually introduces.
+        run: |
+          set -eu
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+          else
+            base="${{ github.event.before }}"
+            head="${{ github.sha }}"
+          fi
+
+          empty_tree="$(git hash-object -t tree /dev/null)"
+
+          # Fall back to a full-tree check against the empty tree when
+          # there is no usable base commit: the initial push to a new
+          # branch (before == all-zero SHA) or a base/before commit that
+          # is not reachable in this checkout (e.g. force-push history
+          # rewrite pruning it away).
+          if [ -z "$base" ] \
+            || [ "$base" = "0000000000000000000000000000000000000000" ] \
+            || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            echo "No usable base commit for $base; checking the full tree at $head instead."
+            base="$empty_tree"
+          fi
+
+          echo "Checking diff range: $base..$head"
+          git diff --check "$base" "$head"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          # pytest-homeassistant-custom-component 0.13.355 pulls in
+          # homeassistant, which requires Python >=3.14.2.
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements_test.txt
+
+      - name: Install test/quality-gate dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements_test.txt
+
+      - name: Ruff baseline regression gate
+        # Not a bare `ruff check .`: historical debt is grandfathered by
+        # exact per-(file, rule) count in ruff_baseline.json, so growing an
+        # already-tolerated finding still fails even though the rule/file
+        # is not clean repo-wide. See .github/scripts/check_ruff_baseline.py.
+        run: python .github/scripts/check_ruff_baseline.py
+
+      - name: Dashboard check
+        run: python dashboard/build.py --check
+
+      - name: pytest with branch coverage
+        run: |
+          pytest -q \
+            --cov=custom_components.device_lifecycle \
+            --cov-report=term-missing

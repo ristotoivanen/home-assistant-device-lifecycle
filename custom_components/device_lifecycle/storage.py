@@ -478,14 +478,50 @@ def add_calendar_years(value: str, years: int) -> str | None:
     return result.isoformat()
 
 
+def normalize_asset_metadata_text(
+    value: Any,
+    field: str,
+    *,
+    required: bool = False,
+) -> str | None:
+    """Normalize one user-owned Asset metadata text field.
+
+    Canonical shared implementation (0.7.2 WP5 / 072-07): both the Store
+    manager's explicit-submission mutator and the metadata-editor OptionsFlow
+    boundary must canonicalize a submitted field exactly the same way — the
+    editor needs this to detect whether a field actually changed before
+    deciding whether to submit it at all, and reusing this function instead
+    of a second implementation guarantees the two layers can never disagree.
+    """
+    if value is None:
+        if required:
+            raise AssetStoreError(f"Asset {field} is required")
+        return None
+    if not isinstance(value, str):
+        raise AssetStoreError(f"Asset {field} must be text")
+    if required:
+        value = value.strip()
+        if not value:
+            raise AssetStoreError(f"Asset {field} is required")
+        return value
+    return value if value else None
+
+
 def _validate_history_effective_date(
     value: Any,
     field: str,
     *,
     invalid_code: str,
-    future_code: str,
 ) -> date | None:
-    """Validate one canonical, non-future 0.7 history effective date."""
+    """Validate one canonical 0.7 history effective date's structural shape.
+
+    This checks only what is permanently true of already-persisted history:
+    type, canonical YYYY-MM-DD form, and calendar validity. It intentionally
+    does not compare against the current HA date — the current clock is not
+    a structural invariant of immutable persisted history, so persisted
+    history must not become invalid solely because HA's current date later
+    moved backwards relative to it (0.7.2 WP1 / F-1).
+    """
     if value is None:
         return None
     if not isinstance(value, str):
@@ -505,12 +541,25 @@ def _validate_history_effective_date(
             f"Asset Core {field} must use canonical YYYY-MM-DD",
             code=invalid_code,
         )
-    if parsed > dt_util.now().date():
+    return parsed
+
+
+def _reject_future_effective_date(
+    parsed: date | None,
+    field: str,
+    *,
+    future_code: str,
+) -> None:
+    """Reject a newly submitted effective date later than HA's current date.
+
+    This is business validation for new input/mutations only; it must never
+    be applied to already-persisted history (see _validate_history_effective_date).
+    """
+    if parsed is not None and parsed > dt_util.now().date():
         raise AssetStoreError(
             f"Asset Core {field} cannot be in the future",
             code=future_code,
         )
-    return parsed
 
 
 def _parse_utc_timestamp(value: Any, field: str, *, code: str) -> datetime:
@@ -600,7 +649,6 @@ def _validate_lifecycle_graph(data: AssetStoreData) -> None:
             event.get("effective_date"),
             "lifecycle effective_date",
             invalid_code="invalid_lifecycle_effective_date",
-            future_code="lifecycle_date_in_future",
         )
         _parse_utc_timestamp(
             event.get("recorded_at"),
@@ -800,7 +848,6 @@ def _validate_replacement_graph(data: AssetStoreData) -> None:
             record.get("effective_date"),
             "replacement effective_date",
             invalid_code="invalid_replacement_effective_date",
-            future_code="replacement_date_in_future",
         )
         recorded_at = _parse_utc_timestamp(
             record.get("recorded_at"),
@@ -1183,6 +1230,22 @@ class AssetStoreManager:
         mutator: Callable[[AssetStoreData], _MutationResultT],
     ) -> _MutationResultT:
         """Apply one all-or-nothing mutation to a detached Store snapshot."""
+        result, _changed = await self._async_mutate_reporting(mutator)
+        return result
+
+    async def _async_mutate_reporting(
+        self,
+        mutator: Callable[[AssetStoreData], _MutationResultT],
+    ) -> tuple[_MutationResultT, bool]:
+        """Apply one all-or-nothing mutation and report whether it changed data.
+
+        This is the single authoritative place that already knows whether a
+        mutation was a canonical no-op: `_async_mutate` has always skipped the
+        Store write when the mutated snapshot equals the prior one. WP2 exposes
+        that existing fact instead of re-deriving it elsewhere (0.7.2 WP2 /
+        F-2/F-3), so callers that need to skip an explicit reload for a no-op
+        can do so without guessing from submitted UI values.
+        """
         async with self._mutation_lock:
             await self._async_recover_uncertain_persistence()
 
@@ -1190,7 +1253,8 @@ class AssetStoreManager:
             result = mutator(data)
             _validate_store_data(data)
 
-            if data != self._data:
+            changed = data != self._data
+            if changed:
                 try:
                     await self._store.async_save(data)
                 except AssetStorePersistenceError as err:
@@ -1200,15 +1264,23 @@ class AssetStoreManager:
             # Publish only after the complete snapshot has been validated and
             # durably saved. A mutation or save exception leaves _data untouched.
             self._data = data
-            return deepcopy(result)
+            return deepcopy(result), changed
 
     async def _async_mutate_history(
         self,
         mutator: Callable[[AssetStoreData], _MutationResultT],
     ) -> _MutationResultT:
         """Apply a lifecycle/replacement mutation with structured persistence errors."""
+        result, _changed = await self._async_mutate_history_reporting(mutator)
+        return result
+
+    async def _async_mutate_history_reporting(
+        self,
+        mutator: Callable[[AssetStoreData], _MutationResultT],
+    ) -> tuple[_MutationResultT, bool]:
+        """Apply a lifecycle/replacement mutation, also reporting data changes."""
         try:
-            return await self._async_mutate(mutator)
+            return await self._async_mutate_reporting(mutator)
         except AssetStoreError:
             raise
         except OSError as err:
@@ -1389,18 +1461,7 @@ class AssetStoreManager:
         required: bool = False,
     ) -> str | None:
         """Normalize user-owned Asset text without accepting implicit coercion."""
-        if value is None:
-            if required:
-                raise AssetStoreError(f"Asset {field} is required")
-            return None
-        if not isinstance(value, str):
-            raise AssetStoreError(f"Asset {field} must be text")
-        if required:
-            value = value.strip()
-            if not value:
-                raise AssetStoreError(f"Asset {field} is required")
-            return value
-        return value if value else None
+        return normalize_asset_metadata_text(value, field, required=required)
 
     def _allocate_asset_id(self, data: AssetStoreData) -> str:
         """Allocate a permanent short Asset ID without ever recycling it."""
@@ -1591,12 +1652,12 @@ class AssetStoreManager:
         future_code: str,
     ) -> str | None:
         """Validate a user-entered canonical date against HA local today."""
-        _validate_history_effective_date(
+        parsed = _validate_history_effective_date(
             value,
             "effective_date",
             invalid_code=invalid_code,
-            future_code=future_code,
         )
+        _reject_future_effective_date(parsed, "effective_date", future_code=future_code)
         return value
 
     def _normalize_history_notes(self, value: str | None) -> str | None:
@@ -2370,6 +2431,28 @@ class AssetStoreManager:
         notes: str | None,
     ) -> AssetData:
         """Append one canonical lifecycle transition and update current state."""
+        asset, _changed = await self.async_set_asset_lifecycle_reporting(
+            asset_uuid,
+            status,
+            effective_date=effective_date,
+            notes=notes,
+        )
+        return asset
+
+    async def async_set_asset_lifecycle_reporting(
+        self,
+        asset_uuid: str,
+        status: LifecycleStatus,
+        *,
+        effective_date: str | None,
+        notes: str | None,
+    ) -> tuple[AssetData, bool]:
+        """Same as async_set_asset_lifecycle, also reporting a same-state no-op.
+
+        A same-state request is a clean neutral no-op (0.7.2 WP2 / F-2): no
+        event is appended, nothing is written, and the caller can see that
+        nothing changed instead of treating it as a validation failure.
+        """
 
         def _set_lifecycle(data: AssetStoreData) -> AssetData:
             asset = self._require_asset(data, asset_uuid)
@@ -2382,7 +2465,7 @@ class AssetStoreManager:
             )
             return asset
 
-        return await self._async_mutate_history(_set_lifecycle)
+        return await self._async_mutate_history_reporting(_set_lifecycle)
 
     def lifecycle_event(self, event_uuid: str | None) -> LifecycleEventData | None:
         """Return one detached immutable lifecycle event snapshot."""
@@ -2646,6 +2729,44 @@ class AssetStoreManager:
         notes: str | None | object = _UNSET,
     ) -> AssetData:
         """Apply user-owned physical metadata without changing Asset identity."""
+        asset, _changed = await self.async_update_asset_metadata_reporting(
+            asset_uuid,
+            name=name,
+            category=category,
+            manufacturer=manufacturer,
+            model=model,
+            model_id=model_id,
+            serial_number=serial_number,
+            sw_version=sw_version,
+            hw_version=hw_version,
+            notes=notes,
+        )
+        return asset
+
+    async def async_update_asset_metadata_reporting(
+        self,
+        asset_uuid: str,
+        *,
+        name: str | object = _UNSET,
+        category: str | None | object = _UNSET,
+        manufacturer: str | None | object = _UNSET,
+        model: str | None | object = _UNSET,
+        model_id: str | None | object = _UNSET,
+        serial_number: str | None | object = _UNSET,
+        sw_version: str | None | object = _UNSET,
+        hw_version: str | None | object = _UNSET,
+        notes: str | None | object = _UNSET,
+    ) -> tuple[AssetData, bool]:
+        """Same as async_update_asset_metadata, also reporting a canonical no-op.
+
+        A submitted value that already matches the stored value AND provenance
+        is a true no-op. A value that is visibly unchanged but whose field was
+        not already user-owned is still a real mutation, because provenance
+        (HA-owned/purchase-owned -> user-owned) is part of canonical state
+        (0.7.2 WP2 / F-2/F-3): this forces `sources[field] = FIELD_SOURCE_USER`
+        for every submitted field exactly as before, so the underlying
+        before/after Store comparison still sees that change.
+        """
         values = {
             "name": name,
             "category": category,
@@ -2676,7 +2797,7 @@ class AssetStoreManager:
                 sources[field] = FIELD_SOURCE_USER
             return asset
 
-        return await self._async_mutate(_update)
+        return await self._async_mutate_reporting(_update)
 
     async def async_set_asset_purchase(
         self,
@@ -2684,6 +2805,17 @@ class AssetStoreManager:
         purchase_uuid: str | None,
     ) -> AssetData:
         """Atomically assign or clear both sides of a Purchase relationship."""
+        asset, _changed = await self.async_set_asset_purchase_reporting(
+            asset_uuid, purchase_uuid
+        )
+        return asset
+
+    async def async_set_asset_purchase_reporting(
+        self,
+        asset_uuid: str,
+        purchase_uuid: str | None,
+    ) -> tuple[AssetData, bool]:
+        """Same as async_set_asset_purchase, also reporting a canonical no-op."""
 
         def _set_purchase(data: AssetStoreData) -> AssetData:
             asset = self._require_asset(data, asset_uuid)
@@ -2693,7 +2825,7 @@ class AssetStoreManager:
                 purchase_uuid,
             )
 
-        return await self._async_mutate(_set_purchase)
+        return await self._async_mutate_reporting(_set_purchase)
 
     def _assign_asset_purchase_in_snapshot(
         self,
@@ -2743,6 +2875,23 @@ class AssetStoreManager:
         ha_area_id: str | None | object = _UNSET,
     ) -> AssetData:
         """Set explicit deployment metadata without inference or HA writes."""
+        asset, _changed = await self.async_set_asset_deployment_reporting(
+            asset_uuid,
+            deployment_state=deployment_state,
+            installed_date=installed_date,
+            ha_area_id=ha_area_id,
+        )
+        return asset
+
+    async def async_set_asset_deployment_reporting(
+        self,
+        asset_uuid: str,
+        *,
+        deployment_state: str | object = _UNSET,
+        installed_date: str | None | object = _UNSET,
+        ha_area_id: str | None | object = _UNSET,
+    ) -> tuple[AssetData, bool]:
+        """Same as async_set_asset_deployment, also reporting a canonical no-op."""
         updates = {
             CONF_DEPLOYMENT_STATE: deployment_state,
             CONF_INSTALLED_DATE: installed_date,
@@ -2753,7 +2902,7 @@ class AssetStoreManager:
             asset = self._require_asset(data, asset_uuid)
             return self._set_asset_deployment_in_snapshot(asset, updates)
 
-        return await self._async_mutate(_set_deployment)
+        return await self._async_mutate_reporting(_set_deployment)
 
     def _set_asset_deployment_in_snapshot(
         self,
@@ -2779,6 +2928,34 @@ class AssetStoreManager:
         expected_current_device_id: str | None | object = _UNSET,
     ) -> AssetData:
         """Atomically set a primary HA reference without mutating the registry."""
+        asset, _changed = await self.async_link_asset_device_reporting(
+            asset_uuid,
+            device_id,
+            replace=replace,
+            device=device,
+            expected_current_device_id=expected_current_device_id,
+        )
+        return asset
+
+    async def async_link_asset_device_reporting(
+        self,
+        asset_uuid: str,
+        device_id: str,
+        *,
+        replace: bool = False,
+        device: dr.DeviceEntry | None = None,
+        expected_current_device_id: str | None | object = _UNSET,
+    ) -> tuple[AssetData, bool]:
+        """Same as async_link_asset_device, also reporting a canonical no-op.
+
+        A same-Primary selection against an already-canonical persisted
+        order is a true no-op (0.7.2 WP7 / 072-09): `_ensure_primary_reference`
+        rebuilds `ha_device_refs` deterministically, so reselecting the exact
+        current Primary against an already-canonical order reproduces a
+        byte-identical snapshot. A non-canonical persisted order (Primary not
+        first) is a real canonical-normalization mutation, exactly like any
+        other explicit submission.
+        """
         if not isinstance(device_id, str) or not device_id.strip():
             raise AssetStoreError("Home Assistant device ID is required")
         device_id = device_id.strip()
@@ -2809,7 +2986,7 @@ class AssetStoreManager:
                 self._refresh_home_assistant_metadata(asset, device, device_id)
             return asset
 
-        return await self._async_mutate(_link)
+        return await self._async_mutate_reporting(_link)
 
     async def async_unlink_asset_device(
         self,
@@ -2818,6 +2995,19 @@ class AssetStoreManager:
         expected_device_id: str | None | object = _UNSET,
     ) -> AssetData:
         """Atomically remove only the primary stored HA relationship."""
+        asset, _changed = await self.async_unlink_asset_device_reporting(
+            asset_uuid,
+            expected_device_id=expected_device_id,
+        )
+        return asset
+
+    async def async_unlink_asset_device_reporting(
+        self,
+        asset_uuid: str,
+        *,
+        expected_device_id: str | None | object = _UNSET,
+    ) -> tuple[AssetData, bool]:
+        """Same as async_unlink_asset_device, also reporting a canonical no-op."""
 
         def _unlink(data: AssetStoreData) -> AssetData:
             asset = self._require_asset(data, asset_uuid)
@@ -2833,7 +3023,7 @@ class AssetStoreManager:
             ]
             return asset
 
-        return await self._async_mutate(_unlink)
+        return await self._async_mutate_reporting(_unlink)
 
     async def async_add_related_device(
         self,
@@ -2841,6 +3031,21 @@ class AssetStoreManager:
         device_id: str,
     ) -> AssetData:
         """Atomically add one non-exclusive related HA device reference."""
+        asset, _changed = await self.async_add_related_device_reporting(
+            asset_uuid, device_id
+        )
+        return asset
+
+    async def async_add_related_device_reporting(
+        self,
+        asset_uuid: str,
+        device_id: str,
+    ) -> tuple[AssetData, bool]:
+        """Same as async_add_related_device, also reporting a canonical no-op.
+
+        An already-present related reference is a clean no-op (0.7.2 WP2 /
+        F-2): nothing is appended and nothing is written.
+        """
         if not isinstance(device_id, str) or not device_id.strip():
             raise AssetStoreError("Home Assistant device ID is required")
         device_id = device_id.strip()
@@ -2862,7 +3067,7 @@ class AssetStoreManager:
             )
             return asset
 
-        return await self._async_mutate(_add_related)
+        return await self._async_mutate_reporting(_add_related)
 
     async def async_remove_related_device(
         self,

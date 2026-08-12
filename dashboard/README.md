@@ -54,4 +54,4 @@ python dashboard/build.py --check
 
 ![Device Lifecycle Technical](screenshots/en/technical.png)
 
-The English images are crops of an actual Home Assistant dashboard capture from the completed dashboard work. Finnish screenshots are not yet available; no synthetic screenshots are included.
+The screenshots are based on a real Home Assistant dashboard. Some device names and example data have been edited or replaced for presentation and privacy, but the dashboard structure, cards, views, and integration behavior shown are representative of the actual Device Lifecycle dashboard. Finnish screenshots are not yet available.

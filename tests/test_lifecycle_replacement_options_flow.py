@@ -79,6 +79,8 @@ async def test_lifecycle_happy_path_has_exactly_one_reload(
 async def test_lifecycle_noop_writes_and_reloads_nothing(
     hass: HomeAssistant,
 ) -> None:
+    """0.7.2 WP2 / F-2: same-state Lifecycle is a clean neutral no-op, not a
+    red validation error — it still writes and reloads nothing."""
     manager = _manager(hass)
     asset = await manager.async_create_manual_asset(name="Active")
     flow = await _select(hass, manager, asset["asset_uuid"])
@@ -95,8 +97,9 @@ async def test_lifecycle_noop_writes_and_reloads_nothing(
             }
         )
 
-    assert result["type"] is FlowResultType.FORM
-    assert result["errors"] == {"base": "lifecycle_no_change"}
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["description"] == "asset_lifecycle_unchanged"
+    assert not result.get("errors")
     assert manager._data == before
     manager._store.async_save.assert_not_awaited()
     schedule_reload.assert_not_called()

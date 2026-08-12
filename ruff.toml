@@ -1,0 +1,18 @@
+# Ruff configuration for CI (0.7.2 WP9 / 072-12).
+#
+# This file intentionally does NOT redefine rule selection or grandfather
+# any pre-existing findings. Ruff's own default rule resolution (as
+# already exercised, unmodified, throughout 0.7.2 development) is left
+# exactly as-is, so `ruff check .` enforces precisely the same checks
+# that were already run manually.
+#
+# Historical baseline debt (the 37 pre-existing findings from before
+# WP9) is grandfathered by a separate, counting-based regression gate —
+# see `ruff_baseline.json` and `.github/scripts/check_ruff_baseline.py` —
+# not by a `[lint.per-file-ignores]` allowlist here. A per-file-ignore
+# would silently permit an *unlimited* number of future findings for an
+# already-ignored rule in an already-listed file; the baseline gate caps
+# each (file, rule) pair at its exact current count, so growing existing
+# debt still fails CI while the debt itself is free to shrink.
+
+target-version = "py314"

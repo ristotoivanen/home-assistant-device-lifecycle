@@ -135,7 +135,8 @@ def _set(data: AssetStoreData, path: tuple[str, ...], value: Any) -> None:
         (("lifecycle_events", EVENT_ONE, "previous_event_uuid"), "bad", "lifecycle_chain_invalid"),
         (("lifecycle_events", EVENT_ONE, "effective_date"), 123, "invalid_lifecycle_effective_date"),
         (("lifecycle_events", EVENT_ONE, "effective_date"), "20260809", "invalid_lifecycle_effective_date"),
-        (("lifecycle_events", EVENT_ONE, "effective_date"), "2099-01-01", "lifecycle_date_in_future"),
+        # A future-dated effective_date is a business rule for new input, not a
+        # structural defect of already-persisted history (0.7.2 WP1 / F-1).
         (("lifecycle_events", EVENT_ONE, "recorded_at"), 123, "lifecycle_chain_invalid"),
         (("lifecycle_events", EVENT_ONE, "recorded_at"), "bad", "lifecycle_chain_invalid"),
         (("lifecycle_events", EVENT_ONE, "recorded_at"), "2026-08-09T10:00:00", "lifecycle_chain_invalid"),
@@ -258,7 +259,8 @@ def test_complete_lifecycle_chain_validation(
         (("replacement_records", REPLACEMENT_ONE, "reason"), "returned", "invalid_replacement_reason"),
         (("replacement_records", REPLACEMENT_ONE, "effective_date"), 123, "invalid_replacement_effective_date"),
         (("replacement_records", REPLACEMENT_ONE, "effective_date"), "20260809", "invalid_replacement_effective_date"),
-        (("replacement_records", REPLACEMENT_ONE, "effective_date"), "2099-01-01", "replacement_date_in_future"),
+        # A future-dated effective_date is a business rule for new input, not a
+        # structural defect of already-persisted history (0.7.2 WP1 / F-1).
         (("replacement_records", REPLACEMENT_ONE, "recorded_at"), "bad", "replacement_graph_invalid"),
         (("replacement_records", REPLACEMENT_ONE, "notes"), 123, "replacement_graph_invalid"),
         (("replacement_records", REPLACEMENT_ONE, "void_reason"), "should be null", "replacement_graph_invalid"),
@@ -564,11 +566,13 @@ async def test_history_oserror_is_structured_and_does_not_publish(
 async def test_future_history_date_uses_ha_local_calendar(
     hass: HomeAssistant,
 ) -> None:
-    """Both history APIs reject tomorrow according to Home Assistant local time."""
+    """Both history APIs reject tomorrow according to Home Assistant local time,
+    with no Store write for the rejected new input (0.7.2 WP1 input boundary)."""
     manager = _manager(hass)
     old = await manager.async_create_manual_asset(name="Old")
     new = await manager.async_create_manual_asset(name="New")
     tomorrow = (dt_util.now().date() + timedelta(days=1)).isoformat()
+    manager._store.async_save.reset_mock()
 
     with pytest.raises(AssetStoreError) as lifecycle:
         await manager.async_set_asset_lifecycle(
@@ -585,6 +589,61 @@ async def test_future_history_date_uses_ha_local_calendar(
 
     assert lifecycle.value.code == "lifecycle_date_in_future"
     assert replacement.value.code == "replacement_date_in_future"
+    manager._store.async_save.assert_not_awaited()
+
+
+def test_persisted_lifecycle_history_survives_clock_moving_backwards(
+    asset_store_data: AssetStoreData,
+) -> None:
+    """0.7.2 F-1: a persisted Lifecycle effective_date must stay valid when HA's
+    current date moves behind it; other chain invariants remain enforced."""
+    data = _valid_lifecycle(asset_store_data)
+    effective = date.fromisoformat(data["lifecycle_events"][EVENT_ONE]["effective_date"])
+    yesterday = effective - timedelta(days=1)
+    backdated_now = dt_util.now().replace(
+        year=yesterday.year, month=yesterday.month, day=yesterday.day
+    )
+
+    with patch(
+        "custom_components.device_lifecycle.storage.dt_util.now",
+        return_value=backdated_now,
+    ):
+        _validate_store_data(data)  # must not raise lifecycle_date_in_future
+
+        broken = deepcopy(data)
+        broken["lifecycle_events"][EVENT_ONE]["from_status"] = "lost"
+        with pytest.raises(AssetStoreError) as raised:
+            _validate_store_data(broken)
+        assert raised.value.code == "lifecycle_chain_invalid"
+
+
+def test_persisted_replacement_history_survives_clock_moving_backwards(
+    asset_store_data: AssetStoreData,
+) -> None:
+    """0.7.2 F-1: a persisted Replacement effective_date must stay valid when HA's
+    current date moves behind it; graph invariants remain enforced."""
+    data = _valid_replacement(asset_store_data)
+    effective = date.fromisoformat(
+        data["replacement_records"][REPLACEMENT_ONE]["effective_date"]
+    )
+    yesterday = effective - timedelta(days=1)
+    backdated_now = dt_util.now().replace(
+        year=yesterday.year, month=yesterday.month, day=yesterday.day
+    )
+
+    with patch(
+        "custom_components.device_lifecycle.storage.dt_util.now",
+        return_value=backdated_now,
+    ):
+        _validate_store_data(data)  # must not raise replacement_date_in_future
+
+        broken = deepcopy(data)
+        broken["replacement_records"][REPLACEMENT_ONE]["successor_asset_uuid"] = (
+            ASSET_UUID
+        )
+        with pytest.raises(AssetStoreError) as raised:
+            _validate_store_data(broken)
+        assert raised.value.code == "replacement_self_reference"
 
 
 def test_low_level_normalizers_reject_unsafe_values_and_preserve_legacy_warranty() -> None:

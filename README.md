@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <a href="#whats-new-in-071">What's new</a> ·
+  <a href="#whats-new-in-072">What's new</a> ·
   <a href="#installation">Installation</a> ·
   <a href="#quick-add">Quick Add</a> ·
   <a href="#optional-dashboard">Dashboard</a> ·
@@ -38,6 +38,16 @@ Every Asset has two permanent identifiers:
 Asset IDs are allocated monotonically and never recycled. The UUID and Asset ID remain unchanged when the Purchase, deployment information, or linked Home Assistant device changes.
 
 Asset Core uses Home Assistant's private, atomic, versioned storage. Its invariants and Store 3.1 schema are documented in [`ARCHITECTURE.md`](ARCHITECTURE.md).
+
+## What's new in 0.7.2
+
+Device Lifecycle 0.7.2 is a reliability and correctness release with no new user-facing features and no Store or ConfigEntry migration.
+
+A persisted Lifecycle or Replacement date now loads correctly even if Home Assistant's system clock later moves behind it; a newly entered Lifecycle or Replacement date is still rejected if it is in the future. Canonical no-op changes no longer trigger an unnecessary reload: resubmitting an Asset's metadata, Purchase, Deployment, Lifecycle status, or primary Home Assistant device without an actual change is now a clean no-op, and selecting the Lifecycle status an Asset already has is a neutral confirmation rather than an error. Metadata fields you have not touched keep their existing Home Assistant or Purchase provenance instead of silently becoming user-owned on resubmission.
+
+Opening Asset management while the integration is not fully loaded now aborts cleanly instead of failing unexpectedly. Reconfiguring a Runtime tracker can retain its existing source entity even while that entity is temporarily unavailable, without allowing an unrelated missing entity to be selected. Purchase and Runtime ConfigSubentry create, edit, and remove behavior has been verified against Home Assistant 2026.8.x, including stable Runtime entity identity across removal and recreation. Selecting an Asset's current primary Home Assistant device is now also a clean no-op, while promoting a related device or replacing the primary device continues to work as before. Quick Add's reload-on-confirmation behavior is unchanged and remains intentional, so a new Asset's Home Assistant exposure is still completed reliably even after a temporarily ambiguous Store write.
+
+This release also adds CI and quality hardening — a Ruff regression baseline gate, a branch-coverage gate, and a consolidated quality workflow — none of which change any user-facing behavior. Store remains **3.1** and ConfigEntry remains version **4**.
 
 ## What's new in 0.7.1
 
@@ -68,11 +78,11 @@ If the repository is not already available in your HACS instance, add it manuall
 
 Copy `custom_components/device_lifecycle/` into `/config/custom_components/device_lifecycle/`, restart Home Assistant, and add the integration from **Settings > Devices & services**.
 
-Device Lifecycle 0.7.1 requires Home Assistant 2026.8.0 or newer. Review the [upgrade notes](#upgrade-notes) and create a Home Assistant backup before any upgrade that changes the Store schema.
+Device Lifecycle 0.7.2 requires Home Assistant 2026.8.0 or newer. Review the [upgrade notes](#upgrade-notes) and create a Home Assistant backup before any upgrade that changes the Store schema.
 
 ## Optional dashboard
 
-Device Lifecycle 0.7.1 includes an optional native Home Assistant dashboard in [English](dashboard/device-lifecycle-dashboard.en.yaml) and [Finnish](dashboard/device-lifecycle-dashboard.fi.yaml). It uses Sections views and Markdown cards only; no custom cards or additional HACS dependencies are required, and the integration itself does not depend on the dashboard.
+Device Lifecycle 0.7.2 includes an optional native Home Assistant dashboard in [English](dashboard/device-lifecycle-dashboard.en.yaml) and [Finnish](dashboard/device-lifecycle-dashboard.fi.yaml). It uses Sections views and Markdown cards only; no custom cards or additional HACS dependencies are required, and the integration itself does not depend on the dashboard.
 
 The four views keep daily attention, inventory, acquisition history, and diagnostics separate:
 
@@ -83,9 +93,9 @@ The four views keep daily attention, inventory, acquisition history, and diagnos
 
 Lifecycle controls inventory grouping: `active` is Active, `unknown` is Review, and `retired`, `disposed`, or `lost` is Archived. Deployment remains independent, so `not_deployed` alone never archives an Asset. Canonical comparisons remain English machine states in both dashboard languages.
 
-![Device Lifecycle Overview dashboard](dashboard/screenshots/en/overview.png)
+![Device Lifecycle dashboard views](dashboard/screenshots/en/dashboard-overview-grid.png)
 
-See the concise [dashboard installation and entity notes](dashboard/README.md) for import instructions and all four real dashboard screenshots.
+The image above combines the four available dashboard views: Overview, Assets, Purchases, and Technical. See the concise [dashboard installation and entity notes](dashboard/README.md) for import instructions and all four dashboard views.
 
 ## What's new in 0.7.0
 
@@ -308,7 +318,7 @@ Existing relationships to historical or no-longer-configured Purchases are prese
 
 ## Storage and migration impact
 
-0.7.1 continues to use Store 3.1 and ConfigEntry version 4, with no schema migration. Store 3.1 contains `asset.lifecycle`, top-level `lifecycle_events`, and top-level `replacement_records`. It does not persist Asset Device IDs, Entity Registry IDs, exposure state, workflow drafts, or alternate identities.
+0.7.2 continues to use Store 3.1 and ConfigEntry version 4, with no schema migration. Store 3.1 contains `asset.lifecycle`, top-level `lifecycle_events`, and top-level `replacement_records`. It does not persist Asset Device IDs, Entity Registry IDs, exposure state, workflow drafts, or alternate identities.
 
 ## Warranty
 
@@ -319,7 +329,7 @@ Existing Purchase workflows support these warranty modes:
 - 2 years
 - Manual
 
-For 1- and 2-year warranties, the warranty end date is calculated from the Purchase date with calendar-year and leap-day handling. Quick Add can apply those modes only when a configured Purchase with a valid Purchase date is selected, or use a manual warranty date without a Purchase. It revalidates the Purchase date immediately before commit. Existing management behavior remains unchanged; 0.7.1 does not add a general Asset-level warranty editor.
+For 1- and 2-year warranties, the warranty end date is calculated from the Purchase date with calendar-year and leap-day handling. Quick Add can apply those modes only when a configured Purchase with a valid Purchase date is selected, or use a manual warranty date without a Purchase. It revalidates the Purchase date immediately before commit. Existing management behavior remains unchanged; 0.7.2 does not add a general Asset-level warranty editor.
 
 ## Runtime tracking
 
@@ -429,7 +439,7 @@ Removing a Runtime tracking entry removes only that Runtime sensor and active co
 
 Removing a Device Lifecycle Asset Device from Home Assistant does not delete or purge its canonical Asset. The projection can be recreated on reload.
 
-Device Lifecycle 0.7.1 does not provide Asset deletion/purge/merge, Runtime reset/manual editing, bulk Asset creation, automatic discovery or stale-device rematching, Purchase creation inside Quick Add, Maintenance, RMA cases, Documents, export/import, future replacement scheduling, automatic inheritance/transfer between replacement Assets, a lifecycle-history UI, or full replacement-history attributes. Lifecycle and replacement history remain canonical in Store 3.1 even though Home Assistant exposes only current state.
+Device Lifecycle 0.7.2 does not provide Asset deletion/purge/merge, Runtime reset/manual editing, bulk Asset creation, automatic discovery or stale-device rematching, Purchase creation inside Quick Add, Maintenance, RMA cases, Documents, export/import, future replacement scheduling, automatic inheritance/transfer between replacement Assets, a lifecycle-history UI, or full replacement-history attributes. Lifecycle and replacement history remain canonical in Store 3.1 even though Home Assistant exposes only current state.
 
 ## Documentation
 
@@ -453,7 +463,8 @@ For reproducible problems, open a [GitHub issue](https://github.com/ristotoivane
 - **0.6.x — Asset Exposure / UI**
 - **0.7.0 — Lifecycle & Replacement**
 - **0.7.1 — Quick Asset Entry & UX**
-- **Possible 0.7.2 — Lifecycle UX/history improvements, if justified**
+- **0.7.2 — Reliability, correctness & CI hardening**
+- **0.7.3 — Asset Management UX / navigation**
 - **0.8.x — Maintenance**
 - **0.9.x — Portability & Hardening**
 - **Future — Documents**

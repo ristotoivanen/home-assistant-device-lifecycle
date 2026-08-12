@@ -117,6 +117,7 @@ from .storage import (
     QuickAssetCreateRequest,
     add_calendar_years,
     home_assistant_asset_metadata,
+    normalize_asset_metadata_text,
 )
 
 MAIN_UNIQUE_ID = "device_lifecycle_main"
@@ -491,17 +492,30 @@ def _runtime_source_schema(
     hass: HomeAssistant,
     runtime_mode: str,
     defaults: dict[str, Any] | None = None,
+    *,
+    retained_legacy_source: str | None = None,
 ) -> vol.Schema:
-    """Build the second runtime step with only relevant source settings."""
+    """Build the second runtime step with only relevant source settings.
+
+    ``retained_legacy_source`` is reconfigure-only (0.7.2 WP4 / 072-06): when
+    set, it is the exact already-persisted source entity_id, kept selectable
+    and as the default even though it currently has no HA state, so an
+    existing Runtime tracker stays editable without forcing a migration to a
+    different source. Create flows never pass it, so new trackers gain no
+    allowance to target a missing entity.
+    """
     defaults = dict(defaults or {})
     fields: dict[Any, Any] = {}
 
+    candidates = _runtime_source_candidates(hass, runtime_mode)
+    if retained_legacy_source and retained_legacy_source not in candidates:
+        candidates = sorted([*candidates, retained_legacy_source])
+
     source_key = vol.Required(CONF_SOURCE_ENTITY_ID)
     default_source = str(defaults.get(CONF_SOURCE_ENTITY_ID) or "")
-    if default_source and _is_valid_runtime_source(
-        hass,
-        default_source,
-        runtime_mode,
+    if default_source and (
+        _is_valid_runtime_source(hass, default_source, runtime_mode)
+        or default_source == retained_legacy_source
     ):
         source_key = vol.Required(
             CONF_SOURCE_ENTITY_ID,
@@ -509,12 +523,7 @@ def _runtime_source_schema(
         )
 
     fields[source_key] = selector.EntitySelector(
-        selector.EntitySelectorConfig(
-            include_entities=_runtime_source_candidates(
-                hass,
-                runtime_mode,
-            )
-        )
+        selector.EntitySelectorConfig(include_entities=candidates)
     )
 
     if runtime_mode == RUNTIME_MODE_POWER:
@@ -803,6 +812,29 @@ def _prepare_runtime_data(
     return data, None
 
 
+def _is_retained_legacy_runtime_source(
+    hass: HomeAssistant,
+    subentry_data: dict[str, Any],
+    runtime_mode: str,
+    source_entity_id: str,
+) -> bool:
+    """Return whether a source is the exact already-persisted value, now missing.
+
+    Reconfigure-only (0.7.2 WP4 / 072-06): lets an already-saved Runtime
+    source stay selectable and submittable even though it currently has no
+    HA state, without weakening validation for any other source — a
+    different entity_id, or the same entity_id under a changed runtime mode,
+    still goes through full normal validation.
+    """
+    if not source_entity_id:
+        return False
+    if source_entity_id != str(subentry_data.get(CONF_SOURCE_ENTITY_ID) or ""):
+        return False
+    if runtime_mode != str(subentry_data.get(CONF_RUNTIME_MODE) or ""):
+        return False
+    return hass.states.get(source_entity_id) is None
+
+
 def _runtime_source_error(
     hass: HomeAssistant,
     source_entity_id: str,
@@ -1007,9 +1039,34 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             )
         return choices
 
-    def _metadata_input(self, user_input: dict[str, Any]) -> dict[str, Any]:
-        """Return exactly the editable physical metadata fields."""
-        return {field: user_input.get(field) for field in ASSET_METADATA_FIELDS}
+    def _changed_metadata_fields(
+        self,
+        asset: AssetData,
+        user_input: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Return only the metadata fields whose canonical value actually changed.
+
+        The editor always echoes every field's current value back into the
+        form (`add_suggested_values_to_schema` prefills defaults from the
+        persisted Asset), so an unmodified resubmission must not be treated
+        as an explicit edit (0.7.2 WP5 / 072-07): a field is included only
+        when its submitted canonical value differs from the canonical
+        persisted value, letting the manager's `field_sources[field] = user`
+        rule apply only to fields the user actually changed. Canonicalizing
+        the submission with the exact same helper the manager itself uses
+        means an invalid submission (for example, clearing the required
+        name) still raises the identical error as before.
+        """
+        changed: dict[str, Any] = {}
+        for field in ASSET_METADATA_FIELDS:
+            submitted = normalize_asset_metadata_text(
+                user_input.get(field),
+                field,
+                required=field == CONF_ASSET_NAME,
+            )
+            if submitted != asset.get(field):
+                changed[field] = submitted
+        return changed
 
     def _storage_error_key(self, err: Exception) -> str:
         """Map storage failures to safe flow errors without fabricating data."""
@@ -1197,8 +1254,16 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         self,
         asset: AssetData,
         description: str,
+        *,
+        reload: bool = True,
     ) -> ConfigFlowResult:
-        """Finish and reload exposure without changing config-entry options."""
+        """Finish, reloading exposure only when canonical Store data changed.
+
+        `reload` defaults to True so every pre-existing call site keeps its
+        established always-reload behavior. Callers that already know from the
+        manager whether their mutation was a canonical no-op (0.7.2 WP2 /
+        F-2/F-3) pass `reload=False` to skip the redundant reload.
+        """
         result = self.async_create_entry(
             title="",
             data=dict(self.config_entry.options),
@@ -1208,7 +1273,8 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 "asset_name": asset["name"],
             },
         )
-        self.hass.config_entries.async_schedule_reload(self.config_entry.entry_id)
+        if reload:
+            self.hass.config_entries.async_schedule_reload(self.config_entry.entry_id)
         return result
 
     def _finish_quick_add(self, asset: AssetData) -> ConfigFlowResult:
@@ -1769,7 +1835,18 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         self,
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
-        """Show the extensible Asset management entry menu."""
+        """Show the extensible Asset management entry menu.
+
+        Aborts cleanly if the parent entry's Asset Store manager is not yet
+        available (0.7.2 WP3 / 072-05): the entry may not be loaded, may have
+        failed setup, or may be mid-reload. This is checked once, here, at the
+        earliest OptionsFlow entry point, rather than defended against
+        independently in every manager-dependent step below.
+        """
+        if not isinstance(
+            getattr(self.config_entry, "runtime_data", None), AssetStoreManager
+        ):
+            return self.async_abort(reason="entry_not_loaded")
         return self.async_show_menu(
             step_id="init",
             menu_options=["quick_add", "manage_asset"],
@@ -2310,14 +2387,17 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         errors: dict[str, str] = {}
         if user_input is not None:
             try:
-                asset = await self._manager.async_update_asset_metadata(
+                changed_fields = self._changed_metadata_fields(asset, user_input)
+                asset, changed = await self._manager.async_update_asset_metadata_reporting(
                     asset["asset_uuid"],
-                    **self._metadata_input(user_input),
+                    **changed_fields,
                 )
             except (AssetStoreError, OSError) as err:
                 errors["base"] = self._storage_error_key(err)
             else:
-                return self._finish_asset_action(asset, "asset_updated")
+                return self._finish_asset_action(
+                    asset, "asset_updated", reload=changed
+                )
 
         defaults = {
             field: asset.get(field) or ""
@@ -2369,7 +2449,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 errors["base"] = "invalid_purchase"
             else:
                 try:
-                    asset = await self._manager.async_set_asset_purchase(
+                    asset, changed = await self._manager.async_set_asset_purchase_reporting(
                         asset["asset_uuid"],
                         None if selected == NO_PURCHASE_SELECTION else selected,
                     )
@@ -2379,6 +2459,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                     return self._finish_asset_action(
                         asset,
                         "asset_purchase_updated",
+                        reload=changed,
                     )
 
         return self.async_show_form(
@@ -2460,10 +2541,25 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 errors={"base": "invalid_lifecycle_status"},
             )
         if status == asset["lifecycle"]["status"]:
-            return self._show_asset_lifecycle_form(
-                asset,
-                user_input=user_input,
-                errors={"base": "lifecycle_no_change"},
+            # A same-state request is a clean neutral no-op, not a validation
+            # error (0.7.2 WP2 / F-2): the manager is still the authority on
+            # whether anything actually changed, so it is asked rather than
+            # assumed here.
+            try:
+                asset, changed = await self._manager.async_set_asset_lifecycle_reporting(
+                    asset["asset_uuid"],
+                    status,
+                    effective_date=user_input.get(CONF_EFFECTIVE_DATE),
+                    notes=user_input.get(CONF_NOTES),
+                )
+            except (AssetStoreError, OSError) as err:
+                return self._show_asset_lifecycle_form(
+                    asset,
+                    user_input=user_input,
+                    errors={"base": self._storage_error_key(err)},
+                )
+            return self._finish_asset_action(
+                asset, "asset_lifecycle_unchanged", reload=changed
             )
         if status == LIFECYCLE_STATUS_DISPOSED:
             self._pending_lifecycle_update = {
@@ -2475,7 +2571,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             return await self.async_step_confirm_disposed()
 
         try:
-            asset = await self._manager.async_set_asset_lifecycle(
+            asset, changed = await self._manager.async_set_asset_lifecycle_reporting(
                 asset["asset_uuid"],
                 status,
                 effective_date=user_input.get(CONF_EFFECTIVE_DATE),
@@ -2487,7 +2583,9 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 user_input=user_input,
                 errors={"base": self._storage_error_key(err)},
             )
-        return self._finish_asset_action(asset, "asset_lifecycle_updated")
+        return self._finish_asset_action(
+            asset, "asset_lifecycle_updated", reload=changed
+        )
 
     async def async_step_confirm_disposed(
         self,
@@ -2508,7 +2606,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 errors["base"] = "confirmation_required"
             else:
                 try:
-                    asset = await self._manager.async_set_asset_lifecycle(
+                    asset, changed = await self._manager.async_set_asset_lifecycle_reporting(
                         asset["asset_uuid"],
                         pending["status"],
                         effective_date=pending["effective_date"],
@@ -2521,6 +2619,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                     return self._finish_asset_action(
                         asset,
                         "asset_lifecycle_updated",
+                        reload=changed,
                     )
         return self.async_show_form(
             step_id="confirm_disposed",
@@ -3047,9 +3146,10 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             }
             return await self.async_step_confirm_not_deployed()
 
+        changed = False
         try:
             if updates:
-                asset = await self._manager.async_set_asset_deployment(
+                asset, changed = await self._manager.async_set_asset_deployment_reporting(
                     asset["asset_uuid"],
                     **updates,
                 )
@@ -3059,7 +3159,9 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 user_input=user_input,
                 errors={"base": self._storage_error_key(err)},
             )
-        return self._finish_asset_action(asset, "asset_deployment_updated")
+        return self._finish_asset_action(
+            asset, "asset_deployment_updated", reload=changed
+        )
 
     async def async_step_confirm_not_deployed(
         self,
@@ -3081,7 +3183,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 del self._pending_deployment_update
                 return await self.async_step_asset_deployment()
             try:
-                asset = await self._manager.async_set_asset_deployment(
+                asset, changed = await self._manager.async_set_asset_deployment_reporting(
                     asset["asset_uuid"],
                     **pending["updates"],
                 )
@@ -3092,6 +3194,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 return self._finish_asset_action(
                     asset,
                     "asset_deployment_updated",
+                    reload=changed,
                 )
 
         return self.async_show_form(
@@ -3220,7 +3323,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                     errors={"base": dependency_error},
                 )
             try:
-                asset = await self._manager.async_unlink_asset_device(
+                asset, changed = await self._manager.async_unlink_asset_device_reporting(
                     asset["asset_uuid"],
                     expected_device_id=current_device_id,
                 )
@@ -3233,6 +3336,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             return self._finish_asset_action(
                 asset,
                 "asset_ha_relationship_updated",
+                reload=changed,
             )
 
         target_device_id = str(user_input.get(CONF_DEVICE_ID) or "")
@@ -3282,7 +3386,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             )
 
         try:
-            asset = await self._manager.async_link_asset_device(
+            asset, changed = await self._manager.async_link_asset_device_reporting(
                 asset["asset_uuid"],
                 target_device_id,
                 replace=current_device_id is not None,
@@ -3301,6 +3405,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         return self._finish_asset_action(
             asset,
             "asset_ha_relationship_updated",
+            reload=changed,
         )
 
     def _show_add_related_device_form(
@@ -3365,7 +3470,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             )
 
         try:
-            asset = await self._manager.async_add_related_device(
+            asset, changed = await self._manager.async_add_related_device_reporting(
                 asset["asset_uuid"],
                 target_device_id,
             )
@@ -3375,7 +3480,9 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 user_input=user_input,
                 errors={"base": self._storage_error_key(err)},
             )
-        return self._finish_asset_action(asset, "asset_related_device_added")
+        return self._finish_asset_action(
+            asset, "asset_related_device_added", reload=changed
+        )
 
     def _show_remove_related_device_form(
         self,
@@ -3739,15 +3846,30 @@ class RuntimeSubentryFlow(ConfigSubentryFlow):
         saved_defaults = dict(context.get("defaults", {}))
         errors: dict[str, str] = {}
 
+        persisted_source = str(subentry.data.get(CONF_SOURCE_ENTITY_ID) or "")
+        retained_legacy_source = (
+            persisted_source
+            if _is_retained_legacy_runtime_source(
+                self.hass,
+                subentry.data,
+                runtime_mode,
+                persisted_source,
+            )
+            else None
+        )
+
         if user_input is not None:
             source_entity_id = str(
                 user_input.get(CONF_SOURCE_ENTITY_ID) or ""
             )
+            retained = source_entity_id == retained_legacy_source
 
-            if error := _runtime_source_error(
-                self.hass,
-                source_entity_id,
-                runtime_mode,
+            if not retained and (
+                error := _runtime_source_error(
+                    self.hass,
+                    source_entity_id,
+                    runtime_mode,
+                )
             ):
                 errors["base"] = error
             else:
@@ -3791,6 +3913,7 @@ class RuntimeSubentryFlow(ConfigSubentryFlow):
                 self.hass,
                 runtime_mode,
                 defaults,
+                retained_legacy_source=retained_legacy_source,
             ),
             errors=errors,
         )
