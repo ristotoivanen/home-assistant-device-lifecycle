@@ -7,10 +7,15 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import UUID
 
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
+from homeassistant.data_entry_flow import FlowResultType
 import pytest
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.device_lifecycle.config_flow import NO_PURCHASE_SELECTION
 from custom_components.device_lifecycle.const import (
+    CONF_ASSET_UUID,
     CONF_CURRENCY,
     CONF_DEVICE_IDS,
     CONF_NOTES,
@@ -21,10 +26,15 @@ from custom_components.device_lifecycle.const import (
     CONF_RECEIPT_REFERENCE,
     CONF_RECEIPT_URL,
     CONF_SELLER,
+    CONFIG_ENTRY_VERSION,
+    DOMAIN,
     SUBENTRY_TYPE_PURCHASE,
 )
 from custom_components.device_lifecycle.models import AssetStoreData
 from custom_components.device_lifecycle.storage import (
+    STORAGE_KEY,
+    STORAGE_MINOR_VERSION,
+    STORAGE_VERSION,
     AssetStoreError,
     AssetStoreManager,
 )
@@ -35,6 +45,7 @@ from .conftest import (
     PURCHASE_SUBENTRY_ID,
     PURCHASE_UUID,
 )
+from .test_options_flow import _options_flow
 
 MANUAL_ASSET_UUID = "33333333-3333-4333-8333-333333333333"
 SECOND_PURCHASE_UUID = "44444444-4444-4444-8444-444444444444"
@@ -76,6 +87,24 @@ def _manual_purchase_data(asset_store_data: AssetStoreData) -> AssetStoreData:
     data = deepcopy(asset_store_data)
     data["assets"] = {}
     data["purchases"][PURCHASE_UUID]["asset_uuids"] = []
+    return data
+
+
+def _data_with_second_purchase(
+    asset_store_data: AssetStoreData,
+) -> AssetStoreData:
+    """Return the store with a second configured Purchase to relink to."""
+    data = deepcopy(asset_store_data)
+    second = deepcopy(data["purchases"][PURCHASE_UUID])
+    second.update(
+        {
+            "purchase_uuid": SECOND_PURCHASE_UUID,
+            "config_subentry_id": SECOND_PURCHASE_SUBENTRY_ID,
+            "name": "Second purchase",
+            "asset_uuids": [],
+        }
+    )
+    data["purchases"][SECOND_PURCHASE_UUID] = second
     return data
 
 
@@ -326,3 +355,140 @@ async def test_empty_purchase_allocates_only_purchase_until_device_is_added(
     assert asset["installed_date"] is None
     assert manager._data["next_asset_number"] == 2
     assert manager.purchase(PURCHASE_UUID)["asset_uuids"] == [ASSET_UUID]
+
+
+async def test_user_relink_to_second_purchase_blocks_later_reconciliation(
+    hass: HomeAssistant,
+    asset_store_data: AssetStoreData,
+    purchase_subentry_data: dict,
+) -> None:
+    """0.7.4 G2 scenario A, characterizing 0.7.3.
+
+    A device-backed Asset is moved to another Purchase through the real
+    OptionsFlow. The legacy Purchase subentry still lists the same primary
+    HA device, because the flow never rewrites it, so the next
+    reconciliation sees the user-owned link as a conflict.
+    """
+    manager = _manager(hass, _data_with_second_purchase(asset_store_data))
+    flow, _flow_entry = _options_flow(hass, manager)
+    await flow.async_step_manage_asset({CONF_ASSET_UUID: ASSET_UUID})
+
+    relinked = await flow.async_step_change_asset_purchase(
+        {CONF_PURCHASE_UUID: SECOND_PURCHASE_UUID}
+    )
+
+    assert relinked["type"] is FlowResultType.CREATE_ENTRY
+    asset = manager.asset(ASSET_UUID)
+    assert asset["purchase_uuid"] == SECOND_PURCHASE_UUID
+    assert asset["field_sources"]["purchase_uuid"] == "user"
+    assert manager.purchase(PURCHASE_UUID)["asset_uuids"] == []
+    assert manager.purchase(SECOND_PURCHASE_UUID)["asset_uuids"] == [ASSET_UUID]
+
+    legacy = _purchase_subentry(deepcopy(purchase_subentry_data))
+    assert legacy.data[CONF_DEVICE_IDS] == [DEVICE_ID]
+    before = deepcopy(manager._data)
+    manager._store.async_save.reset_mock()
+
+    with pytest.raises(AssetStoreError, match="user-managed relationship"):
+        await manager.async_reconcile_entry(_entry(legacy))
+
+    assert manager._data == before
+    manager._store.async_save.assert_not_awaited()
+
+
+async def test_user_cleared_purchase_blocks_reconciliation_of_same_device(
+    hass: HomeAssistant,
+    asset_store_data: AssetStoreData,
+    purchase_subentry_data: dict,
+) -> None:
+    """0.7.4 G2 scenario B, characterizing 0.7.3.
+
+    The Asset reaches "no Purchase" through legacy device removal, which is
+    the supported path, and the user then confirms that state explicitly.
+    Re-adding the same primary HA device to a Purchase subentry is the only
+    difference from the purchase-owned case, which restores the link
+    normally, yet here reconciliation rejects it.
+    """
+    manager = _manager(hass, asset_store_data)
+    raw = deepcopy(purchase_subentry_data)
+    raw[CONF_DEVICE_IDS] = []
+    subentry = _purchase_subentry(raw)
+    entry = _entry(subentry)
+
+    await manager.async_reconcile_entry(entry)
+
+    removed = manager.asset(ASSET_UUID)
+    assert removed["purchase_uuid"] is None
+    assert removed["field_sources"]["purchase_uuid"] == "purchase"
+
+    flow, _flow_entry = _options_flow(hass, manager)
+    await flow.async_step_manage_asset({CONF_ASSET_UUID: ASSET_UUID})
+    cleared_result = await flow.async_step_change_asset_purchase(
+        {CONF_PURCHASE_UUID: NO_PURCHASE_SELECTION}
+    )
+
+    assert cleared_result["type"] is FlowResultType.CREATE_ENTRY
+    cleared = manager.asset(ASSET_UUID)
+    assert cleared["purchase_uuid"] is None
+    assert cleared["field_sources"]["purchase_uuid"] == "user"
+
+    subentry.data[CONF_DEVICE_IDS] = [DEVICE_ID]
+    before = deepcopy(manager._data)
+    manager._store.async_save.reset_mock()
+
+    with pytest.raises(AssetStoreError, match="user-managed relationship"):
+        await manager.async_reconcile_entry(entry)
+
+    assert manager._data == before
+    manager._store.async_save.assert_not_awaited()
+
+
+async def test_user_relink_conflict_fails_real_config_entry_setup(
+    hass: HomeAssistant,
+    hass_storage: dict,
+    asset_store_data: AssetStoreData,
+    purchase_subentry_data: dict,
+) -> None:
+    """0.7.4 G2 scenario C, characterizing 0.7.3.
+
+    The scenario A conflict is not confined to storage: reconciliation runs
+    during `async_setup_entry`, so the persisted state leaves the whole
+    integration unloadable rather than degrading one relationship.
+    """
+    data = _data_with_second_purchase(asset_store_data)
+    asset = data["assets"][ASSET_UUID]
+    asset["purchase_uuid"] = SECOND_PURCHASE_UUID
+    asset["field_sources"]["purchase_uuid"] = "user"
+    data["purchases"][PURCHASE_UUID]["asset_uuids"] = []
+    data["purchases"][SECOND_PURCHASE_UUID]["asset_uuids"] = [ASSET_UUID]
+    hass_storage[STORAGE_KEY] = {
+        "version": STORAGE_VERSION,
+        "minor_version": STORAGE_MINOR_VERSION,
+        "key": STORAGE_KEY,
+        "data": data,
+    }
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Device Lifecycle",
+        unique_id="device_lifecycle_main",
+        version=CONFIG_ENTRY_VERSION,
+        data={},
+        options={},
+        subentries_data=(
+            {
+                "data": deepcopy(purchase_subentry_data),
+                "subentry_type": SUBENTRY_TYPE_PURCHASE,
+                "title": "Workshop equipment",
+                "unique_id": None,
+            },
+        ),
+    )
+    entry.add_to_hass(hass)
+
+    assert await hass.config_entries.async_setup(entry.entry_id) is False
+    await hass.async_block_till_done()
+
+    assert entry.state is ConfigEntryState.SETUP_ERROR
+    assert not hasattr(entry, "runtime_data")
+    stored_asset = hass_storage[STORAGE_KEY]["data"]["assets"][ASSET_UUID]
+    assert stored_asset["purchase_uuid"] == SECOND_PURCHASE_UUID
