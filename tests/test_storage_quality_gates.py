@@ -8,7 +8,7 @@ from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import CoreState, HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
 import pytest
@@ -775,6 +775,36 @@ def test_complete_store_validation_corruption_matrix(
 
     with pytest.raises(AssetStoreError):
         _validate_store_data(data)
+
+
+async def test_save_while_stopping_forces_the_deferred_write_before_verifying(
+    hass: HomeAssistant,
+    hass_storage: dict[str, Any],
+    asset_store_data: AssetStoreData,
+) -> None:
+    """A save during shutdown still reaches disk before it is verified.
+
+    Home Assistant's Store defers writes to its final-write listener once
+    the core is stopping. Before 0.7.3 this path was only reached by
+    nondeterministic background reloads leaking out of OptionsFlow tests.
+    """
+    store = DeviceLifecycleStore(hass)
+    hass.set_state(CoreState.stopping)
+    try:
+        with patch(
+            "custom_components.device_lifecycle.storage.json_util.load_json",
+            side_effect=lambda _path: deepcopy(hass_storage.get(STORAGE_KEY, {})),
+        ):
+            await store.async_save(asset_store_data)
+    finally:
+        hass.set_state(CoreState.running)
+
+    assert hass_storage[STORAGE_KEY] == {
+        "version": STORAGE_VERSION,
+        "minor_version": STORAGE_MINOR_VERSION,
+        "key": STORAGE_KEY,
+        "data": asset_store_data,
+    }
 
 
 async def test_direct_persisted_snapshot_envelope_recovery_matrix(
