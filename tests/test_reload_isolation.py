@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pytest
 from homeassistant.config_entries import ConfigEntryState, UnknownEntry
@@ -58,7 +58,44 @@ async def test_intercept_keeps_the_known_entry_contract(
     with pytest.raises(UnknownEntry):
         hass.config_entries.async_schedule_reload("missing-entry-id")
 
+    with pytest.raises(UnknownEntry):
+        await hass.config_entries.async_reload("missing-entry-id")
+
     schedule_reload.assert_not_called()
+
+
+async def test_awaited_reload_is_recorded_but_never_executed(
+    hass: HomeAssistant,
+    schedule_reload: Mock,
+) -> None:
+    """The awaited mechanism reports success without an unload/setup cycle."""
+    manager = _manager(hass)
+    _flow, entry = _options_flow(hass, manager)
+
+    assert await hass.config_entries.async_reload(entry.entry_id) is True
+    await hass.async_block_till_done()
+
+    assert entry.state is ConfigEntryState.NOT_LOADED
+    assert entry.runtime_data is manager
+    schedule_reload.assert_called_once_with(entry.entry_id)
+
+
+async def test_both_reload_mechanisms_share_one_recorder(
+    hass: HomeAssistant,
+    schedule_reload: Mock,
+) -> None:
+    """DS-6 asserts that a reload happened, never which mechanism ran."""
+    manager = _manager(hass)
+    _flow, entry = _options_flow(hass, manager)
+
+    hass.config_entries.async_schedule_reload(entry.entry_id)
+    await hass.config_entries.async_reload(entry.entry_id)
+
+    assert schedule_reload.call_count == 2
+    assert schedule_reload.call_args_list == [
+        call(entry.entry_id),
+        call(entry.entry_id),
+    ]
 
 
 @pytest.mark.real_reload
@@ -68,8 +105,8 @@ async def test_real_reload_opt_out_executes_home_assistant_reload(
 ) -> None:
     """The opt-out runs the real reload that replaces `runtime_data`.
 
-    This is the background reload that previously raced later steps of
-    isolated OptionsFlow tests.
+    Both mechanisms must be Home Assistant's own under the opt-out, since
+    the awaited one is what an asset mutation now continues through.
     """
     manager, _asset_uuid, entry = await _rename_asset_through_options_flow(hass)
 
@@ -79,3 +116,11 @@ async def test_real_reload_opt_out_executes_home_assistant_reload(
     assert entry.state is ConfigEntryState.LOADED
     assert isinstance(entry.runtime_data, AssetStoreManager)
     assert entry.runtime_data is not manager
+
+    scheduled_manager = entry.runtime_data
+
+    assert await hass.config_entries.async_reload(entry.entry_id) is True
+
+    assert entry.state is ConfigEntryState.LOADED
+    assert isinstance(entry.runtime_data, AssetStoreManager)
+    assert entry.runtime_data is not scheduled_manager

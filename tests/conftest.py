@@ -78,17 +78,24 @@ def schedule_reload(request: pytest.FixtureRequest) -> Iterator[Mock | None]:
     """Record ConfigEntry reload requests without executing a real reload.
 
     OptionsFlow tests drive a flow directly against a MockConfigEntry whose
-    `runtime_data` is a test-owned manager. A real `async_schedule_reload`
-    starts a fire-and-forget background task that sets the integration up
-    again and replaces `entry.runtime_data` with a manager loaded from the
-    (empty) test Store, racing any later step of the same test (0.7.2 CI:
-    `asset_missing` instead of `related_device_is_primary`).
+    `runtime_data` is a test-owned manager. A real reload sets the
+    integration up again and replaces `entry.runtime_data` with a manager
+    loaded from the (empty) test Store, racing any later step of the same
+    test (0.7.2 CI: `asset_missing` instead of `related_device_is_primary`).
+
+    Both reload mechanisms are intercepted into one recorder: the
+    fire-and-forget `async_schedule_reload` and the awaited `async_reload`
+    that asset mutations use so the flow can continue afterwards (0.7.4
+    WP-G1). Which mechanism a mutation uses is an implementation detail, so
+    DS-6 tests assert only that a reload was or was not requested, e.g.
+    `schedule_reload.assert_called_once_with(entry_id)` or
+    `schedule_reload.assert_not_called()`.
 
     The intercept keeps the real entry-id contract (`UnknownEntry` for an
-    unknown entry) and records each accepted request, so tests still assert
-    reload semantics, e.g. `schedule_reload.assert_called_once_with(entry_id)`
-    or `schedule_reload.assert_not_called()`. A test-local
-    `patch.object(hass.config_entries, "async_schedule_reload")` shadows it.
+    unknown entry), and the awaited form reports the entry as usable without
+    running an unload/setup cycle. A test-local `patch.object` on either
+    `hass.config_entries` method shadows it, which is how the persistent
+    reload-failure path is exercised.
 
     Tests that intentionally exercise a real integration reload opt out with
     `@pytest.mark.real_reload` (or a module-level `pytestmark`); the fixture
@@ -98,16 +105,28 @@ def schedule_reload(request: pytest.FixtureRequest) -> Iterator[Mock | None]:
         yield None
         return
 
-    recorder = Mock(name="async_schedule_reload")
+    recorder = Mock(name="config_entry_reload")
 
     def _intercepted_schedule_reload(self: ConfigEntries, entry_id: str) -> None:
         self.async_get_known_entry(entry_id)
         recorder(entry_id)
 
-    with patch.object(
-        ConfigEntries,
-        "async_schedule_reload",
-        _intercepted_schedule_reload,
+    async def _intercepted_reload(self: ConfigEntries, entry_id: str) -> bool:
+        self.async_get_known_entry(entry_id)
+        recorder(entry_id)
+        return True
+
+    with (
+        patch.object(
+            ConfigEntries,
+            "async_schedule_reload",
+            _intercepted_schedule_reload,
+        ),
+        patch.object(
+            ConfigEntries,
+            "async_reload",
+            _intercepted_reload,
+        ),
     ):
         yield recorder
 
