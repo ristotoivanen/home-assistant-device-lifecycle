@@ -17,6 +17,7 @@ from unittest.mock import patch
 
 import pytest
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 
@@ -135,6 +136,61 @@ async def test_options_flow_survives_the_real_reload_it_triggers(
         assert flow._manager is new_manager
 
         await hass.async_block_till_done()
+
+
+async def test_failed_unload_leaves_a_stale_manager_and_aborts_the_flow(
+    hass: HomeAssistant,
+    hass_storage: dict,
+    asset_store_data: AssetStoreData,
+) -> None:
+    """A reload whose unload fails must not look like a successful one.
+
+    Home Assistant deletes `runtime_data` only after a successful unload,
+    so this is the one real case where `async_reload` returns False while
+    the pre-reload manager is still attached. Nothing is faked here beyond
+    the integration refusing to unload: the entry genuinely ends in
+    FAILED_UNLOAD with its old manager in place.
+    """
+    with _verified_store_readback(hass_storage):
+        entry = await _setup_loaded_entry(hass, hass_storage, asset_store_data)
+    flow_id = await _start_asset_action(
+        hass,
+        entry,
+        ASSET_UUID,
+        "asset_deployment",
+    )
+    stale_manager = entry.runtime_data
+
+    async def _refuse_unload(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+        return False
+
+    with (
+        _verified_store_readback(hass_storage),
+        patch.object(device_lifecycle, "async_unload_entry", _refuse_unload),
+    ):
+        aborted = await hass.config_entries.options.async_configure(
+            flow_id,
+            {CONF_DEPLOYMENT_STATE: DEPLOYMENT_STATE_DEPLOYED},
+        )
+
+        # The precondition this test exists for: the reload failed, yet the
+        # old manager is still reachable through the entry.
+        assert entry.state is ConfigEntryState.FAILED_UNLOAD
+        assert entry.runtime_data is stale_manager
+
+    assert aborted["type"] is FlowResultType.ABORT
+    assert aborted["reason"] == "entry_not_loaded"
+
+    # The mutation itself still committed; only the continuation stopped.
+    assert stale_manager.asset(ASSET_UUID)[CONF_DEPLOYMENT_STATE] == (
+        DEPLOYMENT_STATE_DEPLOYED
+    )
+
+    # FAILED_UNLOAD is not recoverable, so Home Assistant will not unload the
+    # entry again. Tear the platform down directly, exactly as the refused
+    # `async_unload_entry` would have, so no sensor timers outlive the test.
+    await hass.config_entries.async_unload_platforms(entry, [Platform.SENSOR])
+    await hass.async_block_till_done()
 
 
 async def test_the_mutation_result_waits_for_its_reload_to_finish(

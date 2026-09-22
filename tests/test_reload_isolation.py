@@ -49,7 +49,8 @@ async def test_mutation_reload_is_recorded_but_never_executed(
     await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.MENU
-    assert entry.state is ConfigEntryState.NOT_LOADED
+    # The invariant is that no real unload/setup ran, which the surviving
+    # manager instance shows; the entry's state is fixture-owned here.
     assert entry.runtime_data is manager
     schedule_reload.assert_called_once_with(entry.entry_id)
     flow, _entry = _options_flow(hass, manager)
@@ -82,7 +83,6 @@ async def test_awaited_reload_is_recorded_but_never_executed(
     assert await hass.config_entries.async_reload(entry.entry_id) is True
     await hass.async_block_till_done()
 
-    assert entry.state is ConfigEntryState.NOT_LOADED
     assert entry.runtime_data is manager
     schedule_reload.assert_called_once_with(entry.entry_id)
 
@@ -115,21 +115,25 @@ async def test_real_reload_opt_out_executes_home_assistant_reload(
     Both mechanisms must be Home Assistant's own under the opt-out, since
     the awaited one is what an asset mutation now continues through.
     """
-    manager, _asset_uuid, entry, _result = await _rename_asset_through_options_flow(
-        hass
-    )
-
-    await hass.async_block_till_done()
+    manager = _manager(hass)
+    _flow, entry = _options_flow(hass, manager)
+    # `_options_flow` marks the entry loaded so mutation reload checks see a
+    # realistic entry, but it was never actually set up. Hand it back to
+    # Home Assistant from NOT_LOADED so the real reload has work to do.
+    entry.mock_state(hass, ConfigEntryState.NOT_LOADED)
 
     assert schedule_reload is None
-    assert entry.state is ConfigEntryState.LOADED
-    assert isinstance(entry.runtime_data, AssetStoreManager)
-    assert entry.runtime_data is not manager
 
-    mutation_manager = entry.runtime_data
+    hass.config_entries.async_schedule_reload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert entry.state is ConfigEntryState.LOADED
+    scheduled_manager = entry.runtime_data
+    assert isinstance(scheduled_manager, AssetStoreManager)
+    assert scheduled_manager is not manager
 
     assert await hass.config_entries.async_reload(entry.entry_id) is True
 
     assert entry.state is ConfigEntryState.LOADED
     assert isinstance(entry.runtime_data, AssetStoreManager)
-    assert entry.runtime_data is not mutation_manager
+    assert entry.runtime_data is not scheduled_manager

@@ -7,6 +7,7 @@ from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import UUID
 
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType, UnknownFlow
 import pytest
@@ -110,6 +111,10 @@ def _options_flow(
     )
     entry.runtime_data = manager
     entry.add_to_hass(hass)
+    # An OptionsFlow only ever runs on a loaded entry, and the isolated
+    # reload leaves it loaded the way a successful real one does. Without
+    # this the entry would look torn down to every mutation's reload check.
+    entry.mock_state(hass, ConfigEntryState.LOADED)
     flow = DeviceLifecycleConfigFlow.async_get_options_flow(entry)
     flow.hass = hass
     flow.handler = entry.entry_id

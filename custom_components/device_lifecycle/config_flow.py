@@ -12,6 +12,7 @@ from homeassistant import config_entries, data_entry_flow
 from homeassistant.components.sensor import SensorDeviceClass
 from homeassistant.config_entries import (
     ConfigEntry,
+    ConfigEntryState,
     ConfigFlowResult,
     ConfigSubentryFlow,
     FlowType,
@@ -1257,12 +1258,22 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         an Asset mutation, so the next step must read the manager from the
         entry's replaced `runtime_data`. A scheduled reload tears that down
         in a background task while the flow is already running again.
+
+        Usability is read from the entry, not from `async_reload`'s result,
+        because neither signal implies the other. Home Assistant deletes
+        `runtime_data` only when the unload succeeds, so a failed unload
+        returns False while the stale manager is still attached; and an
+        entry disabled between unload and setup returns True while never
+        being set up again. Only LOADED excludes both, and every
+        False-returning path leaves a non-LOADED state, so the result adds
+        nothing except a false negative when a concurrent reload already
+        recovered the entry.
         """
         if not changed:
             return True
 
         await self.hass.config_entries.async_reload(self.config_entry.entry_id)
-        return isinstance(
+        return self.config_entry.state is ConfigEntryState.LOADED and isinstance(
             getattr(self.config_entry, "runtime_data", None), AssetStoreManager
         )
 

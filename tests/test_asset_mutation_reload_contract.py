@@ -13,6 +13,7 @@ from copy import deepcopy
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import device_registry as dr
@@ -275,21 +276,44 @@ async def test_persistent_reload_failure_aborts_with_entry_not_loaded(
     assert manager.asset(ASSET_UUID)["name"] == "Renamed before the failure"
 
 
-@pytest.mark.parametrize("usable", [True, False])
-async def test_reload_helper_reports_entry_usability(
+@pytest.mark.parametrize(
+    ("case", "returns", "state", "keeps_runtime_data", "usable"),
+    [
+        # A reload that completed: the only outcome the flow may continue on.
+        ("reloaded", True, ConfigEntryState.LOADED, True, True),
+        # Unload failed. Home Assistant deletes `runtime_data` only after a
+        # successful unload, so the stale manager is still attached here.
+        ("unload failed", False, ConfigEntryState.FAILED_UNLOAD, True, False),
+        # Setup after the unload failed: no manager, entry not loaded.
+        ("setup failed", False, ConfigEntryState.SETUP_ERROR, False, False),
+        # Unload succeeded but the entry was disabled, so it is never set up
+        # again — and `async_reload` still reports True.
+        ("disabled", True, ConfigEntryState.NOT_LOADED, False, False),
+    ],
+)
+async def test_reload_helper_matches_home_assistant_reload_outcomes(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
+    case: str,
+    returns: bool,
+    state: ConfigEntryState,
+    keeps_runtime_data: bool,
     usable: bool,
 ) -> None:
-    """The helper reports usability from the entry, not from the call result."""
+    """Every `async_reload` outcome maps to the right usability verdict.
+
+    Neither signal alone is sufficient: "unload failed" returns False while
+    keeping a usable-looking manager, and "disabled" returns True with none.
+    """
     manager = _manager(hass, asset_store_data)
     flow = await _on_asset(hass, manager)
     entry = flow.config_entry
 
     async def _reload(entry_id: str) -> bool:
-        if not usable:
+        if not keeps_runtime_data:
             del entry.runtime_data
-        return True
+        entry.mock_state(hass, state)
+        return returns
 
     with patch.object(
         hass.config_entries,
@@ -297,7 +321,7 @@ async def test_reload_helper_reports_entry_usability(
         new_callable=AsyncMock,
         side_effect=_reload,
     ):
-        assert await flow._async_apply_reload(True) is usable
+        assert await flow._async_apply_reload(True) is usable, case
 
 
 async def test_reload_helper_skips_unchanged_mutations(
