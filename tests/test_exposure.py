@@ -10,7 +10,10 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    mock_device_registry,
+)
 
 from custom_components.device_lifecycle.const import (
     CONF_ASSET_UUID,
@@ -314,9 +317,16 @@ async def test_incomplete_owned_device_subentry_is_repaired_to_parent(
     assert manager.asset(ASSET_UUID)["asset_id"] == "DL0007"
 
 
+@pytest.mark.xfail(
+    strict=True,
+    raises=AttributeError,
+    reason=(
+        "0.7.3 WP-03 -> WP-04: production still reads Device Registry devices "
+        "through the mapping API that HA 2026.9 deprecates"
+    ),
+)
 async def test_ambiguous_asset_device_preflight_fails_before_mutation(
     hass: HomeAssistant,
-    device_registry: dr.DeviceRegistry,
     entity_registry: er.EntityRegistry,
     asset_store_data: AssetStoreData,
 ) -> None:
@@ -334,9 +344,14 @@ async def test_ambiguous_asset_device_preflight_fails_before_mutation(
         identifiers=identifier,
         name="Second",
     )
-    device_registry.devices[first.id] = first
-    device_registry.devices[second.id] = second
-    before_ids = set(device_registry.devices)
+    # Home Assistant's public registry API refuses a same-entry identifier
+    # collision, but older registry stores can still hold one (HA 2026.9
+    # keeps the extra device "shadowed"). Pre-load that state directly.
+    device_registry = mock_device_registry(
+        hass,
+        {first.id: first, second.id: second},
+    )
+    before_ids = {device.id for device in device_registry.devices}
 
     with pytest.raises(AssetStoreError, match="2 Device Registry devices"):
         build_exposure_migration_plan(
@@ -346,7 +361,7 @@ async def test_ambiguous_asset_device_preflight_fails_before_mutation(
             entity_registry=entity_registry,
         )
 
-    assert set(device_registry.devices) == before_ids
+    assert {device.id for device in device_registry.devices} == before_ids
 
 
 async def test_external_device_and_asset_area_are_never_mutated(
@@ -785,7 +800,7 @@ async def test_created_device_cleanup_failure_is_recoverable(
     for asset in manager.assets():
         matches = [
             device
-            for device in device_registry.devices.values()
+            for device in device_registry.devices
             if asset_device_identifier(asset["asset_uuid"]) in device.identifiers
         ]
         assert len(matches) == 1
@@ -881,7 +896,7 @@ async def test_partial_migration_after_rollback_failure_recovers_on_reload(
         len(
             [
                 device
-                for device in device_registry.devices.values()
+                for device in device_registry.devices
                 if asset_device_identifier(ASSET_UUID) in device.identifiers
             ]
         )

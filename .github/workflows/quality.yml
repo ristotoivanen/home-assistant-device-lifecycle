@@ -61,7 +61,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          # pytest-homeassistant-custom-component 0.13.355 pulls in
+          # pytest-homeassistant-custom-component 0.13.366 pulls in
           # homeassistant, which requires Python >=3.14.2.
           python-version: "3.14"
           cache: pip

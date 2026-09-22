@@ -1559,10 +1559,18 @@ async def test_unnamed_device_review_uses_localized_fallback(
     flow, _entry = _flow(hass, manager)
     owner = MockConfigEntry(domain="test")
     owner.add_to_hass(hass)
-    device = dr.async_get(hass).async_get_or_create(
+    registry = dr.async_get(hass)
+    device = registry.async_get_or_create(
         config_entry_id=owner.entry_id,
         identifiers={("test", "unnamed")},
     )
+    # Home Assistant 2026.9 names every new device after its config entry
+    # title; clear it so the device is genuinely unnamed.
+    device = registry.async_update_device(device.id, name=None)
+    assert device is not None
+    assert device.name_by_user is None
+    assert device.name is None
+    assert device.model is None
 
     assert flow._quick_device_name(device.id) == "Unnamed HA device"
 
