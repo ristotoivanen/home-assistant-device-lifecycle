@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from copy import deepcopy
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock, patch
 
 import pytest
+from homeassistant.config_entries import ConfigEntries
 
 from custom_components.device_lifecycle.const import (
     CONF_ASSET_UUID,
@@ -54,6 +57,45 @@ STORE_V1_2_SECOND_ASSET_UUID = "33333333-3333-4333-8333-333333333333"
 @pytest.fixture(autouse=True)
 def _enable_custom_integrations(enable_custom_integrations: None) -> None:
     """Enable loading integrations from custom_components."""
+
+
+@pytest.fixture(autouse=True)
+def schedule_reload(request: pytest.FixtureRequest) -> Iterator[Mock | None]:
+    """Record ConfigEntry reload requests without executing a real reload.
+
+    OptionsFlow tests drive a flow directly against a MockConfigEntry whose
+    `runtime_data` is a test-owned manager. A real `async_schedule_reload`
+    starts a fire-and-forget background task that sets the integration up
+    again and replaces `entry.runtime_data` with a manager loaded from the
+    (empty) test Store, racing any later step of the same test (0.7.2 CI:
+    `asset_missing` instead of `related_device_is_primary`).
+
+    The intercept keeps the real entry-id contract (`UnknownEntry` for an
+    unknown entry) and records each accepted request, so tests still assert
+    reload semantics, e.g. `schedule_reload.assert_called_once_with(entry_id)`
+    or `schedule_reload.assert_not_called()`. A test-local
+    `patch.object(hass.config_entries, "async_schedule_reload")` shadows it.
+
+    Tests that intentionally exercise a real integration reload opt out with
+    `@pytest.mark.real_reload` (or a module-level `pytestmark`); the fixture
+    then yields `None` and Home Assistant's own implementation runs.
+    """
+    if request.node.get_closest_marker("real_reload") is not None:
+        yield None
+        return
+
+    recorder = Mock(name="async_schedule_reload")
+
+    def _intercepted_schedule_reload(self: ConfigEntries, entry_id: str) -> None:
+        self.async_get_known_entry(entry_id)
+        recorder(entry_id)
+
+    with patch.object(
+        ConfigEntries,
+        "async_schedule_reload",
+        _intercepted_schedule_reload,
+    ):
+        yield recorder
 
 
 @pytest.fixture

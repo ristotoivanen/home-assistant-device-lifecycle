@@ -84,6 +84,10 @@ from custom_components.device_lifecycle.storage import (
 from .conftest import ASSET_UUID, SOURCE_ENTITY_ID
 from .test_quick_add_options_flow import _details
 
+# This module proves the real OptionsFlow -> ConfigEntry reload -> exposure
+# path end to end, so it opts out of the shared reload intercept.
+pytestmark = pytest.mark.real_reload
+
 QUICK_REPLAY_UUID = "88888888-8888-4888-8888-888888888888"
 
 

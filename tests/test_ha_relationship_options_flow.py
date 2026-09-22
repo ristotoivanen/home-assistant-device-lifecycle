@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from unittest.mock import AsyncMock, PropertyMock, patch
+from unittest.mock import AsyncMock, Mock, PropertyMock, patch
 
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
@@ -1019,6 +1019,7 @@ async def test_add_related_device_already_present_is_a_clean_noop(
 async def test_related_add_allows_primary_owner_elsewhere_but_not_same_asset(
     hass: HomeAssistant,
     device_registry: dr.DeviceRegistry,
+    schedule_reload: Mock,
 ) -> None:
     """Related is non-exclusive, while one Asset cannot duplicate its primary."""
     _entry, device = _external_device(
@@ -1030,7 +1031,7 @@ async def test_related_add_allows_primary_owner_elsewhere_but_not_same_asset(
     related_asset = await manager.async_create_manual_asset(name="Related Asset")
     primary_asset = await manager.async_create_manual_asset(name="Primary Asset")
     await manager.async_link_asset_device(primary_asset["asset_uuid"], device.id)
-    flow, _parent = _options_flow(hass, manager)
+    flow, parent = _options_flow(hass, manager)
     await _select_asset(flow, related_asset["asset_uuid"])
 
     allowed = await flow.async_step_add_related_device(
@@ -1041,7 +1042,11 @@ async def test_related_add_allows_primary_owner_elsewhere_but_not_same_asset(
     assert manager.asset(related_asset["asset_uuid"])["ha_device_refs"] == [
         {"device_id": device.id, "role": "related"}
     ]
+    schedule_reload.assert_called_once_with(parent.entry_id)
 
+    # 0.7.2 CI race: the real reload scheduled above used to run here in the
+    # background and replace `runtime_data`, turning the expected
+    # `related_device_is_primary` into `asset_missing`.
     await _select_asset(flow, primary_asset["asset_uuid"])
     rejected = await flow.async_step_add_related_device(
         {CONF_DEVICE_ID: device.id}
@@ -1049,6 +1054,7 @@ async def test_related_add_allows_primary_owner_elsewhere_but_not_same_asset(
 
     assert rejected["type"] is FlowResultType.FORM
     assert rejected["errors"] == {"base": "related_device_is_primary"}
+    schedule_reload.assert_called_once_with(parent.entry_id)
     assert manager.asset(primary_asset["asset_uuid"])["ha_device_refs"] == [
         {"device_id": device.id, "role": "primary"}
     ]
