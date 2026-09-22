@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Literal
 
@@ -122,6 +123,29 @@ class ExposureMigrationPlan:
     entity_updates: tuple[EntityRegistryUpdatePlan, ...]
 
 
+def _registry_device_entries(
+    registry: dr.DeviceRegistry,
+) -> Iterator[dr.DeviceEntry]:
+    """Yield every active Device Registry entry on HA 2026.8 and 2026.9+.
+
+    Iterating `registry.devices` yields device IDs on Home Assistant 2026.8,
+    where it is a device-ID -> DeviceEntry mapping, and `DeviceEntry` values
+    on 2026.9+, which deprecates mapping use such as `.values()`. A device ID
+    is resolved by exact ID in the same mapping being iterated, which only
+    happens on 2026.8; nothing is looked up by identifier, so every holder
+    of an identifier stays visible. Any other item fails closed.
+    """
+    devices = registry.devices
+    for item in devices:
+        device = devices[item] if isinstance(item, str) else item
+        if not isinstance(device, dr.DeviceEntry):
+            raise AssetStoreError(
+                "Device Registry returned an unexpected device item during "
+                "Asset Device lookup"
+            )
+        yield device
+
+
 def _matching_asset_devices(
     registry: dr.DeviceRegistry,
     asset_uuid: str,
@@ -130,7 +154,7 @@ def _matching_asset_devices(
     identifier = asset_device_identifier(asset_uuid)
     return [
         device
-        for device in registry.devices.values()
+        for device in _registry_device_entries(registry)
         if identifier in device.identifiers
     ]
 

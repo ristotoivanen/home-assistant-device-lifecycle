@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from copy import deepcopy
 from types import SimpleNamespace
 from typing import Any
@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 from homeassistant.config_entries import ConfigEntries
+from homeassistant.helpers import device_registry as dr
 
 from custom_components.device_lifecycle.const import (
     CONF_ASSET_UUID,
@@ -52,6 +53,19 @@ PURCHASE_SUBENTRY_ID = "purchase-subentry-id"
 RUNTIME_SUBENTRY_ID = "runtime-subentry-id"
 SOURCE_ENTITY_ID = "sensor.workshop_power"
 STORE_V1_2_SECOND_ASSET_UUID = "33333333-3333-4333-8333-333333333333"
+
+
+def device_registry_entries(registry: dr.DeviceRegistry) -> list[dr.DeviceEntry]:
+    """Return every Device Registry entry on Home Assistant 2026.8 and 2026.9+.
+
+    `registry.devices` is a device-ID mapping on 2026.8 and a collection of
+    `DeviceEntry` values on 2026.9+. Tests use this to count devices
+    independently of the production lookup helper under test.
+    """
+    devices = registry.devices
+    if isinstance(devices, Mapping):
+        return list(devices.values())
+    return list(devices)
 
 
 @pytest.fixture(autouse=True)
