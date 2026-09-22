@@ -27,7 +27,7 @@ The dashboard uses native Sections views and Markdown cards only. It discovers D
 
 Purchases with zero linked Assets are valid in Device Lifecycle but do not appear in this entity-derived dashboard because no Asset entity currently exposes them. They remain fully manageable through the integration UI.
 
-Canonical entity states and all comparisons remain English machine values such as `active`, `unknown`, `retired`, `disposed`, `lost`, `deployed`, and `not_deployed`. The two YAML files do not provide runtime language switching; choose the language-specific file you want to use.
+Canonical Lifecycle and Deployment states used by the dashboard logic remain English machine values such as `active`, `unknown`, `retired`, `disposed`, `lost`, `deployed`, and `not_deployed` in both files. Legacy compatibility attributes keep their historical values: warranty grouping compares `takuu_tila` against the Finnish values `voimassa`, `päättynyt`, and `ei_määritetty` in every Home Assistant language. The two YAML files do not provide runtime language switching; choose the language-specific file you want to use.
 
 Maintainers can regenerate both checked-in artifacts from the shared source and translations with:
 
