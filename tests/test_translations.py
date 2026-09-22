@@ -109,7 +109,9 @@ def _emitted_options_errors() -> set[str]:
                 and isinstance(node.value.elts[1].value, str)
             ):
                 error_keys.add(node.value.elts[1].value)
-    return error_keys
+    # The scan is deliberately broad, so it also catches literal returns that
+    # are not error keys at all. An empty string is never one.
+    return {key for key in error_keys if key}
 
 
 def _completion_keys() -> set[str]:
@@ -255,6 +257,7 @@ def test_every_menu_action_and_step_has_translation(language: str) -> None:
         "change_asset_purchase",
         "edit_asset_metadata",
         "ha_relationship",
+        "manage_asset",
     }
     assert set(steps["ha_relationship"]["menu_options"]) == {
         "add_related_device",

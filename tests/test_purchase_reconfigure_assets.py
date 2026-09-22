@@ -93,12 +93,12 @@ def _store_with_manual_asset(
     return data
 
 
-async def test_reconfigure_shows_manual_and_ha_assets_sorted_by_asset_id(
+async def test_reconfigure_shows_manual_and_ha_assets_name_first(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
     purchase_subentry_data: dict,
 ) -> None:
-    """Canonical membership includes both Asset kinds in stable ID order."""
+    """Canonical membership shows both Asset kinds name first, by name."""
     manager = _manager(hass, _store_with_manual_asset(asset_store_data))
     flow, entry, subentry = _flow_context(
         hass,
@@ -118,8 +118,8 @@ async def test_reconfigure_shows_manual_and_ha_assets_sorted_by_asset_id(
 
     assert result["type"] is FlowResultType.FORM
     assert result["description_placeholders"]["linked_assets"].splitlines() == [
-        "- DL0007 — Workshop device",
-        "- DL0018 — Testilaite 0.5.4",
+        "- Testilaite 0.5.4 · DL0018",
+        "- Workshop device · DL0007",
     ]
 
 
@@ -222,7 +222,7 @@ async def test_saving_reconfigure_preserves_user_managed_asset_membership(
         form = await flow.async_step_reconfigure()
         result = await flow.async_step_reconfigure(reconfigure_data)
 
-    assert "DL0018 — Testilaite 0.5.4" in form["description_placeholders"][
+    assert "Testilaite 0.5.4 · DL0018" in form["description_placeholders"][
         "linked_assets"
     ]
     assert result == update_result

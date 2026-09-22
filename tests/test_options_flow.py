@@ -286,14 +286,14 @@ async def test_manage_asset_lists_manual_legacy_and_runtime_assets_by_uuid(
     options = _select_options(form, CONF_ASSET_UUID)
 
     assert [option["value"] for option in options] == [
-        ASSET_UUID,
-        RUNTIME_ASSET_UUID,
         MANUAL_ASSET_UUID,
+        RUNTIME_ASSET_UUID,
+        ASSET_UUID,
     ]
     assert [option["label"] for option in options] == [
-        "DL0007 — Workshop device",
-        "DL0008 — Runtime-created Asset",
-        "DL0009 — Manual Asset",
+        "Manual Asset · DL0009",
+        "Runtime-created Asset · DL0008",
+        "Workshop device · DL0007",
     ]
 
     selected = await flow.async_step_manage_asset(

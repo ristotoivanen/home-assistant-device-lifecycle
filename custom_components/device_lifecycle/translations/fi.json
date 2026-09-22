@@ -457,12 +457,13 @@
       "manage_asset_menu": {
         "description": "Valittu laite: {asset}",
         "menu_options": {
-          "asset_deployment": "Käyttötila",
-          "asset_lifecycle": "Elinkaaritila",
-          "asset_replacement": "Laitteen korvaus",
-          "change_asset_purchase": "Liitä ostokseen",
-          "edit_asset_metadata": "Muokkaa tietoja",
-          "ha_relationship": "Home Assistant -laitelinkit"
+          "asset_deployment": "Asennus ja sijainti",
+          "asset_lifecycle": "Elinkaari",
+          "asset_replacement": "Korvaaminen",
+          "change_asset_purchase": "Osto ja takuu",
+          "edit_asset_metadata": "Perustiedot",
+          "ha_relationship": "Home Assistant -laitteet",
+          "manage_asset": "Valitse toinen laite"
         },
         "title": "Hallitse laitetta"
       },

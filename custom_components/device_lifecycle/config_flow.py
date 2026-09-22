@@ -586,8 +586,13 @@ def _purchase_title(data: dict[str, Any]) -> str:
 
 
 def _asset_label(asset: AssetData) -> str:
-    """Return the stable Asset choice label shown in management flows."""
-    return f"{asset['asset_id']} — {asset['name']}"
+    """Return the stable Asset label shown in management flows.
+
+    Name first: people recognize their own device name, and the DLxxxx Asset
+    ID follows as the stable identity that survives renames. The Asset UUID
+    stays the technical value behind selections and is never shown.
+    """
+    return f"{asset['name']} · {asset['asset_id']}"
 
 
 def _purchase_asset_summary(
@@ -613,7 +618,10 @@ def _purchase_asset_summary(
     if assets:
         return "\n".join(
             f"- {_asset_label(asset)}"
-            for asset in sorted(assets, key=lambda item: item["asset_id"])
+            for asset in sorted(
+                assets,
+                key=lambda item: (str(item["name"]).casefold(), item["asset_id"]),
+            )
         )
 
     if language.lower().startswith("fi"):
@@ -917,6 +925,11 @@ class DeviceLifecycleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 class DeviceLifecycleOptionsFlow(OptionsFlow):
     """Manage physical Assets through the single parent integration."""
 
+    # The completion key of the last mutation, shown once on the next hub
+    # render. Flow-local on purpose: a result describes what this person just
+    # did, so it is never persisted and never crosses to another Asset.
+    _last_result: str | None = None
+
     @property
     def _manager(self) -> AssetStoreManager:
         """Return the loaded Asset Store manager for the parent entry."""
@@ -929,7 +942,11 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         return english
 
     def _asset_choices(self) -> list[selector.SelectOptionDict]:
-        """Return every Asset keyed by immutable UUID."""
+        """Return every Asset keyed by immutable UUID.
+
+        Ordered the way the labels read: by display name, case-insensitively,
+        with the Asset ID breaking ties between identically named Assets.
+        """
         return [
             selector.SelectOptionDict(
                 value=asset["asset_uuid"],
@@ -937,7 +954,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             )
             for asset in sorted(
                 self._manager.assets(),
-                key=lambda item: item["asset_id"],
+                key=lambda item: (str(item["name"]).casefold(), item["asset_id"]),
             )
         ]
 
@@ -1148,6 +1165,18 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             )
         return f"{area.name} ({area.id})"
 
+    def _device_display_name(self, device_id: str) -> str | None:
+        """Return one HA device's display name, or None when it is gone."""
+        device = dr.async_get(self.hass).async_get(device_id)
+        if device is None:
+            return None
+        return (
+            getattr(device, "name_by_user", None)
+            or getattr(device, "name", None)
+            or getattr(device, "model", None)
+            or device_id
+        )
+
     def _ha_device_label(self, device_id: str | None) -> str:
         """Describe a relationship without guessing a replacement device."""
         if device_id is None:
@@ -1155,19 +1184,13 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 "No primary Home Assistant device",
                 "Ei ensisijaista Home Assistant -laitetta",
             )
-        device = dr.async_get(self.hass).async_get(device_id)
-        if device is None:
+        name = self._device_display_name(device_id)
+        if name is None:
             return self._localized_label(
                 f"Unavailable Home Assistant device (stored ID: {device_id})",
                 "Home Assistant -laite ei ole enää käytettävissä "
                 f"(tallennettu tunnus: {device_id})",
             )
-        name = (
-            getattr(device, "name_by_user", None)
-            or getattr(device, "name", None)
-            or getattr(device, "model", None)
-            or device_id
-        )
         return f"{name} ({device_id})"
 
     def _related_device_summary(self, asset: AssetData) -> str:
@@ -1291,10 +1314,9 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         manager whether their mutation was a canonical no-op (0.7.2 WP2 /
         F-2/F-3) pass `reload=False` to skip the redundant reload.
 
-        `description` is the operation's completion message. It is still
-        carried by every call site because the translation contract is built
-        from those keys, and the hub that renders it lands with the 0.7.4
-        Asset hub rather than with this continuity change.
+        `description` is the operation's completion key. The hub shows it once
+        on the render this call returns to, and the wording behind the key
+        comes from the existing `options.create_entry` translations.
         """
         if not await self._async_apply_reload(reload):
             return self.async_abort(reason="entry_not_loaded")
@@ -1302,6 +1324,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         # Identity, not the pre-reload object: the manager holding that Asset
         # has been replaced, and only the UUID survives the reload.
         self._selected_asset_uuid = asset["asset_uuid"]
+        self._last_result = description
         return await self.async_step_manage_asset_menu()
 
     def _finish_quick_add(self, asset: AssetData) -> ConfigFlowResult:
@@ -2375,19 +2398,105 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                     errors={"base": "asset_missing"}
                 )
             self._selected_asset_uuid = asset_uuid
+            # A result belongs to the Asset it happened on, not to the flow.
+            self._last_result = None
             return await self.async_step_manage_asset_menu()
 
         return self._show_asset_selection()
+
+    def _summary_metadata(self, asset: AssetData) -> str:
+        """Summarize the Asset's own physical identity."""
+        return _compact_title(
+            " ".join(
+                str(asset.get(field) or "").strip()
+                for field in (CONF_MANUFACTURER, CONF_MODEL)
+            )
+        )
+
+    def _summary_purchase_warranty(self, asset: AssetData) -> str:
+        """Summarize which Purchase the Asset currently belongs to."""
+        purchase_uuid = asset.get("purchase_uuid")
+        if purchase_uuid is None:
+            return ""
+        purchase = self._manager.purchase(purchase_uuid)
+        return "" if purchase is None else _stored_purchase_label(purchase)
+
+    def _summary_deployment(self, asset: AssetData) -> str:
+        """Summarize where the Asset is installed."""
+        area_id = asset.get(CONF_HA_AREA_ID)
+        if area_id is None:
+            return ""
+        area = ar.async_get(self.hass).async_get_area(str(area_id))
+        return "" if area is None else str(area.name)
+
+    def _summary_lifecycle(self, asset: AssetData) -> str:
+        """Summarize when the Asset last changed lifecycle status.
+
+        The status itself is a translated enum, so the hub carries the
+        effective date here and leaves the wording to the hub copy.
+        """
+        event = self._manager.lifecycle_event(
+            asset.get("lifecycle", {}).get("current_event_uuid")
+        )
+        return "" if event is None else str(event.get("effective_date") or "")
+
+    def _summary_replacement(self, asset: AssetData) -> str:
+        """Summarize the Asset's active replacement counterpart, if any."""
+        asset_uuid = asset["asset_uuid"]
+        counterpart = self._manager.active_replacement_successor(
+            asset_uuid
+        ) or self._manager.active_replacement_predecessor(asset_uuid)
+        return "" if counterpart is None else _asset_label(counterpart)
+
+    def _summary_ha_devices(self, asset: AssetData) -> str:
+        """Summarize the linked Home Assistant devices by name only.
+
+        Deliberately not `_ha_device_label`: that one appends the stored
+        device ID so a broken relationship can be repaired, which is exactly
+        the kind of technical identifier the hub keeps out of sight.
+        """
+        primary = _primary_device_id(asset)
+        device_ids = ([] if primary is None else [primary]) + _related_device_ids(
+            asset
+        )
+        names = [
+            name
+            for device_id in device_ids
+            if (name := self._device_display_name(device_id)) is not None
+        ]
+        return ", ".join(names)
+
+    def _hub_placeholders(self, asset: AssetData) -> dict[str, str]:
+        """Collect every value the Asset hub renders for one Asset."""
+        return {
+            "asset": _asset_label(asset),
+            "result": self._last_result or "",
+            "metadata": self._summary_metadata(asset),
+            "purchase_warranty": self._summary_purchase_warranty(asset),
+            "deployment": self._summary_deployment(asset),
+            "lifecycle": self._summary_lifecycle(asset),
+            "replacement": self._summary_replacement(asset),
+            "ha_devices": self._summary_ha_devices(asset),
+        }
 
     async def async_step_manage_asset_menu(
         self,
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
-        """Show actions for the selected Asset, ready for later extensions."""
+        """Show the selected Asset's hub: what it is, and what can be done.
+
+        Read-only. Rendering the hub reads canonical data through the current
+        manager and writes nothing, so returning here after a mutation and a
+        reload costs no further Store write or reload.
+        """
         asset_uuid = getattr(self, "_selected_asset_uuid", None)
         asset = self._manager.asset(asset_uuid)
         if asset is None:
             return self._show_asset_selection(errors={"base": "asset_missing"})
+
+        placeholders = self._hub_placeholders(asset)
+        # Shown once: the next independent render of the hub is not a result.
+        self._last_result = None
         return self.async_show_menu(
             step_id="manage_asset_menu",
             menu_options=[
@@ -2397,8 +2506,9 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 "asset_lifecycle",
                 "asset_replacement",
                 "ha_relationship",
+                "manage_asset",
             ],
-            description_placeholders={"asset": _asset_label(asset)},
+            description_placeholders=placeholders,
         )
 
     async def async_step_edit_asset_metadata(

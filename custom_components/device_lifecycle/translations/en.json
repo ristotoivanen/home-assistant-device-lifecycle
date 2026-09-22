@@ -457,12 +457,13 @@
       "manage_asset_menu": {
         "description": "Selected Asset: {asset}",
         "menu_options": {
-          "asset_deployment": "Deployment status",
-          "asset_lifecycle": "Lifecycle status",
-          "asset_replacement": "Asset replacement",
-          "change_asset_purchase": "Change Purchase",
-          "edit_asset_metadata": "Edit metadata",
-          "ha_relationship": "Home Assistant relationships"
+          "asset_deployment": "Installation & location",
+          "asset_lifecycle": "Lifecycle",
+          "asset_replacement": "Replacement",
+          "change_asset_purchase": "Purchase & warranty",
+          "edit_asset_metadata": "Asset details",
+          "ha_relationship": "Home Assistant devices",
+          "manage_asset": "Choose another device"
         },
         "title": "Manage Asset"
       },
