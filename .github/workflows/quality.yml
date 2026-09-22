@@ -3,6 +3,11 @@ name: Quality gates
 on:
   push:
   pull_request:
+  # Daily run on the default branch so a red main cannot go unnoticed
+  # between pushes (0.7.3 WP-06). A scheduled run has no before/base
+  # commit, so the diff check below checks the full tree.
+  schedule:
+    - cron: "15 3 * * *"
   workflow_dispatch:
 
 permissions:
@@ -71,6 +76,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements_test.txt
+
+      - name: Report supported Home Assistant baseline
+        run: |
+          installed="$(python -c 'from homeassistant.const import __version__; print(__version__)')"
+          echo "Supported Home Assistant baseline: $installed"
+          echo "Supported Home Assistant baseline: $installed" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Ruff baseline regression gate
         # Not a bare `ruff check .`: historical debt is grandfathered by
