@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from copy import deepcopy
 from types import SimpleNamespace
 from typing import Any
@@ -10,6 +11,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 from homeassistant.config_entries import ConfigEntries
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 
 from custom_components.device_lifecycle.const import (
@@ -127,6 +129,31 @@ def schedule_reload(request: pytest.FixtureRequest) -> Iterator[Mock | None]:
             "async_reload",
             _intercepted_reload,
         ),
+    ):
+        yield recorder
+
+
+@contextmanager
+def capture_reloads(hass: HomeAssistant) -> Iterator[Mock]:
+    """Record every ConfigEntry reload request inside one assertion window.
+
+    The shared `schedule_reload` fixture records for the whole test; this is
+    the scoped form used where a test asserts what one specific step did.
+
+    Both mechanisms land in the same recorder on purpose: DS-6 is a contract
+    about whether a mutation needs a reload, not about which Home Assistant
+    call delivers it. Patching only one of them would make an
+    `assert_not_called()` pass for a mutation that reloaded through the other.
+    """
+    recorder = Mock(name="config_entry_reload")
+
+    async def _awaited_reload(entry_id: str) -> bool:
+        recorder(entry_id)
+        return True
+
+    with (
+        patch.object(hass.config_entries, "async_schedule_reload", recorder),
+        patch.object(hass.config_entries, "async_reload", _awaited_reload),
     ):
         yield recorder
 

@@ -381,7 +381,7 @@ async def test_user_relink_to_second_purchase_survives_later_reconciliation(
         {CONF_PURCHASE_UUID: SECOND_PURCHASE_UUID}
     )
 
-    assert relinked["type"] is FlowResultType.CREATE_ENTRY
+    assert relinked["type"] is FlowResultType.MENU
     asset = manager.asset(ASSET_UUID)
     assert asset["purchase_uuid"] == SECOND_PURCHASE_UUID
     assert asset["field_sources"]["purchase_uuid"] == "user"
@@ -444,7 +444,7 @@ async def test_user_cleared_purchase_survives_readded_legacy_device(
         {CONF_PURCHASE_UUID: NO_PURCHASE_SELECTION}
     )
 
-    assert cleared_result["type"] is FlowResultType.CREATE_ENTRY
+    assert cleared_result["type"] is FlowResultType.MENU
     cleared = manager.asset(ASSET_UUID)
     assert cleared["purchase_uuid"] is None
     assert cleared["field_sources"]["purchase_uuid"] == "user"

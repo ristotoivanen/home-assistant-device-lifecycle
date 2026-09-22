@@ -29,7 +29,7 @@ from custom_components.device_lifecycle.const import (
 )
 from custom_components.device_lifecycle.storage import AssetStoreManager
 
-from .conftest import ASSET_UUID
+from .conftest import ASSET_UUID, capture_reloads
 from .test_options_flow import _manager, _options_flow
 
 
@@ -58,9 +58,7 @@ async def test_lifecycle_happy_path_has_exactly_one_reload(
     flow = await _select(hass, manager, ASSET_UUID)
     manager._store.async_save.reset_mock()
 
-    with patch.object(
-        hass.config_entries, "async_schedule_reload"
-    ) as schedule_reload:
+    with capture_reloads(hass) as schedule_reload:
         result = await flow.async_step_asset_lifecycle(
             {
                 CONF_LIFECYCLE_STATUS: "active",
@@ -69,8 +67,7 @@ async def test_lifecycle_happy_path_has_exactly_one_reload(
             }
         )
 
-    assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["description"] == "asset_lifecycle_updated"
+    assert result["type"] is FlowResultType.MENU
     assert manager.asset(ASSET_UUID)["lifecycle"]["status"] == "active"
     manager._store.async_save.assert_awaited_once()
     schedule_reload.assert_called_once()
@@ -87,9 +84,7 @@ async def test_lifecycle_noop_writes_and_reloads_nothing(
     before = deepcopy(manager._data)
     manager._store.async_save.reset_mock()
 
-    with patch.object(
-        hass.config_entries, "async_schedule_reload"
-    ) as schedule_reload:
+    with capture_reloads(hass) as schedule_reload:
         result = await flow.async_step_asset_lifecycle(
             {
                 CONF_LIFECYCLE_STATUS: "active",
@@ -97,8 +92,7 @@ async def test_lifecycle_noop_writes_and_reloads_nothing(
             }
         )
 
-    assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["description"] == "asset_lifecycle_unchanged"
+    assert result["type"] is FlowResultType.MENU
     assert not result.get("errors")
     assert manager._data == before
     manager._store.async_save.assert_not_awaited()
@@ -112,9 +106,7 @@ async def test_lifecycle_future_date_and_persistence_failure_reload_zero_times(
     asset = await manager.async_create_manual_asset(name="Lifecycle errors")
     flow = await _select(hass, manager, asset["asset_uuid"])
 
-    with patch.object(
-        hass.config_entries, "async_schedule_reload"
-    ) as schedule_reload:
+    with capture_reloads(hass) as schedule_reload:
         future = await flow.async_step_asset_lifecycle(
             {
                 CONF_LIFECYCLE_STATUS: "retired",
@@ -143,9 +135,7 @@ async def test_lifecycle_malformed_effective_date_has_specific_flow_error(
     flow = await _select(hass, manager, asset["asset_uuid"])
     manager._store.async_save.reset_mock()
 
-    with patch.object(
-        hass.config_entries, "async_schedule_reload"
-    ) as schedule_reload:
+    with capture_reloads(hass) as schedule_reload:
         result = await flow.async_step_asset_lifecycle(
             {
                 CONF_LIFECYCLE_STATUS: "retired",
@@ -169,16 +159,14 @@ async def test_disposed_requires_separate_confirmation(
     first = await flow.async_step_asset_lifecycle(
         {CONF_LIFECYCLE_STATUS: "disposed", CONF_NOTES: "Recycled"}
     )
-    with patch.object(
-        hass.config_entries, "async_schedule_reload"
-    ) as schedule_reload:
+    with capture_reloads(hass) as schedule_reload:
         result = await flow.async_step_confirm_disposed(
             {CONF_CONFIRM_DISPOSED: True}
         )
 
     assert first["type"] is FlowResultType.FORM
     assert first["step_id"] == "confirm_disposed"
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["type"] is FlowResultType.MENU
     assert manager.asset(asset["asset_uuid"])["lifecycle"]["status"] == "disposed"
     manager._store.async_save.assert_awaited_once()
     schedule_reload.assert_called_once()
@@ -193,9 +181,7 @@ async def test_lifecycle_asset_disappearing_before_submit_is_safe(
     manager._data["assets"].pop(asset["asset_uuid"])
     manager._data["lifecycle_events"].clear()
 
-    with patch.object(
-        hass.config_entries, "async_schedule_reload"
-    ) as schedule_reload:
+    with capture_reloads(hass) as schedule_reload:
         result = await flow.async_step_asset_lifecycle(
             {CONF_LIFECYCLE_STATUS: "retired"}
         )
@@ -213,9 +199,7 @@ async def test_replacement_both_direction_workflows(
     manager._store.async_save.reset_mock()
     replaces_flow = await _select(hass, manager, new["asset_uuid"])
 
-    with patch.object(
-        hass.config_entries, "async_schedule_reload"
-    ) as schedule_reload:
+    with capture_reloads(hass) as schedule_reload:
         replaces = await replaces_flow.async_step_replacement_replaces(
             {
                 CONF_REPLACEMENT_TARGET_ASSET_UUID: old["asset_uuid"],
@@ -224,7 +208,7 @@ async def test_replacement_both_direction_workflows(
                 CONF_NOTES: "Physical replacement",
             }
         )
-    assert replaces["type"] is FlowResultType.CREATE_ENTRY
+    assert replaces["type"] is FlowResultType.MENU
     assert manager.active_replacement_successor(old["asset_uuid"])["asset_uuid"] == (
         new["asset_uuid"]
     )
@@ -238,16 +222,14 @@ async def test_replacement_both_direction_workflows(
     )
     manager._store.async_save.reset_mock()
     replaced_by_flow = await _select(hass, manager, old["asset_uuid"])
-    with patch.object(
-        hass.config_entries, "async_schedule_reload"
-    ) as schedule_reload:
+    with capture_reloads(hass) as schedule_reload:
         replaced_by = await replaced_by_flow.async_step_replacement_replaced_by(
             {
                 CONF_REPLACEMENT_TARGET_ASSET_UUID: other["asset_uuid"],
                 CONF_REPLACEMENT_REASON: "upgrade",
             }
         )
-    assert replaced_by["type"] is FlowResultType.CREATE_ENTRY
+    assert replaced_by["type"] is FlowResultType.MENU
     assert manager.active_replacement_successor(old["asset_uuid"])["asset_uuid"] == (
         other["asset_uuid"]
     )
@@ -281,9 +263,7 @@ async def test_replacement_stale_target_and_graph_change_are_store_authoritative
         effective_date=None,
         notes=None,
     )
-    with patch.object(
-        hass.config_entries, "async_schedule_reload"
-    ) as schedule_reload:
+    with capture_reloads(hass) as schedule_reload:
         conflict = await conflict_flow.async_step_replacement_replaced_by(
             {
                 CONF_REPLACEMENT_TARGET_ASSET_UUID: new["asset_uuid"],
@@ -346,9 +326,7 @@ async def test_void_workflow_confirms_reason_and_reloads_once(
     )
     manager._store.async_save.reset_mock()
 
-    with patch.object(
-        hass.config_entries, "async_schedule_reload"
-    ) as schedule_reload:
+    with capture_reloads(hass) as schedule_reload:
         result = await flow.async_step_confirm_void_replacement(
             {
                 CONF_VOID_REASON: "Incorrect mapping",
@@ -357,7 +335,7 @@ async def test_void_workflow_confirms_reason_and_reloads_once(
         )
 
     assert confirmation["step_id"] == "confirm_void_replacement"
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["type"] is FlowResultType.MENU
     assert manager.replacement_record(record["replacement_uuid"])["voided_at"]
     manager._store.async_save.assert_awaited_once()
     schedule_reload.assert_called_once()
@@ -384,9 +362,7 @@ async def test_correction_workflow_is_one_atomic_save_and_reload(
     )
     manager._store.async_save.reset_mock()
 
-    with patch.object(
-        hass.config_entries, "async_schedule_reload"
-    ) as schedule_reload:
+    with capture_reloads(hass) as schedule_reload:
         result = await flow.async_step_correct_asset_replacement(
             {
                 CONF_PREDECESSOR_ASSET_UUID: old["asset_uuid"],
@@ -397,7 +373,7 @@ async def test_correction_workflow_is_one_atomic_save_and_reload(
         )
 
     assert form["step_id"] == "correct_asset_replacement"
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["type"] is FlowResultType.MENU
     assert manager.active_replacement_successor(old["asset_uuid"])["asset_uuid"] == (
         correct["asset_uuid"]
     )
@@ -414,9 +390,7 @@ async def test_replacement_persistence_failure_has_zero_reload(
     before = deepcopy(manager._data)
     manager._store.async_save = AsyncMock(side_effect=OSError("save failed"))
 
-    with patch.object(
-        hass.config_entries, "async_schedule_reload"
-    ) as schedule_reload:
+    with capture_reloads(hass) as schedule_reload:
         result = await flow.async_step_replacement_replaced_by(
             {
                 CONF_REPLACEMENT_TARGET_ASSET_UUID: new["asset_uuid"],
@@ -439,9 +413,7 @@ async def test_replacement_malformed_effective_date_has_specific_flow_error(
     flow = await _select(hass, manager, old["asset_uuid"])
     manager._store.async_save.reset_mock()
 
-    with patch.object(
-        hass.config_entries, "async_schedule_reload"
-    ) as schedule_reload:
+    with capture_reloads(hass) as schedule_reload:
         result = await flow.async_step_replacement_replaced_by(
             {
                 CONF_REPLACEMENT_TARGET_ASSET_UUID: new["asset_uuid"],
@@ -642,7 +614,7 @@ async def test_correction_stale_record_error_and_disappearing_asset_paths(
         manager,
         "async_correct_asset_replacement",
         AsyncMock(side_effect=OSError("save failed")),
-    ), patch.object(hass.config_entries, "async_schedule_reload") as reload:
+    ), capture_reloads(hass) as reload:
         failed = await flow.async_step_correct_asset_replacement(
             {
                 CONF_PREDECESSOR_ASSET_UUID: old["asset_uuid"],
@@ -740,9 +712,7 @@ async def test_replacement_create_detects_post_mutation_asset_disappearance(
     old, new, _other = await _three_assets(manager)
     flow = await _select(hass, manager, old["asset_uuid"])
 
-    with patch.object(manager, "asset", Mock(side_effect=[old, new, None])), patch.object(
-        hass.config_entries, "async_schedule_reload"
-    ) as reload:
+    with patch.object(manager, "asset", Mock(side_effect=[old, new, None])), capture_reloads(hass) as reload:
         result = await flow.async_step_replacement_replaced_by(
             {
                 CONF_REPLACEMENT_TARGET_ASSET_UUID: new["asset_uuid"],

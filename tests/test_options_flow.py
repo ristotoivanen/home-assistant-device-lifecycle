@@ -41,7 +41,7 @@ from custom_components.device_lifecycle.storage import (
     AssetStoreManager,
 )
 
-from .conftest import ASSET_UUID, PURCHASE_UUID
+from .conftest import ASSET_UUID, PURCHASE_UUID, capture_reloads
 
 MANUAL_ASSET_UUID = "33333333-3333-4333-8333-333333333333"
 RUNTIME_ASSET_UUID = "44444444-4444-4444-8444-444444444444"
@@ -187,7 +187,7 @@ async def test_options_flow_init_with_runtime_data_behaves_unchanged(
     """0.7.2 WP3 / 072-05 Case A: a normally loaded entry is unaffected."""
     flow, entry = _options_flow(hass, _manager(hass))
 
-    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+    with capture_reloads(hass) as reload:
         result = await hass.config_entries.options.async_init(entry.entry_id)
 
     assert isinstance(flow, DeviceLifecycleOptionsFlow)
@@ -208,7 +208,7 @@ async def test_options_flow_init_without_runtime_data_aborts_cleanly(
     """
     entry = _unloaded_parent_entry(hass)
 
-    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+    with capture_reloads(hass) as reload:
         result = await hass.config_entries.options.async_init(entry.entry_id)
 
     assert result["type"] is FlowResultType.ABORT
@@ -337,7 +337,7 @@ async def test_edit_existing_ha_linked_asset_clears_metadata_without_identity_ch
     result = await flow.async_step_edit_asset_metadata(edit_input)
 
     updated = manager.asset(ASSET_UUID)
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["type"] is FlowResultType.MENU
     assert updated["asset_uuid"] == before["asset_uuid"]
     assert updated["asset_id"] == before["asset_id"]
     assert updated["purchase_uuid"] == before["purchase_uuid"]
@@ -433,10 +433,10 @@ async def test_metadata_true_canonical_noop_writes_and_reloads_nothing(
     await flow.async_step_manage_asset({CONF_ASSET_UUID: asset["asset_uuid"]})
     manager._store.async_save.reset_mock()
 
-    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+    with capture_reloads(hass) as reload:
         result = await flow.async_step_edit_asset_metadata(metadata)
 
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["type"] is FlowResultType.MENU
     assert manager.asset(asset["asset_uuid"]) == asset
     manager._store.async_save.assert_not_awaited()
     reload.assert_not_called()
@@ -482,13 +482,13 @@ async def test_metadata_untouched_ha_owned_field_stays_ha_owned_and_is_a_noop(
     await flow.async_step_manage_asset({CONF_ASSET_UUID: ASSET_UUID})
     manager._store.async_save.reset_mock()
 
-    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+    with capture_reloads(hass) as reload:
         result = await flow.async_step_edit_asset_metadata(
             _identical_metadata_input(before)
         )
 
     updated = manager.asset(ASSET_UUID)
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["type"] is FlowResultType.MENU
     assert updated["manufacturer"] == before["manufacturer"]
     assert updated["field_sources"]["manufacturer"] == "home_assistant"
     manager._store.async_save.assert_not_awaited()
@@ -510,13 +510,13 @@ async def test_metadata_untouched_purchase_owned_field_stays_purchase_owned(
     await flow.async_step_manage_asset({CONF_ASSET_UUID: ASSET_UUID})
     manager._store.async_save.reset_mock()
 
-    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+    with capture_reloads(hass) as reload:
         result = await flow.async_step_edit_asset_metadata(
             _identical_metadata_input(before)
         )
 
     updated = manager.asset(ASSET_UUID)
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["type"] is FlowResultType.MENU
     assert updated["notes"] == before["notes"]
     assert updated["field_sources"]["notes"] == "purchase"
     manager._store.async_save.assert_not_awaited()
@@ -536,13 +536,13 @@ async def test_metadata_untouched_empty_field_does_not_become_user_owned(
     await flow.async_step_manage_asset({CONF_ASSET_UUID: asset["asset_uuid"]})
     manager._store.async_save.reset_mock()
 
-    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+    with capture_reloads(hass) as reload:
         result = await flow.async_step_edit_asset_metadata(
             _identical_metadata_input(asset)
         )
 
     updated = manager.asset(asset["asset_uuid"])
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["type"] is FlowResultType.MENU
     assert updated["category"] is None
     assert "category" not in updated["field_sources"]
     manager._store.async_save.assert_not_awaited()
@@ -564,11 +564,11 @@ async def test_metadata_user_changes_one_ha_owned_field_value(
     edit_input = _identical_metadata_input(before)
     edit_input[CONF_MANUFACTURER] = "New manufacturer"
 
-    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+    with capture_reloads(hass) as reload:
         result = await flow.async_step_edit_asset_metadata(edit_input)
 
     updated = manager.asset(ASSET_UUID)
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["type"] is FlowResultType.MENU
     assert updated["manufacturer"] == "New manufacturer"
     assert updated["field_sources"]["manufacturer"] == "user"
     manager._store.async_save.assert_awaited_once()
@@ -591,11 +591,11 @@ async def test_metadata_user_clears_one_populated_ha_owned_field(
     edit_input = _identical_metadata_input(before)
     edit_input[CONF_SERIAL_NUMBER] = ""
 
-    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+    with capture_reloads(hass) as reload:
         result = await flow.async_step_edit_asset_metadata(edit_input)
 
     updated = manager.asset(ASSET_UUID)
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["type"] is FlowResultType.MENU
     assert updated["serial_number"] is None
     assert updated["field_sources"]["serial_number"] == "user"
     # Every other untouched field keeps its previous provenance.
@@ -620,11 +620,11 @@ async def test_metadata_only_the_changed_fields_become_user_owned(
     edit_input[CONF_MANUFACTURER] = "New manufacturer"
     edit_input[CONF_MODEL] = "New model"
 
-    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+    with capture_reloads(hass) as reload:
         result = await flow.async_step_edit_asset_metadata(edit_input)
 
     updated = manager.asset(ASSET_UUID)
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["type"] is FlowResultType.MENU
     assert updated["manufacturer"] == "New manufacturer"
     assert updated["model"] == "New model"
     assert updated["field_sources"]["manufacturer"] == "user"
@@ -655,7 +655,7 @@ async def test_metadata_blank_name_is_rejected_and_leaves_no_trace(
     edit_input = _identical_metadata_input(before)
     edit_input[CONF_ASSET_NAME] = "   "
 
-    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+    with capture_reloads(hass) as reload:
         result = await flow.async_step_edit_asset_metadata(edit_input)
 
     assert result["type"] is FlowResultType.FORM
@@ -744,12 +744,12 @@ async def test_purchase_true_canonical_noop_writes_and_reloads_nothing(
     await same_flow.async_step_manage_asset({CONF_ASSET_UUID: asset["asset_uuid"]})
     manager._store.async_save.reset_mock()
 
-    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+    with capture_reloads(hass) as reload:
         result = await same_flow.async_step_change_asset_purchase(
             {CONF_PURCHASE_UUID: PURCHASE_UUID}
         )
 
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["type"] is FlowResultType.MENU
     manager._store.async_save.assert_not_awaited()
     reload.assert_not_called()
 

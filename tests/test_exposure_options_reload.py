@@ -586,15 +586,16 @@ async def test_manage_replacement_reload_enables_canonical_entities(
         {"next_step_id": "replacement_replaced_by"},
     )
     assert replacement_form["type"] is FlowResultType.FORM
-    original_schedule_reload = hass.config_entries.async_schedule_reload
+    original_reload = hass.config_entries.async_reload
 
     with (
         _verified_store_readback(hass_storage),
         patch.object(
             hass.config_entries,
-            "async_schedule_reload",
-            wraps=original_schedule_reload,
-        ) as schedule_reload,
+            "async_reload",
+            new_callable=AsyncMock,
+            wraps=original_reload,
+        ) as reload_spy,
     ):
         completed = await hass.config_entries.options.async_configure(
             flow_id,
@@ -603,8 +604,8 @@ async def test_manage_replacement_reload_enables_canonical_entities(
                 CONF_REPLACEMENT_REASON: "failure",
             },
         )
-        assert completed["type"] is FlowResultType.CREATE_ENTRY
-        schedule_reload.assert_called_once_with(entry.entry_id)
+        assert completed["type"] is FlowResultType.MENU
+        reload_spy.assert_called_once_with(entry.entry_id)
         await hass.async_block_till_done()
 
     for asset_uuid in (ASSET_UUID, successor_uuid):
@@ -634,15 +635,16 @@ async def test_edit_metadata_flow_reload_refreshes_asset_device(
         ASSET_UUID,
         "edit_asset_metadata",
     )
-    original_schedule_reload = hass.config_entries.async_schedule_reload
+    original_reload = hass.config_entries.async_reload
 
     with (
         _verified_store_readback(hass_storage),
         patch.object(
             hass.config_entries,
-            "async_schedule_reload",
-            wraps=original_schedule_reload,
-        ) as schedule_reload,
+            "async_reload",
+            new_callable=AsyncMock,
+            wraps=original_reload,
+        ) as reload_spy,
     ):
         completed = await hass.config_entries.options.async_configure(
             flow_id,
@@ -651,8 +653,8 @@ async def test_edit_metadata_flow_reload_refreshes_asset_device(
                 CONF_MANUFACTURER: "Reloaded manufacturer",
             },
         )
-        assert completed["type"] is FlowResultType.CREATE_ENTRY
-        schedule_reload.assert_called_once_with(entry.entry_id)
+        assert completed["type"] is FlowResultType.MENU
+        reload_spy.assert_called_once_with(entry.entry_id)
         await hass.async_block_till_done()
 
     device = asset_device_entry(
@@ -684,22 +686,23 @@ async def test_deployment_flow_reload_refreshes_entity_state(
         ASSET_UUID,
         "asset_deployment",
     )
-    original_schedule_reload = hass.config_entries.async_schedule_reload
+    original_reload = hass.config_entries.async_reload
 
     with (
         _verified_store_readback(hass_storage),
         patch.object(
             hass.config_entries,
-            "async_schedule_reload",
-            wraps=original_schedule_reload,
-        ) as schedule_reload,
+            "async_reload",
+            new_callable=AsyncMock,
+            wraps=original_reload,
+        ) as reload_spy,
     ):
         completed = await hass.config_entries.options.async_configure(
             flow_id,
             {CONF_DEPLOYMENT_STATE: DEPLOYMENT_STATE_DEPLOYED},
         )
-        assert completed["type"] is FlowResultType.CREATE_ENTRY
-        schedule_reload.assert_called_once_with(entry.entry_id)
+        assert completed["type"] is FlowResultType.MENU
+        reload_spy.assert_called_once_with(entry.entry_id)
         await hass.async_block_till_done()
 
     state = hass.states.get(
@@ -743,22 +746,23 @@ async def test_relationship_flow_reload_refreshes_entity_references(
         {"next_step_id": "manage_primary_device"},
     )
     assert primary_form["type"] is FlowResultType.FORM
-    original_schedule_reload = hass.config_entries.async_schedule_reload
+    original_reload = hass.config_entries.async_reload
 
     with (
         _verified_store_readback(hass_storage),
         patch.object(
             hass.config_entries,
-            "async_schedule_reload",
-            wraps=original_schedule_reload,
-        ) as schedule_reload,
+            "async_reload",
+            new_callable=AsyncMock,
+            wraps=original_reload,
+        ) as reload_spy,
     ):
         completed = await hass.config_entries.options.async_configure(
             flow_id,
             {CONF_DEVICE_ID: external.id},
         )
-        assert completed["type"] is FlowResultType.CREATE_ENTRY
-        schedule_reload.assert_called_once_with(entry.entry_id)
+        assert completed["type"] is FlowResultType.MENU
+        reload_spy.assert_called_once_with(entry.entry_id)
         await hass.async_block_till_done()
 
     state = hass.states.get(

@@ -7,7 +7,7 @@ from unittest.mock import Mock, call
 import pytest
 from homeassistant.config_entries import ConfigEntryState, UnknownEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.data_entry_flow import FlowResult, FlowResultType
 
 from custom_components.device_lifecycle.const import (
     CONF_ASSET_NAME,
@@ -20,8 +20,13 @@ from .test_options_flow import _manager, _options_flow
 
 async def _rename_asset_through_options_flow(
     hass: HomeAssistant,
-) -> tuple[AssetStoreManager, str, object]:
-    """Run one real canonical OptionsFlow mutation on a test-owned manager."""
+) -> tuple[AssetStoreManager, str, object, FlowResult]:
+    """Run one real canonical OptionsFlow mutation on a test-owned manager.
+
+    The result type is left to the caller: this manager's data is in-memory
+    only, so under the real_reload opt-out the mutation's reload legitimately
+    replaces it with one loaded from the empty test Store.
+    """
     manager = _manager(hass)
     asset = await manager.async_create_manual_asset(name="Reload probe")
     flow, entry = _options_flow(hass, manager)
@@ -29,8 +34,7 @@ async def _rename_asset_through_options_flow(
     result = await flow.async_step_edit_asset_metadata(
         {CONF_ASSET_NAME: "Renamed reload probe"}
     )
-    assert result["type"] is FlowResultType.CREATE_ENTRY
-    return manager, asset["asset_uuid"], entry
+    return manager, asset["asset_uuid"], entry, result
 
 
 async def test_mutation_reload_is_recorded_but_never_executed(
@@ -38,10 +42,13 @@ async def test_mutation_reload_is_recorded_but_never_executed(
     schedule_reload: Mock,
 ) -> None:
     """Draining the event loop cannot swap the test-owned runtime manager."""
-    manager, asset_uuid, entry = await _rename_asset_through_options_flow(hass)
+    manager, asset_uuid, entry, result = await _rename_asset_through_options_flow(
+        hass
+    )
 
     await hass.async_block_till_done()
 
+    assert result["type"] is FlowResultType.MENU
     assert entry.state is ConfigEntryState.NOT_LOADED
     assert entry.runtime_data is manager
     schedule_reload.assert_called_once_with(entry.entry_id)
@@ -108,7 +115,9 @@ async def test_real_reload_opt_out_executes_home_assistant_reload(
     Both mechanisms must be Home Assistant's own under the opt-out, since
     the awaited one is what an asset mutation now continues through.
     """
-    manager, _asset_uuid, entry = await _rename_asset_through_options_flow(hass)
+    manager, _asset_uuid, entry, _result = await _rename_asset_through_options_flow(
+        hass
+    )
 
     await hass.async_block_till_done()
 
@@ -117,10 +126,10 @@ async def test_real_reload_opt_out_executes_home_assistant_reload(
     assert isinstance(entry.runtime_data, AssetStoreManager)
     assert entry.runtime_data is not manager
 
-    scheduled_manager = entry.runtime_data
+    mutation_manager = entry.runtime_data
 
     assert await hass.config_entries.async_reload(entry.entry_id) is True
 
     assert entry.state is ConfigEntryState.LOADED
     assert isinstance(entry.runtime_data, AssetStoreManager)
-    assert entry.runtime_data is not scheduled_manager
+    assert entry.runtime_data is not mutation_manager

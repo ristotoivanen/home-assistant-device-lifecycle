@@ -52,7 +52,13 @@ from custom_components.device_lifecycle.const import (
 )
 from custom_components.device_lifecycle.storage import AssetStoreError
 
-from .conftest import ASSET_UUID, DEVICE_ID, PURCHASE_SUBENTRY_ID, PURCHASE_UUID
+from .conftest import (
+    ASSET_UUID,
+    DEVICE_ID,
+    PURCHASE_SUBENTRY_ID,
+    PURCHASE_UUID,
+    capture_reloads,
+)
 from .test_ha_relationship_options_flow import _external_device
 from .test_options_flow import _manager, _options_flow, _store_with_purchase
 
@@ -166,7 +172,7 @@ async def test_purchase_change_persistence_conflict_stays_on_form(
         side_effect=AssetStoreError("Purchase relationship conflict")
     )
 
-    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+    with capture_reloads(hass) as reload:
         result = await flow.async_step_change_asset_purchase(
             {CONF_PURCHASE_UUID: PURCHASE_UUID}
         )
@@ -190,7 +196,7 @@ async def test_deployment_noop_clear_and_same_values_do_not_write(
     await flow.async_step_manage_asset({CONF_ASSET_UUID: asset["asset_uuid"]})
     manager._store.async_save.reset_mock()
 
-    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+    with capture_reloads(hass) as reload:
         cleared = await flow.async_step_asset_deployment(
             {
                 CONF_DEPLOYMENT_STATE: DEPLOYMENT_STATE_NOT_DEPLOYED,
@@ -199,7 +205,7 @@ async def test_deployment_noop_clear_and_same_values_do_not_write(
             }
         )
 
-    assert cleared["type"] is FlowResultType.CREATE_ENTRY
+    assert cleared["type"] is FlowResultType.MENU
     manager._store.async_save.assert_not_awaited()
     reload.assert_not_called()
 
@@ -214,7 +220,7 @@ async def test_deployment_noop_clear_and_same_values_do_not_write(
     await same_flow.async_step_manage_asset({CONF_ASSET_UUID: asset["asset_uuid"]})
     manager._store.async_save.reset_mock()
 
-    with patch.object(hass.config_entries, "async_schedule_reload") as same_reload:
+    with capture_reloads(hass) as same_reload:
         same = await same_flow.async_step_asset_deployment(
             {
                 CONF_DEPLOYMENT_STATE: DEPLOYMENT_STATE_DEPLOYED,
@@ -223,7 +229,7 @@ async def test_deployment_noop_clear_and_same_values_do_not_write(
             }
         )
 
-    assert same["type"] is FlowResultType.CREATE_ENTRY
+    assert same["type"] is FlowResultType.MENU
     manager._store.async_save.assert_not_awaited()
     same_reload.assert_not_called()
 
@@ -313,7 +319,7 @@ async def test_primary_relationship_invalid_input_and_unlink_failure_retry(
     }
 
     manager.async_unlink_asset_device_reporting = AsyncMock(side_effect=OSError("disk"))
-    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+    with capture_reloads(hass) as reload:
         failed = await flow.async_step_manage_primary_device(
             {CONF_HA_RELATIONSHIP_ACTION: HA_RELATIONSHIP_ACTION_UNLINK}
         )
@@ -356,7 +362,7 @@ async def test_related_relationship_empty_stale_and_persistence_recovery(
     assert invalid["errors"] == {"base": "related_device_not_found"}
 
     manager.async_remove_related_device = AsyncMock(side_effect=OSError("disk"))
-    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+    with capture_reloads(hass) as reload:
         failed = await flow.async_step_remove_related_device(
             {CONF_DEVICE_ID: "stored-related-device"}
         )

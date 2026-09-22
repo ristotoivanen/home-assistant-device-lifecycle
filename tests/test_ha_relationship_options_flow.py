@@ -39,7 +39,7 @@ from custom_components.device_lifecycle.const import (
 )
 from custom_components.device_lifecycle.models import AssetStoreData
 
-from .conftest import ASSET_UUID
+from .conftest import ASSET_UUID, capture_reloads
 from .test_options_flow import _manager, _options_flow, _store_with_purchase
 
 
@@ -216,7 +216,7 @@ async def test_manual_asset_links_without_identity_or_registry_mutation(
     updated = manager.asset(asset["asset_uuid"])
     registry_after = device_registry.async_get(device.id)
     assert registry_after is not None
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["type"] is FlowResultType.MENU
     assert updated["ha_device_refs"] == [
         {"device_id": device.id, "role": "primary"}
     ]
@@ -315,7 +315,7 @@ async def test_repeated_same_device_link_is_idempotent(
         }
     )
 
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["type"] is FlowResultType.MENU
     assert manager._data == before
     assert manager.asset_count == 1
     manager._store.async_save.assert_not_awaited()
@@ -346,7 +346,7 @@ async def test_repeated_same_device_link_is_a_true_noop_including_reload(
     flow, _parent = _options_flow(hass, manager)
     await _select_asset(flow, asset["asset_uuid"])
 
-    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+    with capture_reloads(hass) as reload:
         result = await flow.async_step_manage_primary_device(
             {
                 CONF_HA_RELATIONSHIP_ACTION: HA_RELATIONSHIP_ACTION_REPLACE,
@@ -354,7 +354,7 @@ async def test_repeated_same_device_link_is_a_true_noop_including_reload(
             }
         )
 
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["type"] is FlowResultType.MENU
     assert manager._data == before
     manager._store.async_save.assert_not_awaited()
     reload.assert_not_called()
@@ -410,7 +410,7 @@ async def test_same_primary_non_canonical_persisted_order_normalizes_once(
     flow, _parent = _options_flow(hass, manager)
     await _select_asset(flow, asset["asset_uuid"])
 
-    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+    with capture_reloads(hass) as reload:
         result = await flow.async_step_manage_primary_device(
             {
                 CONF_HA_RELATIONSHIP_ACTION: HA_RELATIONSHIP_ACTION_REPLACE,
@@ -418,7 +418,7 @@ async def test_same_primary_non_canonical_persisted_order_normalizes_once(
             }
         )
 
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["type"] is FlowResultType.MENU
     updated = manager.asset(asset["asset_uuid"])
     # Canonical order (Primary first) is restored; no reference lost or
     # duplicated.
@@ -447,7 +447,7 @@ async def test_change_primary_a_to_b_drops_old_primary_reference(
     flow, _parent = _options_flow(hass, manager)
     await _select_asset(flow, asset["asset_uuid"])
 
-    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+    with capture_reloads(hass) as reload:
         result = await flow.async_step_manage_primary_device(
             {
                 CONF_HA_RELATIONSHIP_ACTION: HA_RELATIONSHIP_ACTION_REPLACE,
@@ -455,7 +455,7 @@ async def test_change_primary_a_to_b_drops_old_primary_reference(
             }
         )
 
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["type"] is FlowResultType.MENU
     updated = manager.asset(asset["asset_uuid"])
     assert updated["ha_device_refs"] == [{"device_id": device_b.id, "role": "primary"}]
     manager._store.async_save.assert_awaited_once()
@@ -479,7 +479,7 @@ async def test_promote_related_device_to_primary_is_one_clean_mutation(
     flow, _parent = _options_flow(hass, manager)
     await _select_asset(flow, asset["asset_uuid"])
 
-    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+    with capture_reloads(hass) as reload:
         result = await flow.async_step_manage_primary_device(
             {
                 CONF_HA_RELATIONSHIP_ACTION: HA_RELATIONSHIP_ACTION_REPLACE,
@@ -487,7 +487,7 @@ async def test_promote_related_device_to_primary_is_one_clean_mutation(
             }
         )
 
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["type"] is FlowResultType.MENU
     updated = manager.asset(asset["asset_uuid"])
     assert updated["ha_device_refs"] == [{"device_id": device_b.id, "role": "primary"}]
     # No duplicate B reference anywhere in the list.
@@ -521,23 +521,20 @@ async def test_repeating_primary_change_after_canonical_state_is_a_true_noop(
     # and reload the real integration in-place, replacing
     # `entry.runtime_data` with an unrelated manager (0.7.2 CI investigation
     # — test-isolation fix, not a production defect).
-    with patch.object(
-        hass.config_entries,
-        "async_schedule_reload",
-    ) as first_reload:
+    with capture_reloads(hass) as first_reload:
         first = await flow.async_step_manage_primary_device(
             {
                 CONF_HA_RELATIONSHIP_ACTION: HA_RELATIONSHIP_ACTION_REPLACE,
                 CONF_DEVICE_ID: device_b.id,
             }
         )
-    assert first["type"] is FlowResultType.CREATE_ENTRY
+    assert first["type"] is FlowResultType.MENU
     first_reload.assert_called_once()
     manager._store.async_save.assert_awaited_once()
     canonical = deepcopy(manager._data)
     manager._store.async_save.reset_mock()
 
-    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+    with capture_reloads(hass) as reload:
         second = await flow.async_step_manage_primary_device(
             {
                 CONF_HA_RELATIONSHIP_ACTION: HA_RELATIONSHIP_ACTION_REPLACE,
@@ -545,7 +542,7 @@ async def test_repeating_primary_change_after_canonical_state_is_a_true_noop(
             }
         )
 
-    assert second["type"] is FlowResultType.CREATE_ENTRY
+    assert second["type"] is FlowResultType.MENU
     assert manager._data == canonical
     manager._store.async_save.assert_not_awaited()
     reload.assert_not_called()
@@ -585,7 +582,7 @@ async def test_primary_normalization_preserves_unrelated_related_device_order(
         }
     )
 
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["type"] is FlowResultType.MENU
     updated_related_order = [
         ref["device_id"]
         for ref in manager.asset(asset["asset_uuid"])["ha_device_refs"]
@@ -687,7 +684,7 @@ async def test_missing_stored_device_is_displayed_and_can_be_unlinked(
     )
 
     updated = manager.asset(ASSET_UUID)
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["type"] is FlowResultType.MENU
     assert updated["ha_device_refs"] == []
     assert updated["asset_uuid"] == before["asset_uuid"]
     assert updated["asset_id"] == before["asset_id"]
@@ -732,7 +729,7 @@ async def test_dependency_free_replacement_is_one_atomic_save(
     )
 
     updated = manager.asset(asset["asset_uuid"])
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["type"] is FlowResultType.MENU
     assert updated["ha_device_refs"] == [
         {"device_id": second.id, "role": "primary"}
     ]
@@ -962,7 +959,7 @@ async def test_add_related_uses_device_selector_without_metadata_or_registry_wri
     current_device = device_registry.async_get(device.id)
     assert form["type"] is FlowResultType.FORM
     assert isinstance(_schema_validator(form, CONF_DEVICE_ID), selector.DeviceSelector)
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["type"] is FlowResultType.MENU
     assert updated["ha_device_refs"] == [
         {"device_id": device.id, "role": "related"}
     ]
@@ -1002,13 +999,13 @@ async def test_add_related_device_already_present_is_a_clean_noop(
     await _select_asset(flow, asset["asset_uuid"])
     manager._store.async_save.reset_mock()
 
-    with patch.object(hass.config_entries, "async_schedule_reload") as reload:
+    with capture_reloads(hass) as reload:
         result = await flow.async_step_add_related_device(
             {CONF_DEVICE_ID: device.id}
         )
 
     updated = manager.asset(asset["asset_uuid"])
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["type"] is FlowResultType.MENU
     assert updated["ha_device_refs"] == [
         {"device_id": device.id, "role": "related"}
     ]
@@ -1038,7 +1035,7 @@ async def test_related_add_allows_primary_owner_elsewhere_but_not_same_asset(
         {CONF_DEVICE_ID: device.id}
     )
 
-    assert allowed["type"] is FlowResultType.CREATE_ENTRY
+    assert allowed["type"] is FlowResultType.MENU
     assert manager.asset(related_asset["asset_uuid"])["ha_device_refs"] == [
         {"device_id": device.id, "role": "related"}
     ]
@@ -1094,7 +1091,7 @@ async def test_remove_related_uses_stored_options_and_removes_stale_ref(
     )
     assert "missing-related" in stale_option["label"]
     assert "Unavailable" in stale_option["label"]
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["type"] is FlowResultType.MENU
     assert manager.asset(asset["asset_uuid"])["ha_device_refs"] == [
         {"device_id": current.id, "role": "related"}
     ]
@@ -1136,7 +1133,7 @@ async def test_related_device_can_be_promoted_in_primary_flow(
         }
     )
 
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["type"] is FlowResultType.MENU
     assert manager.asset(asset["asset_uuid"])["ha_device_refs"] == [
         {"device_id": new.id, "role": "primary"},
         {"device_id": keep.id, "role": "related"},
@@ -1169,7 +1166,7 @@ async def test_related_target_validation_uses_single_config_entry_owner(
             {CONF_DEVICE_ID: device.id}
         )
 
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["type"] is FlowResultType.MENU
 
 
 async def test_related_add_enforces_all_primary_target_safety_checks(

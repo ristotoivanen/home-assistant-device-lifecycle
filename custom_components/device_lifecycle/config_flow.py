@@ -1250,32 +1250,48 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 return "ha_device_runtime_dependency"
         return None
 
-    def _finish_asset_action(
+    async def _async_apply_reload(self, changed: bool) -> bool:
+        """Apply a mutation's reload and report whether the entry is usable.
+
+        Awaited rather than scheduled (0.7.4 WP-G1): the flow continues after
+        an Asset mutation, so the next step must read the manager from the
+        entry's replaced `runtime_data`. A scheduled reload tears that down
+        in a background task while the flow is already running again.
+        """
+        if not changed:
+            return True
+
+        await self.hass.config_entries.async_reload(self.config_entry.entry_id)
+        return isinstance(
+            getattr(self.config_entry, "runtime_data", None), AssetStoreManager
+        )
+
+    async def _finish_asset_action(
         self,
         asset: AssetData,
         description: str,
         *,
         reload: bool = True,
     ) -> ConfigFlowResult:
-        """Finish, reloading exposure only when canonical Store data changed.
+        """Reload when canonical Store data changed, then keep managing the Asset.
 
         `reload` defaults to True so every pre-existing call site keeps its
         established always-reload behavior. Callers that already know from the
         manager whether their mutation was a canonical no-op (0.7.2 WP2 /
         F-2/F-3) pass `reload=False` to skip the redundant reload.
+
+        `description` is the operation's completion message. It is still
+        carried by every call site because the translation contract is built
+        from those keys, and the hub that renders it lands with the 0.7.4
+        Asset hub rather than with this continuity change.
         """
-        result = self.async_create_entry(
-            title="",
-            data=dict(self.config_entry.options),
-            description=description,
-            description_placeholders={
-                "asset_id": asset["asset_id"],
-                "asset_name": asset["name"],
-            },
-        )
-        if reload:
-            self.hass.config_entries.async_schedule_reload(self.config_entry.entry_id)
-        return result
+        if not await self._async_apply_reload(reload):
+            return self.async_abort(reason="entry_not_loaded")
+
+        # Identity, not the pre-reload object: the manager holding that Asset
+        # has been replaced, and only the UUID survives the reload.
+        self._selected_asset_uuid = asset["asset_uuid"]
+        return await self.async_step_manage_asset_menu()
 
     def _finish_quick_add(self, asset: AssetData) -> ConfigFlowResult:
         """Finish Quick Add with one Store-owned reload and unchanged options."""
@@ -2395,7 +2411,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             except (AssetStoreError, OSError) as err:
                 errors["base"] = self._storage_error_key(err)
             else:
-                return self._finish_asset_action(
+                return await self._finish_asset_action(
                     asset, "asset_updated", reload=changed
                 )
 
@@ -2456,7 +2472,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 except (AssetStoreError, OSError) as err:
                     errors["base"] = self._storage_error_key(err)
                 else:
-                    return self._finish_asset_action(
+                    return await self._finish_asset_action(
                         asset,
                         "asset_purchase_updated",
                         reload=changed,
@@ -2558,7 +2574,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                     user_input=user_input,
                     errors={"base": self._storage_error_key(err)},
                 )
-            return self._finish_asset_action(
+            return await self._finish_asset_action(
                 asset, "asset_lifecycle_unchanged", reload=changed
             )
         if status == LIFECYCLE_STATUS_DISPOSED:
@@ -2583,7 +2599,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 user_input=user_input,
                 errors={"base": self._storage_error_key(err)},
             )
-        return self._finish_asset_action(
+        return await self._finish_asset_action(
             asset, "asset_lifecycle_updated", reload=changed
         )
 
@@ -2616,7 +2632,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                     errors["base"] = self._storage_error_key(err)
                 else:
                     del self._pending_lifecycle_update
-                    return self._finish_asset_action(
+                    return await self._finish_asset_action(
                         asset,
                         "asset_lifecycle_updated",
                         reload=changed,
@@ -2744,7 +2760,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         refreshed = self._manager.asset(asset["asset_uuid"])
         if refreshed is None:
             return self._show_asset_selection(errors={"base": "asset_missing"})
-        return self._finish_asset_action(refreshed, "asset_replacement_updated")
+        return await self._finish_asset_action(refreshed, "asset_replacement_updated")
 
     async def async_step_replacement_replaces(
         self,
@@ -2948,7 +2964,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         refreshed = self._manager.asset(asset["asset_uuid"])
         if refreshed is None:
             return self._show_asset_selection(errors={"base": "asset_missing"})
-        return self._finish_asset_action(refreshed, "asset_replacement_updated")
+        return await self._finish_asset_action(refreshed, "asset_replacement_updated")
 
     async def async_step_confirm_void_replacement(
         self,
@@ -2988,7 +3004,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                         return self._show_asset_selection(
                             errors={"base": "asset_missing"}
                         )
-                    return self._finish_asset_action(
+                    return await self._finish_asset_action(
                         refreshed,
                         "asset_replacement_updated",
                     )
@@ -3159,7 +3175,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 user_input=user_input,
                 errors={"base": self._storage_error_key(err)},
             )
-        return self._finish_asset_action(
+        return await self._finish_asset_action(
             asset, "asset_deployment_updated", reload=changed
         )
 
@@ -3191,7 +3207,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 errors["base"] = self._storage_error_key(err)
             else:
                 del self._pending_deployment_update
-                return self._finish_asset_action(
+                return await self._finish_asset_action(
                     asset,
                     "asset_deployment_updated",
                     reload=changed,
@@ -3333,7 +3349,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                     user_input=user_input,
                     errors={"base": self._storage_error_key(err)},
                 )
-            return self._finish_asset_action(
+            return await self._finish_asset_action(
                 asset,
                 "asset_ha_relationship_updated",
                 reload=changed,
@@ -3402,7 +3418,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 errors={"base": error_key},
                 owner_asset_id=(owner or {}).get("asset_id"),
             )
-        return self._finish_asset_action(
+        return await self._finish_asset_action(
             asset,
             "asset_ha_relationship_updated",
             reload=changed,
@@ -3480,7 +3496,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 user_input=user_input,
                 errors={"base": self._storage_error_key(err)},
             )
-        return self._finish_asset_action(
+        return await self._finish_asset_action(
             asset, "asset_related_device_added", reload=changed
         )
 
@@ -3551,7 +3567,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 user_input=user_input,
                 errors={"base": self._storage_error_key(err)},
             )
-        return self._finish_asset_action(asset, "asset_related_device_removed")
+        return await self._finish_asset_action(asset, "asset_related_device_removed")
 
 
 class PurchaseSubentryFlow(ConfigSubentryFlow):

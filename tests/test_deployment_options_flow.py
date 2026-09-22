@@ -119,7 +119,7 @@ async def test_manual_asset_starts_not_deployed_and_can_deploy_without_area(
     assert _deployment_defaults(form)[CONF_DEPLOYMENT_STATE] == (
         DEPLOYMENT_STATE_NOT_DEPLOYED
     )
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["type"] is FlowResultType.MENU
     assert updated[CONF_DEPLOYMENT_STATE] == DEPLOYMENT_STATE_DEPLOYED
     assert updated[CONF_INSTALLED_DATE] is None
     assert updated[CONF_HA_AREA_ID] is None
@@ -147,7 +147,7 @@ async def test_migrated_unknown_can_deploy_with_date_and_area(
     )
 
     updated = manager.asset(ASSET_UUID)
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["type"] is FlowResultType.MENU
     assert updated[CONF_DEPLOYMENT_STATE] == DEPLOYMENT_STATE_DEPLOYED
     assert updated[CONF_INSTALLED_DATE] == "2026-08-10"
     assert updated[CONF_HA_AREA_ID] == office.id
@@ -318,7 +318,7 @@ async def test_confirm_not_deployed_clears_area_and_preserves_identity_and_date(
     )
 
     updated = manager.asset(ASSET_UUID)
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["type"] is FlowResultType.MENU
     assert updated[CONF_DEPLOYMENT_STATE] == DEPLOYMENT_STATE_NOT_DEPLOYED
     assert updated[CONF_HA_AREA_ID] is None
     assert updated[CONF_INSTALLED_DATE] == before[CONF_INSTALLED_DATE]
@@ -354,7 +354,7 @@ async def test_stale_area_opens_and_remains_until_explicit_replacement(
     assert form["type"] is FlowResultType.FORM
     assert "Unavailable" in form["description_placeholders"]["current_area"]
     assert stale_area_id in form["description_placeholders"]["current_area"]
-    assert unchanged["type"] is FlowResultType.CREATE_ENTRY
+    assert unchanged["type"] is FlowResultType.MENU
     assert manager.asset(ASSET_UUID)[CONF_HA_AREA_ID] == stale_area_id
 
     repair_flow, _menu = await _select_asset(hass, manager)
@@ -365,7 +365,7 @@ async def test_stale_area_opens_and_remains_until_explicit_replacement(
         }
     )
 
-    assert repaired["type"] is FlowResultType.CREATE_ENTRY
+    assert repaired["type"] is FlowResultType.MENU
     assert manager.asset(ASSET_UUID)[CONF_HA_AREA_ID] == replacement.id
 
 
@@ -387,7 +387,7 @@ async def test_stale_area_can_be_explicitly_cleared(
         }
     )
 
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["type"] is FlowResultType.MENU
     assert manager.asset(ASSET_UUID)[CONF_HA_AREA_ID] is None
 
 
