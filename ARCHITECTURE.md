@@ -535,6 +535,110 @@ Growing histories do not belong in ConfigSubentries. ConfigSubentries remain sui
 
 These boundaries reserve 0.8.x for Maintenance, 0.9.x for Portability & Hardening, and a later release for Documents. None is represented by placeholder 3.1 records.
 
+## Planned for 0.7.4: three-year warranty
+
+Status: **planning only**. Nothing in this section is implemented. 0.7.3 remains a Compatibility & Release Hygiene release with no new user-facing features; the three-year warranty belongs to **0.7.4 — Asset Management UX & Warranty**. "Asset Management UX" stays a high-level roadmap item and is not specified further here.
+
+### Current implemented behavior
+
+- `const.py` defines the allowed warranty types as `WARRANTY_TYPES = ("none", "1_year", "2_years", "manual")`.
+- The Asset warranty object is `{"type": <warranty type>, "until": <ISO date or null>}`. Purchase ConfigSubentry data carries the same values as `warranty_type` / `warranty_until`.
+- `add_calendar_years()` in `storage.py` adds calendar years to the Purchase date; an unrepresentable leap day falls back to 28 February.
+- `1_year` and `2_years` are available in Purchase workflows and Quick Add. Quick Add can use them only with a configured Purchase that has a valid Purchase date, and revalidates that date at commit. `manual` needs no Purchase. `none` stores no date.
+- Store load validation rejects any warranty type not in `WARRANTY_TYPES`.
+- The sensor attribute label and the `warranty_type` selector translations (FI/EN) exist for the four current values only.
+
+### Planned for 0.7.4
+
+Add one new allowed warranty type, `3_years`, next to the existing options:
+
+| Persisted value | Finnish | English |
+| --- | --- | --- |
+| `none` | Ei määritetty | Not specified |
+| `1_year` | 1 vuosi | 1 year |
+| `2_years` | 2 vuotta | 2 years |
+| **`3_years` (new)** | **3 vuotta** | **3 years** |
+| `manual` | Manuaalinen | Manual |
+
+`warranty_until = Purchase date + 3 calendar years`, computed with the existing `add_calendar_years()` logic, never a fixed number of days. Example: `2024-02-29` → `2027-02-28`.
+
+### Locked decisions
+
+| Decision | Value |
+| --- | --- |
+| Persisted warranty type | `3_years`, following the existing `1_year` / `2_years` convention |
+| Existing values | `none`, `1_year`, `2_years`, and `manual` are not renamed or rewritten |
+| Store | 3.1, unchanged |
+| ConfigEntry | version 4, unchanged |
+| Upgrade-time migration | none expected |
+| Downgrade compatibility | not guaranteed after newly written values exist |
+
+No upgrade-time Store or ConfigEntry migration is expected to be required, because:
+
+- the Store structure does not change
+- the warranty object structure does not change
+- existing data needs no conversion
+- `3_years` is only a new allowed warranty type
+
+Asset identity (`asset_uuid`, `DLxxxx`), the Purchase model, and the Purchase relationship stay unchanged.
+
+### Upgrade and downgrade policy
+
+Upgrade (`0.7.3` / Store 3.1 → `0.7.4` / Store 3.1): no data migration is required under the current plan. Existing Store 3.1 data remains valid as written.
+
+Downgrade (`0.7.4` → `0.7.3`): not guaranteed to be safe once 0.7.4 has written `warranty_type = 3_years` for any Asset or Purchase. Older versions do not know this value. Today, `WARRANTY_TYPES` is enforced both by Store load validation (`storage.py`, "invalid warranty type") and by the Purchase flow defaults (`_infer_warranty_type()` in `config_flow.py`). An older version would therefore fail Store validation during setup, and its Purchase options flow would treat the unknown value as `manual`, or as `none` if no date is set.
+
+Principle: Device Lifecycle supports upgrading existing Store 3.1 data to 0.7.4 without an upgrade-time migration. Downgrading to an older integration version after a newer version has written values unknown to that version is not guaranteed to be supported. Restore a pre-upgrade backup when such a downgrade is required.
+
+The Store minor version is not bumped for downgrade detection alone, and no general migration framework is added for this change.
+
+### Implementation notes for 0.7.4
+
+- Today the year count comes from a two-way conditional (`1 if warranty_type == 1_year else 2`) in `storage.py` (Quick Add validation and review-snapshot check) and in `config_flow.py` (Purchase normalization, Quick Add details, and `purchase_changed` recalculation). Any site left unchanged would silently give `3_years` a two-year warranty through the `else` branch.
+- Centralize the year count in one canonical type-to-years definition used by every calculation site. A conceptual example, not a required structure:
+
+  ```python
+  WARRANTY_YEARS = {
+      "1_year": 1,
+      "2_years": 2,
+      "3_years": 3,
+  }
+  ```
+
+- Selector options come from `WARRANTY_TYPES`, so FI/EN `warranty_type` selector translations and the sensor `_warranty_type_label()` need the new label.
+
+### Acceptance criteria for the later implementation
+
+Functional:
+
+- `3_years` is accepted as a new warranty type value.
+- The user can choose a 3-year warranty in every workflow that offers the 1- and 2-year options today (Purchase workflows and Quick Add).
+- `warranty_until` is calculated as three calendar years from the Purchase date.
+- Manual warranty works as before.
+- None / not specified works as before.
+
+Regression:
+
+- 1-year warranty behavior is unchanged.
+- 2-year warranty behavior is unchanged.
+- Manual warranty is unchanged.
+- Existing Store 3.1 data loads without an upgrade-time migration.
+- Asset UUID and `DLxxxx` do not change.
+- The Purchase relationship does not change.
+- No entity unique IDs change.
+
+Required tests:
+
+- normal date + 3 years
+- leap day + 3 years (`2024-02-29` → `2027-02-28`)
+- Quick Add with a 3-year warranty
+- an existing Purchase/warranty workflow with a 3-year warranty
+- existing 1-year regression
+- existing 2-year regression
+- manual warranty regression
+
+Left to the implementation phase: the `3_years` constant, the shared type-to-years definition, flow and selector changes, FI/EN translations, the sensor label, the tests above, the release notes (including the downgrade notice), and the version bump.
+
 ## 0.7.1 workflow and schema impact
 
 Device Lifecycle 0.7.1 adds Quick Add and related projection/UI behavior without changing canonical schemas:

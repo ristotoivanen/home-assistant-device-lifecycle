@@ -464,7 +464,9 @@ For reproducible problems, open a [GitHub issue](https://github.com/ristotoivane
 - **0.7.0 — Lifecycle & Replacement**
 - **0.7.1 — Quick Asset Entry & UX**
 - **0.7.2 — Reliability, correctness & CI hardening**
-- **0.7.3 — Asset Management UX / navigation**
+- **0.7.3 — Compatibility & Release Hygiene** (no new user-facing features)
+- **0.7.4 — Asset Management UX & Warranty** (planned; not yet available)
+  - 3-year warranty support calculated from the Purchase date, planned without an upgrade-time Store or ConfigEntry migration ([plan](ARCHITECTURE.md#planned-for-074-three-year-warranty))
 - **0.8.x — Maintenance**
 - **0.9.x — Portability & Hardening**
 - **Future — Documents**
