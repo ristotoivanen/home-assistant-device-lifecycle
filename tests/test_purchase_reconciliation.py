@@ -18,6 +18,7 @@ from custom_components.device_lifecycle.const import (
     CONF_ASSET_UUID,
     CONF_CURRENCY,
     CONF_DEVICE_IDS,
+    CONF_INSTALLED_DATE,
     CONF_NOTES,
     CONF_PURCHASE_DATE,
     CONF_PURCHASE_NAME,
@@ -26,16 +27,18 @@ from custom_components.device_lifecycle.const import (
     CONF_RECEIPT_REFERENCE,
     CONF_RECEIPT_URL,
     CONF_SELLER,
+    CONF_WARRANTY_TYPE,
     CONFIG_ENTRY_VERSION,
     DOMAIN,
     SUBENTRY_TYPE_PURCHASE,
+    WARRANTY_ONE_YEAR,
+    WARRANTY_TWO_YEARS,
 )
 from custom_components.device_lifecycle.models import AssetStoreData
 from custom_components.device_lifecycle.storage import (
     STORAGE_KEY,
     STORAGE_MINOR_VERSION,
     STORAGE_VERSION,
-    AssetStoreError,
     AssetStoreManager,
 )
 
@@ -45,6 +48,7 @@ from .conftest import (
     PURCHASE_SUBENTRY_ID,
     PURCHASE_UUID,
 )
+from .test_exposure_options_reload import _verified_store_readback
 from .test_options_flow import _options_flow
 
 MANUAL_ASSET_UUID = "33333333-3333-4333-8333-333333333333"
@@ -226,12 +230,12 @@ async def test_cleared_user_purchase_relationship_stays_bidirectionally_clear(
     assert manager.purchase(PURCHASE_UUID)["asset_uuids"] == []
 
 
-async def test_conflicting_user_and_legacy_purchase_assignment_is_rejected(
+async def test_conflicting_legacy_purchase_assignment_leaves_user_link_intact(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
     purchase_subentry_data: dict,
 ) -> None:
-    """Legacy device reconciliation cannot move a user-owned relationship."""
+    """Legacy device reconciliation neither moves nor fails a user link."""
     data = deepcopy(asset_store_data)
     data["assets"][ASSET_UUID]["field_sources"]["purchase_uuid"] = "user"
     second_purchase = deepcopy(data["purchases"][PURCHASE_UUID])
@@ -252,13 +256,14 @@ async def test_conflicting_user_and_legacy_purchase_assignment_is_rejected(
         raw,
         subentry_id=SECOND_PURCHASE_SUBENTRY_ID,
     )
-    before = deepcopy(manager._data)
 
-    with pytest.raises(AssetStoreError, match="user-managed relationship"):
-        await manager.async_reconcile_entry(_entry(subentry))
+    await manager.async_reconcile_entry(_entry(subentry))
 
-    assert manager._data == before
-    manager._store.async_save.assert_not_awaited()
+    asset = manager.asset(ASSET_UUID)
+    assert asset["purchase_uuid"] == PURCHASE_UUID
+    assert asset["field_sources"]["purchase_uuid"] == "user"
+    assert manager.purchase(PURCHASE_UUID)["asset_uuids"] == [ASSET_UUID]
+    assert manager.purchase(SECOND_PURCHASE_UUID)["asset_uuids"] == []
 
 
 async def test_historical_user_managed_purchase_relationship_is_preserved(
@@ -357,17 +362,16 @@ async def test_empty_purchase_allocates_only_purchase_until_device_is_added(
     assert manager.purchase(PURCHASE_UUID)["asset_uuids"] == [ASSET_UUID]
 
 
-async def test_user_relink_to_second_purchase_blocks_later_reconciliation(
+async def test_user_relink_to_second_purchase_survives_later_reconciliation(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
     purchase_subentry_data: dict,
 ) -> None:
-    """0.7.4 G2 scenario A, characterizing 0.7.3.
+    """0.7.4 G3 scenario A: a relink through the real OptionsFlow holds.
 
-    A device-backed Asset is moved to another Purchase through the real
-    OptionsFlow. The legacy Purchase subentry still lists the same primary
-    HA device, because the flow never rewrites it, so the next
-    reconciliation sees the user-owned link as a conflict.
+    The legacy Purchase subentry keeps listing the same primary HA device,
+    because no flow rewrites `device_ids`, so every later reconciliation
+    replays the stale projection against the user's choice.
     """
     manager = _manager(hass, _data_with_second_purchase(asset_store_data))
     flow, _flow_entry = _options_flow(hass, manager)
@@ -386,28 +390,41 @@ async def test_user_relink_to_second_purchase_blocks_later_reconciliation(
 
     legacy = _purchase_subentry(deepcopy(purchase_subentry_data))
     assert legacy.data[CONF_DEVICE_IDS] == [DEVICE_ID]
-    before = deepcopy(manager._data)
-    manager._store.async_save.reset_mock()
+    # Diverge the legacy Purchase's shared fields from the Asset's own, so
+    # skipping that Purchase's projection is observable and not a tautology.
+    legacy.data[CONF_INSTALLED_DATE] = "2026-07-01"
+    legacy.data[CONF_WARRANTY_TYPE] = WARRANTY_ONE_YEAR
+    entry = _entry(legacy)
 
-    with pytest.raises(AssetStoreError, match="user-managed relationship"):
-        await manager.async_reconcile_entry(_entry(legacy))
+    await manager.async_reconcile_entry(entry)
+    first_pass = deepcopy(manager._data)
+    await manager.async_reconcile_entry(entry)
 
-    assert manager._data == before
-    manager._store.async_save.assert_not_awaited()
+    preserved = manager.asset(ASSET_UUID)
+    assert preserved["purchase_uuid"] == SECOND_PURCHASE_UUID
+    assert preserved["field_sources"]["purchase_uuid"] == "user"
+    assert manager.purchase(PURCHASE_UUID)["asset_uuids"] == []
+    assert manager.purchase(SECOND_PURCHASE_UUID)["asset_uuids"] == [ASSET_UUID]
+    assert manager._data == first_pass
+
+    # The Asset is no longer a member of the legacy Purchase, so that
+    # Purchase's shared fields must not be projected onto it either.
+    assert preserved["installed_date"] == asset["installed_date"] == "2026-01-20"
+    assert preserved["warranty"] == asset["warranty"]
+    assert preserved["warranty"]["type"] == WARRANTY_TWO_YEARS
 
 
-async def test_user_cleared_purchase_blocks_reconciliation_of_same_device(
+async def test_user_cleared_purchase_survives_readded_legacy_device(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
     purchase_subentry_data: dict,
 ) -> None:
-    """0.7.4 G2 scenario B, characterizing 0.7.3.
+    """0.7.4 G3 scenario B: an explicitly cleared link is never restored.
 
     The Asset reaches "no Purchase" through legacy device removal, which is
     the supported path, and the user then confirms that state explicitly.
-    Re-adding the same primary HA device to a Purchase subentry is the only
-    difference from the purchase-owned case, which restores the link
-    normally, yet here reconciliation rejects it.
+    Re-adding the same primary HA device is the only difference from the
+    purchase-owned case, where the legacy projection does restore the link.
     """
     manager = _manager(hass, asset_store_data)
     raw = deepcopy(purchase_subentry_data)
@@ -433,27 +450,29 @@ async def test_user_cleared_purchase_blocks_reconciliation_of_same_device(
     assert cleared["field_sources"]["purchase_uuid"] == "user"
 
     subentry.data[CONF_DEVICE_IDS] = [DEVICE_ID]
-    before = deepcopy(manager._data)
-    manager._store.async_save.reset_mock()
 
-    with pytest.raises(AssetStoreError, match="user-managed relationship"):
-        await manager.async_reconcile_entry(entry)
+    await manager.async_reconcile_entry(entry)
+    first_pass = deepcopy(manager._data)
+    await manager.async_reconcile_entry(entry)
 
-    assert manager._data == before
-    manager._store.async_save.assert_not_awaited()
+    preserved = manager.asset(ASSET_UUID)
+    assert preserved["purchase_uuid"] is None
+    assert preserved["field_sources"]["purchase_uuid"] == "user"
+    assert manager.purchase(PURCHASE_UUID)["asset_uuids"] == []
+    assert manager._data == first_pass
 
 
-async def test_user_relink_conflict_fails_real_config_entry_setup(
+async def test_user_relink_conflict_still_loads_real_config_entry(
     hass: HomeAssistant,
     hass_storage: dict,
     asset_store_data: AssetStoreData,
     purchase_subentry_data: dict,
 ) -> None:
-    """0.7.4 G2 scenario C, characterizing 0.7.3.
+    """0.7.4 G3 scenario C: the persisted mismatch still sets the entry up.
 
-    The scenario A conflict is not confined to storage: reconciliation runs
-    during `async_setup_entry`, so the persisted state leaves the whole
-    integration unloadable rather than degrading one relationship.
+    Reconciliation runs inside `async_setup_entry`, so before 0.7.4 this
+    exact stored state left the whole integration unloadable instead of
+    degrading one relationship.
     """
     data = _data_with_second_purchase(asset_store_data)
     asset = data["assets"][ASSET_UUID]
@@ -485,10 +504,14 @@ async def test_user_relink_conflict_fails_real_config_entry_setup(
     )
     entry.add_to_hass(hass)
 
-    assert await hass.config_entries.async_setup(entry.entry_id) is False
-    await hass.async_block_till_done()
+    with _verified_store_readback(hass_storage):
+        assert await hass.config_entries.async_setup(entry.entry_id) is True
+        await hass.async_block_till_done()
 
-    assert entry.state is ConfigEntryState.SETUP_ERROR
-    assert not hasattr(entry, "runtime_data")
-    stored_asset = hass_storage[STORAGE_KEY]["data"]["assets"][ASSET_UUID]
-    assert stored_asset["purchase_uuid"] == SECOND_PURCHASE_UUID
+    assert entry.state is ConfigEntryState.LOADED
+    manager = entry.runtime_data
+    loaded = manager.asset(ASSET_UUID)
+    assert loaded["purchase_uuid"] == SECOND_PURCHASE_UUID
+    assert loaded["field_sources"]["purchase_uuid"] == "user"
+    assert manager.purchase(PURCHASE_UUID)["asset_uuids"] == []
+    assert manager.purchase(SECOND_PURCHASE_UUID)["asset_uuids"] == [ASSET_UUID]

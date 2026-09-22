@@ -3242,21 +3242,21 @@ class AssetStoreManager:
         data: AssetStoreData,
         asset: AssetData,
         purchase_uuid: str,
-        device_id: str,
-    ) -> None:
-        """Apply legacy device membership without overriding user ownership."""
-        old_purchase_uuid = asset.get("purchase_uuid")
+    ) -> bool:
+        """Apply legacy device membership without overriding user ownership.
+
+        Returns whether this subentry's projection owns the Asset, so the
+        caller can skip both the purchase field projection and canonical
+        membership for an Asset the projection does not own.
+        """
         purchase_source = asset.get("field_sources", {}).get("purchase_uuid")
 
         if purchase_source == FIELD_SOURCE_USER:
-            if old_purchase_uuid != purchase_uuid:
-                relationship = old_purchase_uuid or "no Purchase"
-                raise AssetStoreError(
-                    f"HA device {device_id} belongs to Asset {asset['asset_id']}, "
-                    f"which has a user-managed relationship to {relationship}; "
-                    f"it cannot be assigned to Purchase {purchase_uuid}"
-                )
-            return
+            # A user-managed relationship is authoritative. The subentry keeps
+            # listing the device because no flow rewrites `device_ids`, so a
+            # mismatch is the normal steady state after the user reassigned or
+            # cleared the link — not a conflict to move, restore or fail on.
+            return asset.get("purchase_uuid") == purchase_uuid
 
         self._remove_asset_from_previous_purchase(
             data,
@@ -3267,6 +3267,7 @@ class AssetStoreManager:
         asset.setdefault("field_sources", {})[
             "purchase_uuid"
         ] = FIELD_SOURCE_PURCHASE
+        return True
 
     def _reconcile_entry_data(
         self,
@@ -3329,14 +3330,13 @@ class AssetStoreManager:
                     self._ensure_primary_reference(asset, device_id)
                     self._refresh_home_assistant_metadata(asset, device, device_id)
 
-                self._assign_reconciled_purchase(
+                if self._assign_reconciled_purchase(
                     data,
                     asset,
                     purchase_uuid,
-                    device_id,
-                )
-                self._apply_purchase_asset_fields(asset, raw)
-                new_members.append(asset["asset_uuid"])
+                ):
+                    self._apply_purchase_asset_fields(asset, raw)
+                    new_members.append(asset["asset_uuid"])
 
             for asset_uuid in preserved_user_members:
                 if asset_uuid not in new_members:
