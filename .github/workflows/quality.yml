@@ -98,3 +98,59 @@ jobs:
           pytest -q \
             --cov=custom_components.device_lifecycle \
             --cov-report=term-missing
+
+  minimum-ha:
+    # hacs.json promises support down to its declared minimum Home Assistant.
+    # The Device Registry iteration model differs between 2026.8 and 2026.9,
+    # and the supported-baseline job above only runs 2026.9.x, so run the
+    # full suite on exactly the declared minimum release as well.
+    name: pytest on minimum supported Home Assistant
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements_test_minimum.txt
+
+      - name: Install minimum supported test stack
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements_test_minimum.txt
+
+      - name: Verify Home Assistant equals the declared minimum
+        # Fail unless this job tests exactly the Home Assistant version
+        # hacs.json declares as the minimum, so the two cannot drift apart.
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+
+          from homeassistant.const import __version__ as installed
+
+          with open("hacs.json", encoding="utf-8") as file:
+              declared = json.load(file)["homeassistant"]
+          line = (
+              f"Minimum supported Home Assistant: declared {declared}, "
+              f"tested {installed}"
+          )
+          print(line)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              print(line, file=summary)
+
+          if installed != declared:
+              print(
+                  f"::error::Expected exactly the declared minimum Home "
+                  f"Assistant {declared}; got {installed}"
+              )
+              sys.exit(1)
+          PY
+
+      - name: pytest
+        run: pytest -q

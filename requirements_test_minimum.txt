@@ -1,0 +1,6 @@
+# Minimum supported Home Assistant test stack.
+# hacs.json declares the minimum supported Home Assistant version; Quality
+# gates runs the full suite against exactly that release with this pin.
+# pytest-homeassistant-custom-component 0.13.354 pins
+# homeassistant==2026.8.0. The supported baseline is requirements_test.txt.
+pytest-homeassistant-custom-component==0.13.354
