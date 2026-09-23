@@ -247,6 +247,7 @@
       "asset_replacement": {
         "description": "Asset: {asset}. Replacement connects physical Assets only and does not transfer Purchases, warranty, Deployment, Runtime, Areas, or Home Assistant relationships.",
         "menu_options": {
+          "manage_asset_menu": "← Back to asset management",
           "manage_asset_replacement": "Manage existing relationship",
           "replacement_replaced_by": "This Asset was replaced by…",
           "replacement_replaces": "This Asset replaces…"
@@ -413,6 +414,7 @@
         "description": "Asset: {asset}. Primary device: {current_primary}. Related devices: {related_devices}. Related devices are references only and do not affect Asset identity, metadata, Purchases, Runtime, entity placement, or Home Assistant device ownership.",
         "menu_options": {
           "add_related_device": "Add related device",
+          "manage_asset_menu": "← Back to asset management",
           "manage_primary_device": "Manage primary device",
           "remove_related_device": "Remove related device"
         },

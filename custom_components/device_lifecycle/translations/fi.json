@@ -247,6 +247,7 @@
       "asset_replacement": {
         "description": "Laite: {asset}. Korvaussuhde yhdistää vain fyysiset laitteet eikä siirrä ostoksia, takuuta, käyttötilaa, käyttötunteja, alueita tai Home Assistant -laitelinkkejä.",
         "menu_options": {
+          "manage_asset_menu": "← Takaisin laitteen hallintaan",
           "manage_asset_replacement": "Hallitse nykyistä suhdetta",
           "replacement_replaced_by": "Tämän laitteen korvasi…",
           "replacement_replaces": "Tämä laite korvaa…"
@@ -413,6 +414,7 @@
         "description": "Laite: {asset}. Ensisijainen laite: {current_primary}. Liittyvät laitteet: {related_devices}. Liittyvät laitteet ovat vain viitteitä eivätkä vaikuta laitteen identiteettiin, tietoihin, ostoksiin, käyttötuntiseurantaan, entiteettien sijoitteluun tai Home Assistant -laitteen omistajuuteen.",
         "menu_options": {
           "add_related_device": "Lisää liittyvä laite",
+          "manage_asset_menu": "← Takaisin laitteen hallintaan",
           "manage_primary_device": "Hallitse ensisijaista laitetta",
           "remove_related_device": "Poista liittyvä laite"
         },

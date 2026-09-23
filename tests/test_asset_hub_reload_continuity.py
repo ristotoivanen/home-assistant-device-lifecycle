@@ -20,11 +20,15 @@ from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers import device_registry as dr
 
 from custom_components import device_lifecycle
 from custom_components.device_lifecycle.const import (
     CONF_ASSET_NAME,
     CONF_DEPLOYMENT_STATE,
+    CONF_DEVICE_ID,
+    CONF_REPLACEMENT_REASON,
+    CONF_REPLACEMENT_TARGET_ASSET_UUID,
     DEPLOYMENT_STATE_DEPLOYED,
     DEPLOYMENT_STATE_UNKNOWN,
 )
@@ -37,6 +41,7 @@ from .test_exposure_options_reload import (
     _start_asset_action,
     _verified_store_readback,
 )
+from .test_ha_relationship_options_flow import _external_device
 from .test_options_flow import _identical_metadata_input
 
 pytestmark = pytest.mark.real_reload
@@ -338,3 +343,94 @@ async def test_second_mutation_in_the_same_flow_uses_the_reloaded_manager(
     assert managers[-1].asset(ASSET_UUID)[CONF_DEPLOYMENT_STATE] == (
         DEPLOYMENT_STATE_UNKNOWN
     )
+
+
+@pytest.mark.parametrize(
+    ("submenu", "operation", "payload", "result_key"),
+    [
+        (
+            "asset_replacement",
+            "replacement_replaces",
+            {CONF_REPLACEMENT_REASON: "failure"},
+            "asset_replacement_updated",
+        ),
+        (
+            "ha_relationship",
+            "add_related_device",
+            {},
+            "asset_related_device_added",
+        ),
+    ],
+)
+async def test_submenu_operations_survive_their_real_reload(
+    hass: HomeAssistant,
+    hass_storage: dict,
+    asset_store_data: AssetStoreData,
+    device_registry: dr.DeviceRegistry,
+    submenu: str,
+    operation: str,
+    payload: dict,
+    result_key: str,
+) -> None:
+    """A submenu operation reloads for real and stays in its own submenu.
+
+    Both domains have their own reload path, so both are driven end to end
+    through Home Assistant's flow manager: the entry is genuinely torn down
+    and set up again, and the next submenu action has to work against the
+    manager that replaced the one the operation ran on.
+    """
+    with _verified_store_readback(hass_storage):
+        entry = await _setup_loaded_entry(hass, hass_storage, asset_store_data)
+    original_manager = entry.runtime_data
+
+    if submenu == "asset_replacement":
+        with _verified_store_readback(hass_storage):
+            predecessor = await original_manager.async_create_manual_asset(
+                name="Predecessor unit"
+            )
+        payload = {
+            **payload,
+            CONF_REPLACEMENT_TARGET_ASSET_UUID: predecessor["asset_uuid"],
+        }
+    else:
+        _owner, device = _external_device(
+            hass,
+            device_registry,
+            key="reload-submenu",
+            name="Bench meter",
+        )
+        payload = {**payload, CONF_DEVICE_ID: device.id}
+
+    flow_id = await _start_asset_action(hass, entry, ASSET_UUID, submenu)
+    flow = _options_flow_handler(hass, flow_id)
+
+    with _verified_store_readback(hass_storage):
+        await hass.config_entries.options.async_configure(
+            flow_id,
+            {"next_step_id": operation},
+        )
+        completed = await hass.config_entries.options.async_configure(
+            flow_id,
+            payload,
+        )
+
+        assert completed["type"] is FlowResultType.MENU
+        assert completed["step_id"] == submenu
+        assert completed["description_placeholders"]["result"] == result_key
+        assert entry.state is ConfigEntryState.LOADED
+        new_manager = entry.runtime_data
+        assert new_manager is not original_manager
+        assert flow._manager is new_manager
+        assert flow._selected_asset_uuid == ASSET_UUID
+
+        # The submenu still works against the manager the reload installed.
+        next_action = await hass.config_entries.options.async_configure(
+            flow_id,
+            {"next_step_id": "manage_asset_menu"},
+        )
+
+        assert next_action["type"] is FlowResultType.MENU
+        assert next_action["step_id"] == "manage_asset_menu"
+        assert next_action["description_placeholders"]["result"] == ""
+
+        await hass.async_block_till_done()

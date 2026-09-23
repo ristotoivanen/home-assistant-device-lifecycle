@@ -154,6 +154,7 @@ async def test_ha_relationship_action_is_visible_and_uses_device_selector(
     assert overview["menu_options"] == [
         "manage_primary_device",
         "add_related_device",
+        "manage_asset_menu",
     ]
     assert overview["description_placeholders"]["current_primary"] == (
         "No primary Home Assistant device"
@@ -910,6 +911,7 @@ async def test_relationship_overview_displays_primary_related_and_stale_refs(
         "manage_primary_device",
         "add_related_device",
         "remove_related_device",
+        "manage_asset_menu",
     ]
     placeholders = overview["description_placeholders"]
     assert primary.id in placeholders["current_primary"]

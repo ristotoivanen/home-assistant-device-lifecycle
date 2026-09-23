@@ -521,9 +521,11 @@ async def test_replacement_menu_and_initial_forms_cover_current_graph_state(
     assert empty_menu["menu_options"] == [
         "replacement_replaces",
         "replacement_replaced_by",
+        "manage_asset_menu",
     ]
     assert initial_create["step_id"] == "replacement_replaced_by"
-    assert populated_menu["menu_options"][-1] == "manage_asset_replacement"
+    assert populated_menu["menu_options"][-2] == "manage_asset_replacement"
+    assert populated_menu["menu_options"][-1] == "manage_asset_menu"
     assert initial_manage["step_id"] == "manage_asset_replacement"
     record_selector = next(
         validator

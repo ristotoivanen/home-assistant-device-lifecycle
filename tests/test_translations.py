@@ -261,10 +261,12 @@ def test_every_menu_action_and_step_has_translation(language: str) -> None:
     }
     assert set(steps["ha_relationship"]["menu_options"]) == {
         "add_related_device",
+        "manage_asset_menu",
         "manage_primary_device",
         "remove_related_device",
     }
     assert set(steps["asset_replacement"]["menu_options"]) == {
+        "manage_asset_menu",
         "manage_asset_replacement",
         "replacement_replaced_by",
         "replacement_replaces",

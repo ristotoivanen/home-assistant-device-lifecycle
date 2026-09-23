@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Coroutine
 from datetime import date
 from math import isfinite
 from typing import Any, cast
@@ -1300,12 +1301,25 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             getattr(self.config_entry, "runtime_data", None), AssetStoreManager
         )
 
+    def _take_last_result(self) -> str:
+        """Return the pending completion key once, then forget it.
+
+        Called by whichever step renders next, so a result is reported in
+        the context the operation happened in and never follows the person
+        into the next one.
+        """
+        result = self._last_result or ""
+        self._last_result = None
+        return result
+
     async def _finish_asset_action(
         self,
         asset: AssetData,
         description: str,
         *,
         reload: bool = True,
+        destination: Callable[[], Coroutine[Any, Any, ConfigFlowResult]]
+        | None = None,
     ) -> ConfigFlowResult:
         """Reload when canonical Store data changed, then keep managing the Asset.
 
@@ -1314,9 +1328,14 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         manager whether their mutation was a canonical no-op (0.7.2 WP2 /
         F-2/F-3) pass `reload=False` to skip the redundant reload.
 
-        `description` is the operation's completion key. The hub shows it once
-        on the render this call returns to, and the wording behind the key
-        comes from the existing `options.create_entry` translations.
+        `destination` is where the person lands afterwards, defaulting to the
+        Asset hub. An operation reached through a submenu passes that submenu
+        instead, so somebody recording several replacements or relinking
+        several devices stays where they are working.
+
+        `description` is the operation's completion key. The destination shows
+        it once, and the wording behind the key comes from the existing
+        `options.create_entry` translations.
         """
         if not await self._async_apply_reload(reload):
             return self.async_abort(reason="entry_not_loaded")
@@ -1325,7 +1344,9 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         # has been replaced, and only the UUID survives the reload.
         self._selected_asset_uuid = asset["asset_uuid"]
         self._last_result = description
-        return await self.async_step_manage_asset_menu()
+        if destination is None:
+            return await self.async_step_manage_asset_menu()
+        return await destination()
 
     def _finish_quick_add(self, asset: AssetData) -> ConfigFlowResult:
         """Finish Quick Add with one Store-owned reload and unchanged options."""
@@ -2470,7 +2491,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         """Collect every value the Asset hub renders for one Asset."""
         return {
             "asset": _asset_label(asset),
-            "result": self._last_result or "",
+            "result": self._take_last_result(),
             "metadata": self._summary_metadata(asset),
             "purchase_warranty": self._summary_purchase_warranty(asset),
             "deployment": self._summary_deployment(asset),
@@ -2495,8 +2516,6 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             return self._show_asset_selection(errors={"base": "asset_missing"})
 
         placeholders = self._hub_placeholders(asset)
-        # Shown once: the next independent render of the hub is not a result.
-        self._last_result = None
         return self.async_show_menu(
             step_id="manage_asset_menu",
             menu_options=[
@@ -2784,10 +2803,15 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         menu_options = ["replacement_replaces", "replacement_replaced_by"]
         if self._manager.replacement_records_for_asset(asset["asset_uuid"]):
             menu_options.append("manage_asset_replacement")
+        menu_options.append("manage_asset_menu")
         return self.async_show_menu(
             step_id="asset_replacement",
             menu_options=menu_options,
-            description_placeholders={"asset": _asset_label(asset)},
+            description_placeholders={
+                "asset": _asset_label(asset),
+                "result": self._take_last_result(),
+                "replacement": self._summary_replacement(asset),
+            },
         )
 
     def _show_replacement_create_form(
@@ -2881,7 +2905,11 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         refreshed = self._manager.asset(asset["asset_uuid"])
         if refreshed is None:
             return self._show_asset_selection(errors={"base": "asset_missing"})
-        return await self._finish_asset_action(refreshed, "asset_replacement_updated")
+        return await self._finish_asset_action(
+            refreshed,
+            "asset_replacement_updated",
+            destination=self.async_step_asset_replacement,
+        )
 
     async def async_step_replacement_replaces(
         self,
@@ -3085,7 +3113,11 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         refreshed = self._manager.asset(asset["asset_uuid"])
         if refreshed is None:
             return self._show_asset_selection(errors={"base": "asset_missing"})
-        return await self._finish_asset_action(refreshed, "asset_replacement_updated")
+        return await self._finish_asset_action(
+            refreshed,
+            "asset_replacement_updated",
+            destination=self.async_step_asset_replacement,
+        )
 
     async def async_step_confirm_void_replacement(
         self,
@@ -3128,6 +3160,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                     return await self._finish_asset_action(
                         refreshed,
                         "asset_replacement_updated",
+                        destination=self.async_step_asset_replacement,
                     )
         schema = vol.Schema(
             {
@@ -3364,11 +3397,16 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         menu_options = ["manage_primary_device", "add_related_device"]
         if _related_device_ids(asset):
             menu_options.append("remove_related_device")
+        menu_options.append("manage_asset_menu")
         return self.async_show_menu(
             step_id="ha_relationship",
             menu_options=menu_options,
             description_placeholders={
                 "asset": _asset_label(asset),
+                "result": self._take_last_result(),
+                # Name-only context alongside the repair-oriented labels
+                # below, which deliberately carry the stored device ID.
+                "ha_devices": self._summary_ha_devices(asset),
                 "current_primary": self._ha_device_label(
                     _primary_device_id(asset)
                 ),
@@ -3474,6 +3512,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 asset,
                 "asset_ha_relationship_updated",
                 reload=changed,
+                destination=self.async_step_ha_relationship,
             )
 
         target_device_id = str(user_input.get(CONF_DEVICE_ID) or "")
@@ -3543,6 +3582,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             asset,
             "asset_ha_relationship_updated",
             reload=changed,
+            destination=self.async_step_ha_relationship,
         )
 
     def _show_add_related_device_form(
@@ -3618,7 +3658,10 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 errors={"base": self._storage_error_key(err)},
             )
         return await self._finish_asset_action(
-            asset, "asset_related_device_added", reload=changed
+            asset,
+            "asset_related_device_added",
+            reload=changed,
+            destination=self.async_step_ha_relationship,
         )
 
     def _show_remove_related_device_form(
@@ -3688,7 +3731,11 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 user_input=user_input,
                 errors={"base": self._storage_error_key(err)},
             )
-        return await self._finish_asset_action(asset, "asset_related_device_removed")
+        return await self._finish_asset_action(
+            asset,
+            "asset_related_device_removed",
+            destination=self.async_step_ha_relationship,
+        )
 
 
 class PurchaseSubentryFlow(ConfigSubentryFlow):
