@@ -1155,16 +1155,16 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         return "asset_store_error"
 
     def _area_label(self, area_id: str | None) -> str:
-        """Describe a current Area without guessing from its name."""
+        """Name a current Area for people, never by its registry ID."""
         if area_id is None:
             return self._localized_label("No Area", "Ei aluetta")
         area = ar.async_get(self.hass).async_get_area(area_id)
         if area is None:
             return self._localized_label(
-                f"Unavailable Home Assistant Area (stored ID: {area_id})",
-                f"Alue ei ole enää käytettävissä (tallennettu tunnus: {area_id})",
+                "Unavailable Home Assistant Area",
+                "Alue ei ole enää käytettävissä",
             )
-        return f"{area.name} ({area.id})"
+        return str(area.name)
 
     def _device_display_name(self, device_id: str) -> str | None:
         """Return one HA device's display name, or None when it is gone."""
@@ -1178,45 +1178,76 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             or device_id
         )
 
+    def _unavailable_device_label(self, ordinal: int | None = None) -> str:
+        """Name a stored relationship whose Home Assistant device is gone.
+
+        Numbered only when several stale references have to be told apart,
+        which is the one thing the registry ID used to be doing here.
+        """
+        suffix = "" if ordinal is None else f" {ordinal}"
+        return self._localized_label(
+            f"Home Assistant device unavailable{suffix}",
+            f"Home Assistant -laite ei saatavilla{suffix}",
+        )
+
     def _ha_device_label(self, device_id: str | None) -> str:
-        """Describe a relationship without guessing a replacement device."""
+        """Name a relationship for people, never by its registry ID."""
         if device_id is None:
             return self._localized_label(
                 "No primary Home Assistant device",
                 "Ei ensisijaista Home Assistant -laitetta",
             )
         name = self._device_display_name(device_id)
-        if name is None:
-            return self._localized_label(
-                f"Unavailable Home Assistant device (stored ID: {device_id})",
-                "Home Assistant -laite ei ole enää käytettävissä "
-                f"(tallennettu tunnus: {device_id})",
-            )
-        return f"{name} ({device_id})"
+        return self._unavailable_device_label() if name is None else name
+
+    def _related_device_labels(
+        self,
+        asset: AssetData,
+    ) -> list[tuple[str, str]]:
+        """Pair each stored related reference with the label people see.
+
+        Built once for both the overview text and the removal selector, so a
+        stale reference carries the same number in the sentence that
+        describes it and in the list somebody picks it from.
+        """
+        named = [
+            (device_id, self._device_display_name(device_id))
+            for device_id in _related_device_ids(asset)
+        ]
+        stale_total = sum(1 for _device_id, name in named if name is None)
+        labels: list[tuple[str, str]] = []
+        stale_seen = 0
+        for device_id, name in named:
+            if name is None:
+                stale_seen += 1
+                name = self._unavailable_device_label(
+                    stale_seen if stale_total > 1 else None
+                )
+            labels.append((device_id, name))
+        return labels
 
     def _related_device_summary(self, asset: AssetData) -> str:
         """Describe every related relationship, including stale references."""
-        device_ids = _related_device_ids(asset)
-        if not device_ids:
+        labels = self._related_device_labels(asset)
+        if not labels:
             return self._localized_label(
                 "No related Home Assistant devices",
                 "Ei liittyviä Home Assistant -laitteita",
             )
-        return "; ".join(
-            self._ha_device_label(device_id) for device_id in device_ids
-        )
+        return "; ".join(label for _device_id, label in labels)
 
     def _related_device_options(
         self,
         asset: AssetData,
     ) -> list[selector.SelectOptionDict]:
-        """Return stored related references as removable selector options."""
+        """Return stored related references as removable selector options.
+
+        The value stays the stored device ID so removal still targets the
+        exact reference; only the label is written for people.
+        """
         return [
-            selector.SelectOptionDict(
-                value=device_id,
-                label=self._ha_device_label(device_id),
-            )
-            for device_id in _related_device_ids(asset)
+            selector.SelectOptionDict(value=device_id, label=label)
+            for device_id, label in self._related_device_labels(asset)
         ]
 
     def _validate_ha_link_target(

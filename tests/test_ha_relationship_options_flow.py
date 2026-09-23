@@ -674,8 +674,8 @@ async def test_missing_stored_device_is_displayed_and_can_be_unlinked(
     form = await flow.async_step_manage_primary_device()
 
     assert form["type"] is FlowResultType.FORM
-    assert "Unavailable" in form["description_placeholders"]["current_device"]
-    assert before["ha_device_refs"][0]["device_id"] in form[
+    assert "unavailable" in form["description_placeholders"]["current_device"]
+    assert before["ha_device_refs"][0]["device_id"] not in form[
         "description_placeholders"
     ]["current_device"]
     assert manager.asset(ASSET_UUID)["ha_device_refs"] == before["ha_device_refs"]
@@ -885,7 +885,7 @@ async def test_relationship_overview_displays_primary_related_and_stale_refs(
     hass: HomeAssistant,
     device_registry: dr.DeviceRegistry,
 ) -> None:
-    """Overview names current devices and never hides stale stored IDs."""
+    """Overview names current and stale devices without their registry IDs."""
     _primary_entry, primary = _external_device(
         hass,
         device_registry,
@@ -914,12 +914,12 @@ async def test_relationship_overview_displays_primary_related_and_stale_refs(
         "manage_asset_menu",
     ]
     placeholders = overview["description_placeholders"]
-    assert primary.id in placeholders["current_primary"]
-    assert primary.name in placeholders["current_primary"]
-    assert related.id in placeholders["related_devices"]
+    assert placeholders["current_primary"] == primary.name
+    assert primary.id not in placeholders["current_primary"]
     assert related.name in placeholders["related_devices"]
-    assert "stale-related" in placeholders["related_devices"]
-    assert "Unavailable" in placeholders["related_devices"]
+    assert related.id not in placeholders["related_devices"]
+    assert "stale-related" not in placeholders["related_devices"]
+    assert "unavailable" in placeholders["related_devices"]
 
 
 async def test_add_related_uses_device_selector_without_metadata_or_registry_writes(
@@ -1091,8 +1091,8 @@ async def test_remove_related_uses_stored_options_and_removes_stale_ref(
     stale_option = next(
         option for option in options if option["value"] == "missing-related"
     )
-    assert "missing-related" in stale_option["label"]
-    assert "Unavailable" in stale_option["label"]
+    assert "missing-related" not in stale_option["label"]
+    assert "unavailable" in stale_option["label"]
     assert result["type"] is FlowResultType.MENU
     assert manager.asset(asset["asset_uuid"])["ha_device_refs"] == [
         {"device_id": current.id, "role": "related"}
