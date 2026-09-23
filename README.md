@@ -51,6 +51,7 @@ Device Lifecycle 0.7.4 reworks the Asset management UI. Store remains **3.1**, C
 - **Purchase & warranty.** The Purchase editor states that it changes only the Purchase link and that the warranty is the Asset's own detail. See [Warranty](#warranty).
 - **Safer confirmations.** Declining the confirmation for clearing a location, recording Disposed, or voiding a replacement returns to the form it came from. Nothing is saved.
 - **No technical IDs in the management UI.** Home Assistant devices, Areas, and replacement relationships are shown by name. A stored reference that no longer exists reads as unavailable instead of showing its ID. `DLxxxx` remains the Asset identifier people see.
+- **Purchase link fix.** If you had changed or cleared an Asset's Purchase yourself while a Purchase configuration still listed the Asset's Home Assistant device, the next restart or reload made the integration fail to set up. Your choice is now kept and setup continues normally.
 - **Terminology.** English and Finnish management terms have been aligned, for example Installation status / Asennustila and Home Assistant devices / Home Assistant -laitteet. Entity names and states keep their earlier wording, so the Deployment entity still reads `Deployment` / `Käyttöönotto`.
 
 A pre-existing setup failure, unrelated to these changes, remains in this release. See [Known issue in 0.7.4](#known-issue-in-074).
@@ -104,7 +105,7 @@ If the repository is not already available in your HACS instance, add it manuall
 
 Copy `custom_components/device_lifecycle/` into `/config/custom_components/device_lifecycle/`, restart Home Assistant, and add the integration from **Settings > Devices & services**.
 
-Device Lifecycle 0.7.3 requires Home Assistant 2026.8.0 or newer. Review the [upgrade notes](#upgrade-notes) and create a Home Assistant backup before any upgrade that changes the Store schema.
+Device Lifecycle 0.7.4 requires Home Assistant 2026.8.0 or newer. Review the [upgrade notes](#upgrade-notes) and create a Home Assistant backup before any upgrade that changes the Store schema.
 
 ## Optional dashboard
 
@@ -428,7 +429,7 @@ Asset management no longer closes after each change. If you are used to reopenin
 
 This issue already exists in 0.7.3 and is not caused by 0.7.4. It is not fixed in 0.7.4.
 
-A Purchase configuration can list a Home Assistant device, for example one selected when the Purchase was created. If that device is later removed from Home Assistant, for instance because its own integration was removed, Device Lifecycle can fail to set up on the next restart or reload, and the integration is then shown as failed to set up. While the integration is in that state, saving a change in Asset management ends with "Device Lifecycle is not currently loaded", because the integration does not return to a loaded state after the save. The Asset data itself is not lost.
+A Purchase configuration can list a Home Assistant device, for example one selected when the Purchase was created. If that device is later removed from Home Assistant, for instance because its own integration was removed, Device Lifecycle can fail to set up on the next restart or reload, and the integration is then shown as failed to set up. If the device is removed while Device Lifecycle is running, the next change saved in Asset management ends with "Device Lifecycle is not currently loaded", because the reload that follows the save cannot set the integration up again. The setup failure does not itself remove the stored Asset data.
 
 A workaround that avoids the failure is to remove the device from the Purchase configuration before removing it from Home Assistant.
 
