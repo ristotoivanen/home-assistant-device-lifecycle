@@ -23,6 +23,7 @@ from homeassistant.data_entry_flow import FlowResultType
 
 from custom_components import device_lifecycle
 from custom_components.device_lifecycle.const import (
+    CONF_ASSET_NAME,
     CONF_DEPLOYMENT_STATE,
     DEPLOYMENT_STATE_DEPLOYED,
     DEPLOYMENT_STATE_UNKNOWN,
@@ -36,6 +37,7 @@ from .test_exposure_options_reload import (
     _start_asset_action,
     _verified_store_readback,
 )
+from .test_options_flow import _identical_metadata_input
 
 pytestmark = pytest.mark.real_reload
 
@@ -245,6 +247,48 @@ async def test_the_mutation_result_waits_for_its_reload_to_finish(
     assert completed["type"] is FlowResultType.MENU
     assert entry.state is ConfigEntryState.LOADED
     assert entry.runtime_data is not original_manager
+
+
+async def test_the_hub_shown_after_a_real_reload_reads_the_new_manager(
+    hass: HomeAssistant,
+    hass_storage: dict,
+    asset_store_data: AssetStoreData,
+) -> None:
+    """The returned hub renders data only the post-reload manager has.
+
+    A rename is the sharpest probe available: the hub's identity line can
+    only carry the new name if it came from the manager the reload
+    installed, not from the Asset the editor was holding.
+    """
+    with _verified_store_readback(hass_storage):
+        entry = await _setup_loaded_entry(hass, hass_storage, asset_store_data)
+    original_manager = entry.runtime_data
+    flow_id = await _start_asset_action(
+        hass,
+        entry,
+        ASSET_UUID,
+        "edit_asset_metadata",
+    )
+    edit = _identical_metadata_input(original_manager.asset(ASSET_UUID))
+    edit[CONF_ASSET_NAME] = "Renamed across a real reload"
+
+    with _verified_store_readback(hass_storage):
+        completed = await hass.config_entries.options.async_configure(
+            flow_id,
+            edit,
+        )
+        await hass.async_block_till_done()
+
+    assert completed["type"] is FlowResultType.MENU
+    assert completed["step_id"] == "manage_asset_menu"
+    assert entry.runtime_data is not original_manager
+    assert entry.runtime_data.asset(ASSET_UUID)["name"] == (
+        "Renamed across a real reload"
+    )
+    assert completed["description_placeholders"]["asset"] == (
+        "Renamed across a real reload · DL0007"
+    )
+    assert completed["description_placeholders"]["result"] == "asset_updated"
 
 
 async def test_second_mutation_in_the_same_flow_uses_the_reloaded_manager(
