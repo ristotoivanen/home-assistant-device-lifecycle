@@ -449,7 +449,8 @@ async def test_lifecycle_forms_reject_invalid_status_and_unconfirmed_disposal(
     assert initial["step_id"] == "asset_lifecycle"
     assert invalid["errors"] == {"base": "invalid_lifecycle_status"}
     assert confirmation["step_id"] == "confirm_disposed"
-    assert declined["errors"] == {"base": "confirmation_required"}
+    assert declined["step_id"] == "asset_lifecycle"
+    assert not declined["errors"]
     assert manager.asset(asset["asset_uuid"])["lifecycle"]["status"] == "active"
 
 
@@ -671,6 +672,7 @@ async def test_void_confirmation_guards_errors_and_disappearing_asset(
     unconfirmed = await flow.async_step_confirm_void_replacement(
         {CONF_VOID_REASON: "Reason", CONF_CONFIRM_VOID: False}
     )
+    flow._pending_replacement_uuid = record["replacement_uuid"]
     empty_reason = await flow.async_step_confirm_void_replacement(
         {CONF_VOID_REASON: "   ", CONF_CONFIRM_VOID: True}
     )
@@ -684,7 +686,8 @@ async def test_void_confirmation_guards_errors_and_disappearing_asset(
         )
 
     assert initial["step_id"] == "confirm_void_replacement"
-    assert unconfirmed["errors"] == {"base": "confirmation_required"}
+    assert unconfirmed["step_id"] == "manage_asset_replacement"
+    assert not unconfirmed["errors"]
     assert empty_reason["errors"] == {"base": "replacement_void_reason_required"}
     assert failed["errors"] == {"base": "asset_store_error"}
 

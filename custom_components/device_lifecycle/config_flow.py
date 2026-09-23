@@ -3005,24 +3005,26 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         errors: dict[str, str] = {}
         if user_input is not None:
             if not user_input.get(CONF_CONFIRM_DISPOSED):
-                errors["base"] = "confirmation_required"
+                # Declining is a decision, not a mistake: drop the pending
+                # transition and hand the lifecycle editor back, unchanged.
+                del self._pending_lifecycle_update
+                return await self.async_step_asset_lifecycle()
+            try:
+                asset, changed = await self._manager.async_set_asset_lifecycle_reporting(
+                    asset["asset_uuid"],
+                    pending["status"],
+                    effective_date=pending["effective_date"],
+                    notes=pending["notes"],
+                )
+            except (AssetStoreError, OSError) as err:
+                errors["base"] = self._storage_error_key(err)
             else:
-                try:
-                    asset, changed = await self._manager.async_set_asset_lifecycle_reporting(
-                        asset["asset_uuid"],
-                        pending["status"],
-                        effective_date=pending["effective_date"],
-                        notes=pending["notes"],
-                    )
-                except (AssetStoreError, OSError) as err:
-                    errors["base"] = self._storage_error_key(err)
-                else:
-                    del self._pending_lifecycle_update
-                    return await self._finish_asset_action(
-                        asset,
-                        "asset_lifecycle_updated",
-                        reload=changed,
-                    )
+                del self._pending_lifecycle_update
+                return await self._finish_asset_action(
+                    asset,
+                    "asset_lifecycle_updated",
+                    reload=changed,
+                )
         return self.async_show_form(
             step_id="confirm_disposed",
             data_schema=vol.Schema(
@@ -3386,8 +3388,11 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         if user_input is not None:
             void_reason = str(user_input.get(CONF_VOID_REASON) or "")
             if not user_input.get(CONF_CONFIRM_VOID):
-                errors["base"] = "confirmation_required"
-            elif not void_reason.strip():
+                # Declining leaves the record exactly as it is and returns to
+                # the editor the void was started from.
+                del self._pending_replacement_uuid
+                return self._show_manage_replacement_form(asset)
+            if not void_reason.strip():
                 errors["base"] = "replacement_void_reason_required"
             else:
                 try:
