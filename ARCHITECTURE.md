@@ -1,6 +1,6 @@
 # Device Lifecycle architecture
 
-This document defines the Asset Core and Asset Exposure invariants through Device Lifecycle 0.7.3. Future releases must extend the model through explicit migrations instead of replacing Asset identity.
+This document defines the Asset Core and Asset Exposure invariants through Device Lifecycle 0.7.4. Future releases must extend the model through explicit migrations instead of replacing Asset identity.
 
 ## Core concepts
 
@@ -235,6 +235,8 @@ Purchase reconciliation is provenance-aware:
 - a reconciliation pass may refresh the former but must not silently overwrite the latter.
 - removing legacy membership does not recycle or replace Asset identity.
 
+A `user` relationship is authoritative, and that includes an explicit choice of no Purchase (`purchase_uuid: null` with `user` provenance). No flow rewrites a Purchase subentry's legacy `device_ids`, so after a user relink or clear the subentry normally keeps listing the Asset's primary device. Every later reconciliation replays that projection. For each listed device whose Asset is user-managed, reconciliation therefore decides only whether this subentry's projection owns the Asset: it does exactly when the user-chosen `purchase_uuid` equals this subentry's Purchase. When it does not, reconciliation skips both the Purchase field projection (for example Installation date and warranty) and canonical membership for that Asset. It neither moves the link back, restores a cleared link, nor raises. The mismatch is the normal steady state after a user choice, not a conflict, so it cannot fail `async_setup_entry`. Before 0.7.4 this case raised `AssetStoreError` inside setup and left the whole entry in `SETUP_ERROR`. The provenance model itself is unchanged.
+
 Reconciliation updates both `asset.purchase_uuid` and `purchase.asset_uuids` atomically. Historical or unconfigured Purchases and their existing memberships remain stored; only currently configured Purchases are offered as new user-managed targets.
 
 ## Deployment semantics
@@ -255,7 +257,7 @@ No Deployment status is inferred from:
 
 `installed_date` remains the existing optional Asset field. It can be set, changed, or cleared independently and is not automatically cleared when status changes.
 
-`ha_area_id` is the optional current deployment Area. It is not identity and does not change the Area of a linked external Home Assistant device. New selections must identify an existing Area. A stale stored Area ID is preserved for display and explicit repair; Device Lifecycle never remaps it by name.
+`ha_area_id` is the optional current deployment Area. It is not identity and does not change the Area of a linked external Home Assistant device. New selections must identify an existing Area. A stale stored Area ID is preserved for explicit repair, and Device Lifecycle never remaps it by name. Since 0.7.4 the Asset management UI names it as an unavailable Area instead of displaying the ID. The Deployment entity's attributes still report it as `missing`.
 
 Changing an Asset with an Area to `not_deployed` requires explicit confirmation before `ha_area_id` is cleared. `installed_date` remains unchanged unless the user explicitly edits it.
 
@@ -548,6 +550,71 @@ Growing histories do not belong in ConfigSubentries. ConfigSubentries remain sui
 
 These boundaries reserve 0.8.x for Maintenance, 0.9.x for Portability & Hardening, and a later release for Documents. None is represented by placeholder 3.1 records.
 
+## 0.7.4 Asset management flow
+
+Device Lifecycle 0.7.4 changes the Asset management OptionsFlow and one reconciliation rule (see [Purchase creation and reconciliation](#purchase-creation-and-reconciliation)). It changes no canonical schema, identity, or invariant. Store remains 3.1, ConfigEntry remains version 4, no migration runs, and Asset UUIDs, `DLxxxx` Asset IDs, Asset Device identity, entity unique IDs, entity IDs, entity translations, and Recorder continuity are unchanged. `sensor.py`, `exposure.py`, and `migration.py` are untouched.
+
+### Navigation contract
+
+Selecting an Asset stores only its `asset_uuid` in the flow and opens a seven-row hub menu for it, always in this order: Asset details, Purchase & warranty, Installation & location, Lifecycle, Replacement, Home Assistant devices, Choose another device. Asset selectors use `asset_uuid` as the option value and `Name · DLxxxx` as the label, sorted by case-folded name and then `asset_id`.
+
+- The four direct editors (details, Purchase, installation, Lifecycle) return to the same Asset's hub after a save, including a canonical no-op.
+- Replacement and Home Assistant device operations return to their own submenu. Each submenu's last row returns to the hub as real menu navigation, never as a no-op submit.
+- Choose another device reopens the selector and replaces the selected `asset_uuid`.
+- Rendering the hub, a submenu, or the selector performs no Store write and no reload.
+
+### Reload continuity
+
+Every Asset mutation that changes canonical Store data still reloads the parent ConfigEntry, so that the Asset Device and entities are rebuilt from the new snapshot. Which mutations reload is unchanged from 0.7.3; what changed is *how*. Earlier releases scheduled a fire-and-forget reload and ended the flow with `CREATE_ENTRY`. A flow that tried to continue would race the reload, which tears down `runtime_data` and installs a new `AssetStoreManager`.
+
+Since 0.7.4 a mutation awaits `hass.config_entries.async_reload(entry_id)` and continues only after it has finished:
+
+1. The manager mutation completes and is persisted and verified as before.
+2. If canonical data changed, the flow awaits the reload. A canonical no-op skips it.
+3. The flow continues only when `entry.state is ConfigEntryState.LOADED` **and** `entry.runtime_data` is an `AssetStoreManager`. The boolean returned by `async_reload` is deliberately not part of this test. Home Assistant deletes `runtime_data` only after a successful unload, so a failed unload returns `False` while a stale manager is still attached. A disabled entry returns `True` without ever being set up again. Every `False`-returning path leaves a non-`LOADED` state, so the boolean would only add false negatives.
+4. If that test fails, the flow aborts with `entry_not_loaded`. The mutation is already committed; only the continuation stops.
+5. Otherwise the flow records the result (below) and renders its destination.
+
+Nothing but identity crosses the reload. The flow keeps `_selected_asset_uuid` and never caches an Asset dict or a manager instance. Its `_manager` accessor reads `config_entry.runtime_data` on every access, so each step after a reload works against the manager that setup installed. A successful reload therefore never ends the OptionsFlow. A second mutation in the same flow simply goes through the same cycle against the new manager.
+
+The `entry_not_loaded` guard from 0.7.2 on the first Asset management step is unchanged.
+
+### Result messages
+
+A mutation stores one completion key in the flow (`_last_result`), for example `asset_lifecycle_updated`. The next rendered hub or submenu consumes it: the key is resolved through the integration's own `options.create_entry` translations in the Home Assistant language and then cleared, so it is shown exactly once. The same-status Lifecycle no-op uses `asset_lifecycle_unchanged` with the current status label. Consequences:
+
+- the message appears on the operation's destination only, and the next independent render shows none
+- switching to another Asset clears a pending message, so it never moves from Asset A to Asset B
+- a submenu consumes its own message, so Back to the hub shows none
+- declining a confirmation stores no key
+- a key without a translation renders as empty text, never as the raw key
+
+### Summaries and identifier safety
+
+Rows 1–6 of the hub carry one-line summaries passed as `description_placeholders` and rendered through Home Assistant's `menu_option_descriptions` translation structure. The frontend substitutes the placeholders. Summaries are computed on every render from canonical data through read-only helpers, which never mutate the Store and never repair stale references. Each summary is capped at 60 characters, and individual names at 24 characters, without leaving a dangling separator. Replacement summaries use only active records, so a voided record is not shown. The Purchase and warranty halves of the Purchase & warranty summary are rendered independently, because a warranty belongs to the Asset and not to the Purchase shown beside it.
+
+User-facing management copy never contains an `asset_uuid`, a Home Assistant device ID, an Area ID, or a `replacement_uuid`. `DLxxxx` is the intended human identifier. Stale references are displayed as unavailable and are never repaired on render:
+
+- a missing device is labelled as an unavailable Home Assistant device, numbered in stored order only when several stale references must be distinguished
+- selectors that remove a stale device keep the real stored device ID as the option *value* while the *label* stays generic, so the exact reference is removed
+- a deleted Area is labelled as an unavailable Area and remains stored until explicitly cleared or replaced
+
+### Confirmation cancel semantics
+
+Three changes require a separate confirmation step. Declining one, by submitting it without its confirmation box ticked, returns to the step it came from:
+
+| Confirmation | Declining returns to |
+|---|---|
+| Clear location on Not installed | Installation & location editor |
+| Record Disposed | Lifecycle editor |
+| Void replacement | Replacement management editor |
+
+Declining performs no Store write, no reload, and stores no result, and it keeps the same selected Asset. The editor is rendered again from current canonical data. Input entered before the confirmation is not preserved; that remains out of scope. A confirmed change still validates normally, for example voiding still requires a non-empty reason.
+
+### Known pre-existing issue
+
+`async_migrate_entity_registry` relinks an Asset's Lifecycle entity to each device listed in a Purchase subentry's `device_ids`. If such a device has since been removed from the Device Registry, `EntityRegistry.async_update_entity(device_id=...)` raises `ValueError` and setup ends in `SETUP_ERROR` on every later setup, once that entity exists in the Entity Registry. The defect exists unchanged in 0.7.3 and is not fixed in 0.7.4, because 0.7.4 does not change migration behavior. Under 0.7.4, an Asset mutation in an affected installation reports `entry_not_loaded`, because its awaited reload cannot return the entry to `LOADED`. The reload continuity contract surfaces the failure instead of hiding it.
+
 ## 0.7.3 compatibility impact
 
 Device Lifecycle 0.7.3 changes no canonical schema, identity, or invariant. Store remains 3.1, ConfigEntry remains version 4, and Asset UUIDs, `DLxxxx` Asset IDs, Asset Device identity, entity unique IDs, and Recorder continuity are unchanged.
@@ -567,7 +634,7 @@ Device Lifecycle 0.7.2 added no schema and no user feature. It tightened three e
 
 ### Canonical no-op
 
-A request that leaves canonical Store data unchanged is a canonical no-op: the manager performs no Store write and publishes nothing, and the OptionsFlow finishes without scheduling a ConfigEntry reload. This covers resubmitting unchanged Asset metadata, the current Purchase, the current Deployment state and Area, the current Lifecycle status, and the current primary Home Assistant device, as well as adding an already-related device. Selecting an Asset's current Lifecycle status is a neutral confirmation, not an error. Metadata fields the user did not change keep their existing provenance instead of becoming user-owned. Quick Add is the deliberate exception: a confirmed Quick Add always schedules one reload, so exposure completes even after an ambiguous Store write.
+A request that leaves canonical Store data unchanged is a canonical no-op: the manager performs no Store write and publishes nothing, and the OptionsFlow performs no ConfigEntry reload. In 0.7.2 and 0.7.3 the flow then finished; since 0.7.4 it returns to the Asset hub (see [0.7.4 Asset management flow](#074-asset-management-flow)). This covers resubmitting unchanged Asset metadata, the current Purchase, the current Deployment state and Area, the current Lifecycle status, and the current primary Home Assistant device, as well as adding an already-related device. Selecting an Asset's current Lifecycle status is a neutral confirmation, not an error. Metadata fields the user did not change keep their existing provenance instead of becoming user-owned. Quick Add is the deliberate exception: a confirmed Quick Add always schedules one reload, so exposure completes even after an ambiguous Store write.
 
 ### Persisted effective dates and clock rollback
 
