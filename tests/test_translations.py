@@ -281,6 +281,13 @@ def test_every_menu_action_and_step_has_translation(language: str) -> None:
     menu_actions.remove("quick_add_manual")
     assert menu_actions <= set(steps)
 
+    # Home Assistant renders a menu option's description from the step's own
+    # `menu_option_descriptions`, so every described option must be an option
+    # that menu actually offers.
+    for step_id, step in steps.items():
+        described = set(step.get("menu_option_descriptions", {}))
+        assert described <= set(step.get("menu_options", {})), step_id
+
 
 @pytest.mark.parametrize("language", LANGUAGES)
 def test_deployment_relationship_confirmation_and_results_exist(

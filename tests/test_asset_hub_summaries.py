@@ -590,29 +590,69 @@ async def test_the_hub_renders_every_summary_and_writes_nothing(
     reload.assert_not_called()
 
 
-async def test_hub_description_uses_every_summary_placeholder() -> None:
-    """The translated hub copy actually shows what the helpers produce."""
-    for language in ("en", "fi"):
-        path = (
-            Path(__file__).parents[1]
-            / "custom_components"
-            / "device_lifecycle"
-            / "translations"
-            / f"{language}.json"
-        )
-        description = json.loads(path.read_text(encoding="utf-8"))["options"][
-            "step"
-        ]["manage_asset_menu"]["description"]
-        for key in (
-            "asset",
-            "metadata",
-            "purchase_warranty",
-            "deployment",
-            "lifecycle",
-            "replacement",
-            "ha_devices",
-        ):
-            assert f"{{{key}}}" in description, (language, key)
+def _hub_step(language: str) -> dict:
+    """Return the translated Asset hub step for one language."""
+    path = (
+        Path(__file__).parents[1]
+        / "custom_components"
+        / "device_lifecycle"
+        / "translations"
+        / f"{language}.json"
+    )
+    return json.loads(path.read_text(encoding="utf-8"))["options"]["step"][
+        "manage_asset_menu"
+    ]
+
+
+@pytest.mark.parametrize("language", ["en", "fi"])
+def test_each_hub_row_carries_its_own_summary(language: str) -> None:
+    """Every action row describes itself with its own summary placeholder.
+
+    This is Home Assistant's `menu_option_descriptions` structure, the same
+    one core integrations use to put a line under a menu row, so each
+    summary belongs to the row it is about rather than to the step.
+    """
+    step = _hub_step(language)
+
+    assert step["menu_option_descriptions"] == {
+        "edit_asset_metadata": "{metadata}",
+        "change_asset_purchase": "{purchase_warranty}",
+        "asset_deployment": "{deployment}",
+        "asset_lifecycle": "{lifecycle}",
+        "asset_replacement": "{replacement}",
+        "ha_relationship": "{ha_devices}",
+    }
+
+
+@pytest.mark.parametrize("language", ["en", "fi"])
+def test_only_the_six_action_rows_are_described(language: str) -> None:
+    """Choosing another Asset is navigation, so it summarizes nothing."""
+    step = _hub_step(language)
+
+    assert len(step["menu_options"]) == 7
+    assert set(step["menu_option_descriptions"]) == (
+        set(step["menu_options"]) - {"manage_asset"}
+    )
+
+
+@pytest.mark.parametrize("language", ["en", "fi"])
+def test_the_hub_step_description_stays_general(language: str) -> None:
+    """The step itself names the Asset; the rows carry the detail.
+
+    A summary shown in both places would be read twice.
+    """
+    description = _hub_step(language)["description"]
+
+    assert "{asset}" in description
+    for key in (
+        "metadata",
+        "purchase_warranty",
+        "deployment",
+        "lifecycle",
+        "replacement",
+        "ha_devices",
+    ):
+        assert f"{{{key}}}" not in description, (language, key)
 
 
 async def test_summaries_never_expose_technical_identifiers(
