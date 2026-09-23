@@ -18,9 +18,9 @@ from custom_components.device_lifecycle.config_flow import _asset_label
 from custom_components.device_lifecycle.const import (
     CONF_ASSET_NAME,
     CONF_ASSET_UUID,
-    CONF_HA_AREA_ID,
     CONF_MANUFACTURER,
     CONF_MODEL,
+    DEPLOYMENT_STATE_DEPLOYED,
 )
 from custom_components.device_lifecycle.models import AssetStoreData
 from custom_components.device_lifecycle.storage import AssetStoreManager
@@ -200,20 +200,25 @@ async def test_summaries_read_the_selected_asset(
 ) -> None:
     """The summaries describe this Asset, not a default or a neighbour."""
     data = deepcopy(asset_store_data)
-    data["assets"][ASSET_UUID][CONF_HA_AREA_ID] = "workshop-area"
     manager = _manager(hass, data)
     area = hass.data["area_registry"].async_get_or_create("Workshop")
-    manager._data["assets"][ASSET_UUID][CONF_HA_AREA_ID] = area.id
+    await manager.async_set_asset_deployment(
+        ASSET_UUID,
+        deployment_state=DEPLOYMENT_STATE_DEPLOYED,
+        ha_area_id=area.id,
+    )
 
     _flow, hub = await _hub(hass, manager)
 
     placeholders = hub["description_placeholders"]
     asset = manager.asset(ASSET_UUID)
     assert placeholders["metadata"] == (
-        f"{asset[CONF_MANUFACTURER]} {asset[CONF_MODEL]}"
+        f"{asset[CONF_MANUFACTURER]} · {asset[CONF_MODEL]}"
     )
-    assert placeholders["purchase_warranty"] == "Workshop equipment"
-    assert placeholders["deployment"] == "Workshop"
+    assert placeholders["purchase_warranty"].startswith(
+        "Purchase: Workshop equipment · Warranty: "
+    )
+    assert "Workshop" in placeholders["deployment"]
 
 
 async def test_hub_never_shows_technical_identifiers(
@@ -392,5 +397,5 @@ async def test_hub_summary_names_the_linked_devices(
     _flow, hub = await _hub(hass, manager, asset["asset_uuid"])
 
     assert hub["description_placeholders"]["ha_devices"] == (
-        "Bench controller, Bench power meter"
+        "Primary: Bench controller · Related: 1"
     )

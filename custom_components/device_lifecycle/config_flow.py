@@ -92,6 +92,7 @@ from .const import (
     LIFECYCLE_STATUSES,
     LIFECYCLE_STATUS_ACTIVE,
     LIFECYCLE_STATUS_DISPOSED,
+    LIFECYCLE_STATUS_LOST,
     LIFECYCLE_STATUS_RETIRED,
     LIFECYCLE_STATUS_UNKNOWN,
     REPLACEMENT_ACTION_CORRECT,
@@ -574,6 +575,69 @@ def _compact_title(text: str, max_length: int = 52) -> str:
     if len(text) > max_length:
         return text[: max_length - 1].rstrip() + "…"
     return text
+
+
+SUMMARY_SEPARATOR = " · "
+SUMMARY_MAX_LENGTH = 60
+SUMMARY_NAME_MAX_LENGTH = 24
+
+_EN_MONTHS = (
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+)
+
+
+def _short_name(text: str | None) -> str:
+    """Shorten one display name so it can share a summary line."""
+    text = str(text or "").strip()
+    if len(text) <= SUMMARY_NAME_MAX_LENGTH:
+        return text
+    return text[: SUMMARY_NAME_MAX_LENGTH - 1].rstrip() + "…"
+
+
+def _summary_line(*parts: str | None) -> str:
+    """Join whichever parts have something to say into one short line.
+
+    Truncation happens here and nowhere else, so no summary can grow past
+    the width a menu row gives it, and a cut never leaves a dangling
+    separator behind.
+    """
+    line = SUMMARY_SEPARATOR.join(
+        stripped for part in parts if (stripped := str(part or "").strip())
+    )
+    if len(line) <= SUMMARY_MAX_LENGTH:
+        return line
+    trimmed = line[: SUMMARY_MAX_LENGTH - 1].rstrip().rstrip("·").rstrip()
+    return f"{trimmed}…"
+
+
+def _summary_date(value: str | None, *, finnish: bool) -> str:
+    """Render one canonical ISO date the way each language writes dates.
+
+    Deliberately not the sensor's formatting: entity state formatting is
+    Home Assistant's own and must not shift, so the flow carries its own.
+    """
+    if not value:
+        return ""
+    try:
+        parsed = dt_util.parse_date(str(value))
+    except (TypeError, ValueError):
+        return ""
+    if parsed is None:
+        return ""
+    if finnish:
+        return f"{parsed.day}.{parsed.month}.{parsed.year}"
+    return f"{parsed.day} {_EN_MONTHS[parsed.month - 1]} {parsed.year}"
 
 
 def _purchase_title(data: dict[str, Any]) -> str:
@@ -2456,67 +2520,177 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
 
         return self._show_asset_selection()
 
+    @property
+    def _finnish(self) -> bool:
+        """Return whether summaries should be written in Finnish."""
+        return self.hass.config.language.lower().startswith("fi")
+
+    def _localized_date(self, value: str | None) -> str:
+        """Render one canonical date in the reader's language."""
+        return _summary_date(value, finnish=self._finnish)
+
     def _summary_metadata(self, asset: AssetData) -> str:
-        """Summarize the Asset's own physical identity."""
-        return _compact_title(
-            " ".join(
-                str(asset.get(field) or "").strip()
-                for field in (CONF_MANUFACTURER, CONF_MODEL)
-            )
+        """Say what the Asset physically is."""
+        manufacturer = _short_name(asset.get(CONF_MANUFACTURER))
+        model = _short_name(asset.get(CONF_MODEL))
+        if line := _summary_line(manufacturer, model):
+            return line
+        if category := _short_name(asset.get(CONF_CATEGORY)):
+            return category
+        return self._localized_label(
+            "No manufacturer or model recorded",
+            "Ei valmistaja- tai mallitietoa",
         )
+
+    def _summary_purchase(self, asset: AssetData) -> str:
+        """Name the Purchase this Asset belongs to."""
+        purchase_uuid = asset.get("purchase_uuid")
+        purchase = (
+            None if purchase_uuid is None else self._manager.purchase(purchase_uuid)
+        )
+        if purchase is None:
+            return self._localized_label("Not linked", "Ei liitetty")
+        return _short_name(_stored_purchase_label(purchase))
+
+    def _summary_warranty(self, asset: AssetData) -> str:
+        """Say how long the warranty runs, independently of any Purchase."""
+        warranty = asset.get("warranty") or {}
+        if str(warranty.get("type") or WARRANTY_NONE) == WARRANTY_NONE:
+            return self._localized_label("None", "Ei takuuta")
+        until = self._localized_date(warranty.get("until"))
+        if not until:
+            return self._localized_label("Unknown", "Ei tiedossa")
+        return self._localized_label(f"until {until}", f"{until} asti")
 
     def _summary_purchase_warranty(self, asset: AssetData) -> str:
-        """Summarize which Purchase the Asset currently belongs to."""
-        purchase_uuid = asset.get("purchase_uuid")
-        if purchase_uuid is None:
-            return ""
-        purchase = self._manager.purchase(purchase_uuid)
-        return "" if purchase is None else _stored_purchase_label(purchase)
+        """Report the Purchase and the warranty as the separate facts they are.
+
+        Both sides are resolved from the Asset on their own. The warranty is
+        the Asset's own, so the wording never suggests it came from, or
+        depends on, whichever Purchase happens to be shown beside it.
+        """
+        purchase = self._summary_purchase(asset)
+        warranty = self._summary_warranty(asset)
+        return _summary_line(
+            self._localized_label(f"Purchase: {purchase}", f"Ostos: {purchase}"),
+            self._localized_label(f"Warranty: {warranty}", f"Takuu: {warranty}"),
+        )
 
     def _summary_deployment(self, asset: AssetData) -> str:
-        """Summarize where the Asset is installed."""
+        """Say whether the Asset is installed, and where."""
+        state = str(asset.get(CONF_DEPLOYMENT_STATE) or DEPLOYMENT_STATE_UNKNOWN)
         area_id = asset.get(CONF_HA_AREA_ID)
-        if area_id is None:
-            return ""
-        area = ar.async_get(self.hass).async_get_area(str(area_id))
-        return "" if area is None else str(area.name)
+
+        if state == DEPLOYMENT_STATE_NOT_DEPLOYED:
+            not_installed = self._localized_label("Not installed", "Ei asennettu")
+            if area_id is None:
+                return not_installed
+            # Canonically a not-installed Asset has no Area. Say so rather
+            # than presenting the leftover location as if it were current,
+            # and leave the stored data exactly as it is.
+            return _summary_line(
+                not_installed,
+                self._localized_label(
+                    "inconsistent location data",
+                    "sijaintitieto epäkonsistentti",
+                ),
+            )
+
+        if state != DEPLOYMENT_STATE_DEPLOYED:
+            return self._localized_label(
+                "Installation status unknown",
+                "Asennustila ei tiedossa",
+            )
+
+        area = ""
+        if area_id is not None:
+            registry_area = ar.async_get(self.hass).async_get_area(str(area_id))
+            area = (
+                _short_name(registry_area.name)
+                if registry_area is not None
+                else self._localized_label(
+                    "Unavailable Home Assistant Area",
+                    "Alue ei ole enää käytettävissä",
+                )
+            )
+        return _summary_line(
+            self._localized_label("Installed", "Asennettu"),
+            area,
+            self._localized_date(asset.get(CONF_INSTALLED_DATE)),
+        )
 
     def _summary_lifecycle(self, asset: AssetData) -> str:
-        """Summarize when the Asset last changed lifecycle status.
-
-        The status itself is a translated enum, so the hub carries the
-        effective date here and leaves the wording to the hub copy.
-        """
-        event = self._manager.lifecycle_event(
-            asset.get("lifecycle", {}).get("current_event_uuid")
+        """Say where the Asset stands in its life, and since when."""
+        lifecycle = asset.get("lifecycle") or {}
+        status = str(lifecycle.get("status") or LIFECYCLE_STATUS_UNKNOWN)
+        event = self._manager.lifecycle_event(lifecycle.get("current_event_uuid"))
+        return _summary_line(
+            self._lifecycle_status_label(status),
+            self._localized_date(None if event is None else event.get("effective_date")),
         )
-        return "" if event is None else str(event.get("effective_date") or "")
+
+    def _lifecycle_status_label(self, status: str) -> str:
+        """Translate one canonical lifecycle status for people."""
+        labels = {
+            LIFECYCLE_STATUS_UNKNOWN: ("Unknown", "Ei tiedossa"),
+            LIFECYCLE_STATUS_ACTIVE: ("Active", "Aktiivinen"),
+            LIFECYCLE_STATUS_RETIRED: ("Retired", "Käytöstä poistettu"),
+            LIFECYCLE_STATUS_DISPOSED: ("Disposed", "Hävitetty"),
+            LIFECYCLE_STATUS_LOST: ("Lost", "Kadonnut"),
+        }
+        english, finnish = labels.get(
+            status, labels[LIFECYCLE_STATUS_UNKNOWN]
+        )
+        return self._localized_label(english, finnish)
 
     def _summary_replacement(self, asset: AssetData) -> str:
-        """Summarize the Asset's active replacement counterpart, if any."""
+        """Name the Assets this one actively replaces or was replaced by.
+
+        Only active records: a voided one is history, and the manager's own
+        accessors already exclude it.
+        """
         asset_uuid = asset["asset_uuid"]
-        counterpart = self._manager.active_replacement_successor(
-            asset_uuid
-        ) or self._manager.active_replacement_predecessor(asset_uuid)
-        return "" if counterpart is None else _asset_label(counterpart)
+        predecessor = self._manager.active_replacement_predecessor(asset_uuid)
+        successor = self._manager.active_replacement_successor(asset_uuid)
+        parts = []
+        if predecessor is not None:
+            label = _asset_label(predecessor)
+            parts.append(
+                self._localized_label(f"Replaces: {label}", f"Korvaa: {label}")
+            )
+        if successor is not None:
+            label = _asset_label(successor)
+            parts.append(
+                self._localized_label(f"Replaced by: {label}", f"Korvattu: {label}")
+            )
+        if not parts:
+            return self._localized_label(
+                "No active replacement",
+                "Ei aktiivista korvaussuhdetta",
+            )
+        return _summary_line(*parts)
 
     def _summary_ha_devices(self, asset: AssetData) -> str:
-        """Summarize the linked Home Assistant devices by name only.
+        """Name the primary Home Assistant device and count the rest.
 
-        Deliberately not `_ha_device_label`: that one appends the stored
-        device ID so a broken relationship can be repaired, which is exactly
-        the kind of technical identifier the hub keeps out of sight.
+        Never `_ha_device_label` for a missing device and never the stored
+        IDs: the hub identifies devices the way their owner named them.
         """
-        primary = _primary_device_id(asset)
-        device_ids = ([] if primary is None else [primary]) + _related_device_ids(
-            asset
+        primary_id = _primary_device_id(asset)
+        if primary_id is None:
+            primary = self._localized_label("None", "Ei ensisijaista laitetta")
+        else:
+            name = self._device_display_name(primary_id)
+            primary = (
+                self._unavailable_device_label()
+                if name is None
+                else _short_name(name)
+            )
+        related = len(_related_device_ids(asset))
+        return _summary_line(
+            self._localized_label(f"Primary: {primary}", f"Ensisijainen: {primary}"),
+            self._localized_label(f"Related: {related}", f"Liittyviä: {related}"),
         )
-        names = [
-            name
-            for device_id in device_ids
-            if (name := self._device_display_name(device_id)) is not None
-        ]
-        return ", ".join(names)
 
     def _hub_placeholders(self, asset: AssetData) -> dict[str, str]:
         """Collect every value the Asset hub renders for one Asset."""

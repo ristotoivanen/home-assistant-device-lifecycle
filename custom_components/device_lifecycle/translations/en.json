@@ -245,7 +245,7 @@
         "title": "Lifecycle status"
       },
       "asset_replacement": {
-        "description": "Asset: {asset}. Replacement connects physical Assets only and does not transfer Purchases, warranty, Deployment, Runtime, Areas, or Home Assistant relationships.",
+        "description": "Replacement: {replacement}. Asset: {asset}. Replacement connects physical Assets only and does not transfer Purchases, warranty, Deployment, Runtime, Areas, or Home Assistant relationships.",
         "menu_options": {
           "manage_asset_menu": "← Back to asset management",
           "manage_asset_replacement": "Manage existing relationship",
@@ -411,7 +411,7 @@
         "title": "Edit Asset metadata"
       },
       "ha_relationship": {
-        "description": "Asset: {asset}. Primary device: {current_primary}. Related devices: {related_devices}. Related devices are references only and do not affect Asset identity, metadata, Purchases, Runtime, entity placement, or Home Assistant device ownership.",
+        "description": "Home Assistant devices: {ha_devices}. Asset: {asset}. Primary device: {current_primary}. Related devices: {related_devices}. Related devices are references only and do not affect Asset identity, metadata, Purchases, Runtime, entity placement, or Home Assistant device ownership.",
         "menu_options": {
           "add_related_device": "Add related device",
           "manage_asset_menu": "← Back to asset management",
@@ -457,7 +457,7 @@
         "title": "Manage Asset"
       },
       "manage_asset_menu": {
-        "description": "Selected Asset: {asset}",
+        "description": "{asset}\n\nAsset details: {metadata}\nPurchase & warranty: {purchase_warranty}\nInstallation & location: {deployment}\nLifecycle: {lifecycle}\nReplacement: {replacement}\nHome Assistant devices: {ha_devices}",
         "menu_options": {
           "asset_deployment": "Installation & location",
           "asset_lifecycle": "Lifecycle",

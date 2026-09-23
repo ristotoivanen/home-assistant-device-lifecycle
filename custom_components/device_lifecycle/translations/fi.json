@@ -245,7 +245,7 @@
         "title": "Elinkaaritila"
       },
       "asset_replacement": {
-        "description": "Laite: {asset}. Korvaussuhde yhdistää vain fyysiset laitteet eikä siirrä ostoksia, takuuta, käyttötilaa, käyttötunteja, alueita tai Home Assistant -laitelinkkejä.",
+        "description": "Korvaaminen: {replacement}. Laite: {asset}. Korvaussuhde yhdistää vain fyysiset laitteet eikä siirrä ostoksia, takuuta, käyttötilaa, käyttötunteja, alueita tai Home Assistant -laitelinkkejä.",
         "menu_options": {
           "manage_asset_menu": "← Takaisin laitteen hallintaan",
           "manage_asset_replacement": "Hallitse nykyistä suhdetta",
@@ -411,7 +411,7 @@
         "title": "Muokkaa laitteen tietoja"
       },
       "ha_relationship": {
-        "description": "Laite: {asset}. Ensisijainen laite: {current_primary}. Liittyvät laitteet: {related_devices}. Liittyvät laitteet ovat vain viitteitä eivätkä vaikuta laitteen identiteettiin, tietoihin, ostoksiin, käyttötuntiseurantaan, entiteettien sijoitteluun tai Home Assistant -laitteen omistajuuteen.",
+        "description": "Home Assistant -laitteet: {ha_devices}. Laite: {asset}. Ensisijainen laite: {current_primary}. Liittyvät laitteet: {related_devices}. Liittyvät laitteet ovat vain viitteitä eivätkä vaikuta laitteen identiteettiin, tietoihin, ostoksiin, käyttötuntiseurantaan, entiteettien sijoitteluun tai Home Assistant -laitteen omistajuuteen.",
         "menu_options": {
           "add_related_device": "Lisää liittyvä laite",
           "manage_asset_menu": "← Takaisin laitteen hallintaan",
@@ -457,7 +457,7 @@
         "title": "Hallitse laitetta"
       },
       "manage_asset_menu": {
-        "description": "Valittu laite: {asset}",
+        "description": "{asset}\n\nPerustiedot: {metadata}\nOsto ja takuu: {purchase_warranty}\nAsennus ja sijainti: {deployment}\nElinkaari: {lifecycle}\nKorvaaminen: {replacement}\nHome Assistant -laitteet: {ha_devices}",
         "menu_options": {
           "asset_deployment": "Asennus ja sijainti",
           "asset_lifecycle": "Elinkaari",

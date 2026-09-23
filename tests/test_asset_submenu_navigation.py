@@ -428,12 +428,12 @@ async def test_submenus_show_context_without_technical_identifiers(
     ha_devices = await flow.async_step_ha_relationship()
 
     assert replacement["description_placeholders"]["replacement"] == (
-        f"New unit · {new['asset_id']}"
+        f"Replaced by: New unit · {new['asset_id']}"
     )
     assert old["asset_uuid"] not in replacement["description_placeholders"][
         "replacement"
     ]
     assert ha_devices["description_placeholders"]["ha_devices"] == (
-        "Bench controller"
+        "Primary: Bench controller · Related: 0"
     )
     assert device.id not in ha_devices["description_placeholders"]["ha_devices"]
