@@ -293,7 +293,7 @@ async def test_the_hub_shown_after_a_real_reload_reads_the_new_manager(
     assert completed["description_placeholders"]["asset"] == (
         "Renamed across a real reload · DL0007"
     )
-    assert completed["description_placeholders"]["result"] == "asset_updated"
+    assert completed["description_placeholders"]["result"] == "Asset details updated."
 
 
 async def test_second_mutation_in_the_same_flow_uses_the_reloaded_manager(
@@ -346,19 +346,19 @@ async def test_second_mutation_in_the_same_flow_uses_the_reloaded_manager(
 
 
 @pytest.mark.parametrize(
-    ("submenu", "operation", "payload", "result_key"),
+    ("submenu", "operation", "payload", "result"),
     [
         (
             "asset_replacement",
             "replacement_replaces",
             {CONF_REPLACEMENT_REASON: "failure"},
-            "asset_replacement_updated",
+            "Replacement updated.",
         ),
         (
             "ha_relationship",
             "add_related_device",
             {},
-            "asset_related_device_added",
+            "Related Home Assistant device added.",
         ),
     ],
 )
@@ -370,7 +370,7 @@ async def test_submenu_operations_survive_their_real_reload(
     submenu: str,
     operation: str,
     payload: dict,
-    result_key: str,
+    result: str,
 ) -> None:
     """A submenu operation reloads for real and stays in its own submenu.
 
@@ -416,7 +416,7 @@ async def test_submenu_operations_survive_their_real_reload(
 
         assert completed["type"] is FlowResultType.MENU
         assert completed["step_id"] == submenu
-        assert completed["description_placeholders"]["result"] == result_key
+        assert completed["description_placeholders"]["result"] == result
         assert entry.state is ConfigEntryState.LOADED
         new_manager = entry.runtime_data
         assert new_manager is not original_manager

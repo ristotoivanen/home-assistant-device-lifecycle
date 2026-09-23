@@ -388,18 +388,42 @@ def test_finalized_english_and_finnish_lifecycle_terms() -> None:
     finnish = _translation("fi")
 
     assert english["options"]["step"]["asset_deployment"]["data"] == {
-        "clear_ha_area": "Clear current Area",
+        "clear_ha_area": "Clear current location",
         "clear_installed_date": "Clear installation date",
-        "deployment_state": "Deployment status",
-        "ha_area_id": "Home Assistant Area",
+        "deployment_state": "Installation status",
+        "ha_area_id": "Location",
         "installed_date": "Installation date",
     }
     assert finnish["options"]["step"]["asset_deployment"]["data"] == {
-        "clear_ha_area": "Poista nykyinen alue",
-        "clear_installed_date": "Poista käyttöönottopäivä",
-        "deployment_state": "Käyttötila",
-        "ha_area_id": "Alue",
-        "installed_date": "Käyttöönottopäivä",
+        "clear_ha_area": "Poista nykyinen sijainti",
+        "clear_installed_date": "Poista asennuspäivä",
+        "deployment_state": "Asennustila",
+        "ha_area_id": "Sijainti",
+        "installed_date": "Asennuspäivä",
+    }
+    assert english["selector"]["deployment_state"]["options"] == {
+        "deployed": "Installed",
+        "not_deployed": "Not installed",
+        "unknown": "Unknown",
+    }
+    assert finnish["selector"]["deployment_state"]["options"] == {
+        "deployed": "Asennettu",
+        "not_deployed": "Ei asennettu",
+        "unknown": "Ei tiedossa",
+    }
+    assert english["selector"]["lifecycle_status"]["options"] == {
+        "active": "Active",
+        "disposed": "Disposed",
+        "lost": "Lost",
+        "retired": "Retired",
+        "unknown": "Unknown",
+    }
+    assert finnish["selector"]["lifecycle_status"]["options"] == {
+        "active": "Aktiivinen",
+        "disposed": "Hävitetty",
+        "lost": "Kadonnut",
+        "retired": "Käytöstä poistettu",
+        "unknown": "Ei tiedossa",
     }
     assert finnish["selector"]["ha_relationship_action"]["options"] == {
         "replace": "Vaihda linkitetty laite",

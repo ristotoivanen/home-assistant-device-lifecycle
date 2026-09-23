@@ -396,27 +396,27 @@ async def test_confirmed_disposed_returns_to_the_hub_and_leaves_deployment(
 
 
 @pytest.mark.parametrize(
-    ("step", "payload", "result_key"),
+    ("step", "payload", "result"),
     [
         (
             "edit_asset_metadata",
             {CONF_ASSET_NAME: "Renamed for the result"},
-            "asset_updated",
+            "Asset details updated.",
         ),
         (
             "change_asset_purchase",
             {CONF_PURCHASE_UUID: NO_PURCHASE_SELECTION},
-            "asset_purchase_updated",
+            "Purchase & warranty updated.",
         ),
         (
             "asset_deployment",
             {CONF_DEPLOYMENT_STATE: DEPLOYMENT_STATE_DEPLOYED},
-            "asset_deployment_updated",
+            "Installation & location updated.",
         ),
         (
             "asset_lifecycle",
             {CONF_LIFECYCLE_STATUS: LIFECYCLE_STATUS_ACTIVE},
-            "asset_lifecycle_updated",
+            "Lifecycle updated.",
         ),
     ],
 )
@@ -425,7 +425,7 @@ async def test_each_editor_reports_its_result_once(
     asset_store_data: AssetStoreData,
     step: str,
     payload: dict,
-    result_key: str,
+    result: str,
 ) -> None:
     """Every direct editor names what it did, on the hub it returns to."""
     manager = _manager(hass, asset_store_data)
@@ -439,7 +439,7 @@ async def test_each_editor_reports_its_result_once(
     saved = await getattr(flow, f"async_step_{step}")(payload)
 
     assert saved["step_id"] == HUB_STEP
-    assert saved["description_placeholders"]["result"] == result_key
+    assert saved["description_placeholders"]["result"] == result
 
     reopened = await flow.async_step_manage_asset_menu()
 

@@ -267,7 +267,7 @@ async def test_hub_reports_the_last_result_once(
     )
 
     assert completed["type"] is FlowResultType.MENU
-    assert completed["description_placeholders"]["result"] == "asset_updated"
+    assert completed["description_placeholders"]["result"] == "Asset details updated."
 
     reopened = await flow.async_step_manage_asset_menu()
 
@@ -286,7 +286,7 @@ async def test_choosing_another_device_drops_the_previous_result(
     completed = await flow.async_step_edit_asset_metadata(
         {CONF_ASSET_NAME: "Renamed workshop device"}
     )
-    assert completed["description_placeholders"]["result"] == "asset_updated"
+    assert completed["description_placeholders"]["result"] == "Asset details updated."
 
     # Without an intervening hub render, so the result is still pending.
     flow._last_result = "asset_updated"

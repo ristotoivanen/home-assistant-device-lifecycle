@@ -157,16 +157,16 @@
       "entry_not_loaded": "Device Lifecycle ei ole tällä hetkellä ladattu. Lataa integraatio uudelleen ja yritä uudelleen."
     },
     "create_entry": {
-      "asset_created": "Laite {asset_id} — {asset_name} luotiin.",
-      "asset_deployment_updated": "Laitteen {asset_id} — {asset_name} käyttötila päivitettiin.",
-      "asset_ha_relationship_updated": "Laitteen {asset_id} — {asset_name} Home Assistant -laitelinkki päivitettiin.",
-      "asset_lifecycle_unchanged": "Laitteen {asset_id} — {asset_name} elinkaaritila on jo nykyinen. Mitään ei muutettu.",
-      "asset_lifecycle_updated": "Laitteen {asset_id} — {asset_name} elinkaaritila päivitettiin.",
-      "asset_purchase_updated": "Laitteen {asset_id} — {asset_name} ostos päivitettiin.",
-      "asset_replacement_updated": "Laitteen {asset_id} — {asset_name} korvaussuhde päivitettiin.",
-      "asset_related_device_added": "Laitteeseen {asset_id} — {asset_name} lisättiin liittyvä Home Assistant -laite.",
-      "asset_related_device_removed": "Laitteesta {asset_id} — {asset_name} poistettiin liittyvä Home Assistant -laite.",
-      "asset_updated": "Laite {asset_id} — {asset_name} päivitettiin.",
+      "asset_created": "Laite luotiin.",
+      "asset_deployment_updated": "Asennus ja sijainti päivitettiin.",
+      "asset_ha_relationship_updated": "Home Assistant -laitteet päivitettiin.",
+      "asset_lifecycle_unchanged": "Elinkaaritila on jo {status}. Mitään ei muutettu.",
+      "asset_lifecycle_updated": "Elinkaari päivitettiin.",
+      "asset_purchase_updated": "Osto ja takuu päivitettiin.",
+      "asset_related_device_added": "Liittyvä Home Assistant -laite lisättiin.",
+      "asset_related_device_removed": "Liittyvä Home Assistant -laite poistettiin.",
+      "asset_replacement_updated": "Korvaaminen päivitettiin.",
+      "asset_updated": "Perustiedot päivitettiin.",
       "quick_asset_created": "{asset_name} lisättiin Device Lifecycleen."
     },
     "error": {
@@ -180,10 +180,10 @@
       "ha_device_runtime_dependency": "Aktiivinen käyttötuntiseuranta käyttää linkitettyä laitetta. Poista seuranta ennen linkityksen poistamista tai laitteen vaihtamista.",
       "ha_relationship_changed": "Linkitetty Home Assistant -laite muuttui lomakkeen ollessa auki. Tarkista nykyinen laite ja yritä uudelleen.",
       "invalid_area": "Valitse käytettävissä oleva alue tai poista nykyinen alue.",
-      "invalid_deployment_state": "Valitse kelvollinen käyttötila.",
+      "invalid_deployment_state": "Valitse kelvollinen asennustila.",
       "invalid_ha_relationship_action": "Valitse Linkitä laite, Poista linkitys tai Vaihda linkitetty laite tilanteen mukaan.",
-      "invalid_installed_date": "Anna kelvollinen käyttöönottopäivä.",
-      "invalid_lifecycle_effective_date": "Anna elinkaaritilan voimaantulopäivä muodossa VVVV-KK-PP.",
+      "invalid_installed_date": "Anna kelvollinen asennuspäivä.",
+      "invalid_lifecycle_effective_date": "Anna elinkaarimuutoksen voimaantulopäivä muodossa VVVV-KK-PP.",
       "invalid_lifecycle_status": "Valitse kelvollinen elinkaaritila.",
       "invalid_purchase": "Valittua ostosta ei voi liittää tähän laitteeseen.",
       "invalid_quick_create_request": "Tarkista annetut laitteen tiedot ja yritä uudelleen.",
@@ -192,8 +192,8 @@
       "invalid_warranty_date": "Anna kelvollinen takuun päättymispäivä muodossa VVVV-KK-PP.",
       "invalid_warranty_type": "Valitse kelvollinen takuun tyyppi.",
       "lifecycle_chain_invalid": "Elinkaarihistoria on ristiriitainen. Mitään ei muutettu.",
-      "lifecycle_date_in_future": "Elinkaaritilan voimaantulopäivä ei voi olla tulevaisuudessa.",
-      "lifecycle_date_not_applicable": "Elinkaaritilan voimaantulopäivää ei voi määrittää, kun elinkaaritila on Tuntematon.",
+      "lifecycle_date_in_future": "Elinkaarimuutoksen voimaantulopäivä ei voi olla tulevaisuudessa.",
+      "lifecycle_date_not_applicable": "Voimaantulopäivää ei voi määrittää, kun elinkaaritila on Ei tiedossa.",
       "no_assets": "Hallittavia laitteita ei vielä ole.",
       "non_physical_device_not_allowed": "Valitse toisen integraation lisäämä fyysinen Home Assistant -laite.",
       "purchase_conflict": "Laite on jo liitetty toiseen ostokseen. Tarkista nykyinen ostos ja yritä uudelleen.",
@@ -204,9 +204,9 @@
       "purchase_missing": "Valittua ostosta ei enää ole.",
       "purchase_not_configured": "Valittu ostos ei ole enää käytettävissä.",
       "quick_create_idempotency_conflict": "Tämä lisäyspyyntö on ristiriidassa aiemmin tallennetun laitteen kanssa. Mitään ei muutettu.",
-      "review_replacement_deployment": "Korvattava laite on valittu. Tarkista uuden laitteen näkyvä käyttötilan oletusarvo Käytössä ja jatka.",
+      "review_replacement_deployment": "Korvattava laite on valittu. Tarkista uuden laitteen asennustilan oletusarvo Asennettu ja jatka.",
       "related_device_is_primary": "Valittu Home Assistant -laite on jo tämän laitteen ensisijainen laite.",
-      "related_device_not_found": "Valittua liittyvää laitelinkkiä ei enää ole. Tarkista nykyiset linkit ja yritä uudelleen.",
+      "related_device_not_found": "Valittua liittyvää Home Assistant -laitetta ei enää ole. Tarkista nykyiset laitteet ja yritä uudelleen.",
       "replacement_cycle": "Tämä suhde muodostaisi korvausketjuun silmukan.",
       "replacement_date_before_predecessor_lifecycle": "Korvauksen voimaantulopäivä ei voi olla aikaisempi kuin edeltävän laitteen nykyisen elinkaaritilan voimaantulopäivä.",
       "replacement_date_in_future": "Korvauksen voimaantulopäivä ei voi olla tulevaisuudessa.",
@@ -222,14 +222,14 @@
     "step": {
       "asset_deployment": {
         "data": {
-          "clear_ha_area": "Poista nykyinen alue",
-          "clear_installed_date": "Poista käyttöönottopäivä",
-          "deployment_state": "Käyttötila",
-          "ha_area_id": "Alue",
-          "installed_date": "Käyttöönottopäivä"
+          "clear_ha_area": "Poista nykyinen sijainti",
+          "clear_installed_date": "Poista asennuspäivä",
+          "deployment_state": "Asennustila",
+          "ha_area_id": "Sijainti",
+          "installed_date": "Asennuspäivä"
         },
-        "description": "Laite: {asset}. Nykyinen alue: {current_area}. Käyttötila ei riipu linkitetystä Home Assistant -laitteesta. Poista käyttöönottopäivä tai alue erillisellä poistovalinnalla. Alue, joka ei ole enää käytettävissä, säilyy kunnes poistat tai vaihdat sen.",
-        "title": "Käyttötila"
+        "description": "Laite: {asset}. Nykyinen sijainti: {current_area}. Ei asennettu tarkoittaa, ettei laite ole tällä hetkellä asennettuna, mutta se kuuluu edelleen laitekantaasi. Pysyvä käytöstä poisto, hävittäminen tai katoaminen määritetään Elinkaari-kohdassa. Asennustila ei riipu linkitetystä Home Assistant -laitteesta. Sijainti, joka ei ole enää käytettävissä, säilyy kunnes poistat tai vaihdat sen.",
+        "title": "Asennus ja sijainti"
       },
       "asset_lifecycle": {
         "data": {
@@ -241,25 +241,25 @@
           "effective_date": "Valinnainen. Tätä päivää ehdotetaan, ja voit tyhjentää kentän.",
           "notes": "Valinnainen muistiinpano tallennetaan vain tähän muuttumattomaan tilamuutokseen."
         },
-        "description": "Laite: {asset}. Nykyinen tila on esivalittu. Elinkaaritila ja käyttötila ovat toisistaan riippumattomia.",
-        "title": "Elinkaaritila"
+        "description": "Laite: {asset}. Nykyinen tila on esivalittu. Käytöstä poistettu tarkoittaa pysyvää tai tarkoituksellista käytöstä poistamista. Tilapäisesti irrotettu tai varastossa oleva laite kuuluu kohtaan Asennus ja sijainti · Ei asennettu. Elinkaari ja asennustila ovat toisistaan riippumattomia.",
+        "title": "Elinkaari"
       },
       "asset_replacement": {
-        "description": "Korvaaminen: {replacement}. Laite: {asset}. Korvaussuhde yhdistää vain fyysiset laitteet eikä siirrä ostoksia, takuuta, käyttötilaa, käyttötunteja, alueita tai Home Assistant -laitelinkkejä.",
+        "description": "{result}\n\nKorvaaminen: {replacement}. Laite: {asset}. Korvaussuhde yhdistää vain fyysiset laitteet eikä siirrä ostoksia, takuuta, asennustilaa, käyttötunteja, sijaintia tai Home Assistant -laitteita.",
         "menu_options": {
           "manage_asset_menu": "← Takaisin laitteen hallintaan",
-          "manage_asset_replacement": "Hallitse nykyistä suhdetta",
+          "manage_asset_replacement": "Hallitse nykyistä korvaussuhdetta",
           "replacement_replaced_by": "Tämän laitteen korvasi…",
           "replacement_replaces": "Tämä laite korvaa…"
         },
-        "title": "Laitteen korvaus"
+        "title": "Korvaaminen"
       },
       "change_asset_purchase": {
         "data": {
           "purchase_uuid": "Ostos"
         },
-        "description": "Laite: {asset}. Nykyinen ostos: {current_purchase}. Aiempi ostos, joka ei ole enää käytettävissä, näytetään vain silloin, kun laite on jo liitetty siihen. Valitse käytettävissä oleva ostos tai Ei ostosta.",
-        "title": "Liitä ostokseen"
+        "description": "Laite: {asset}. Nykyinen ostos: {current_purchase}. Tällä lomakkeella muutetaan vain ostoslinkitystä. Takuu on laitteen oma tieto, ja se näytetään muualla erikseen: ostoslinkityksen muuttaminen ei muuta takuuta. Aiempi ostos, joka ei ole enää käytettävissä, näytetään vain silloin, kun laite on jo liitetty siihen. Valitse käytettävissä oleva ostos tai Ei ostosta.",
+        "title": "Osto ja takuu"
       },
       "quick_add": {
         "menu_options": {
@@ -301,12 +301,12 @@
             }
           },
           "lifecycle": {
-            "name": "Elinkaari ja käyttötila",
+            "name": "Elinkaari ja asennus",
             "data": {
               "lifecycle_status": "Elinkaari",
               "effective_date": "Elinkaaren voimaantulopäivä",
-              "deployment_state": "Käyttötila",
-              "installed_date": "Käyttöönottopäivä",
+              "deployment_state": "Asennustila",
+              "installed_date": "Asennuspäivä",
               "ha_area_id": "Home Assistant -alue"
             },
             "data_description": {
@@ -363,16 +363,16 @@
       },
       "confirm_not_deployed": {
         "data": {
-          "confirm_area_clear": "Vahvista alueen poistaminen"
+          "confirm_area_clear": "Vahvista sijainnin poistaminen"
         },
-        "description": "Kun laite {asset} merkitään tilaan Ei käytössä, sen nykyinen alue poistetaan: {current_area}. Käyttöönottopäivä säilyy, ellet muuttanut tai poistanut sitä edellisellä lomakkeella.",
-        "title": "Poistetaanko alue?"
+        "description": "Kun laite {asset} merkitään tilaan Ei asennettu, sen nykyinen sijainti poistetaan: {current_area}. Asennuspäivä säilyy, ellet muuttanut tai poistanut sitä edellisellä lomakkeella.",
+        "title": "Poistetaanko sijainti?"
       },
       "confirm_disposed": {
         "data": {
           "confirm_disposed": "Vahvista hävitetty-tila"
         },
-        "description": "Merkitäänkö {asset} hävitetyksi? Laitetta tai sen historiaa ei poisteta, ja tila voidaan korjata myöhemmällä nimenomaisella elinkaaritilan muutoksella.",
+        "description": "Merkitäänkö {asset} hävitetyksi? Laitetta tai sen historiaa ei poisteta, ja tilan voi korjata myöhemmällä elinkaarimuutoksella.",
         "title": "Vahvista hävitetty-tila"
       },
       "confirm_void_replacement": {
@@ -407,40 +407,40 @@
           "serial_number": "Sarjanumero",
           "sw_version": "Ohjelmistoversio"
         },
-        "description": "Muokkaa laitteen {asset} tietoja. Elinkaaritunnusta, käyttötilaa, takuuta, ostosta ja Home Assistant -laitelinkkiä hallitaan erikseen.",
-        "title": "Muokkaa laitteen tietoja"
+        "description": "Muokkaa laitteen {asset} perustietoja. Elinkaaritunnusta, asennustilaa, takuuta, ostosta ja Home Assistant -laitteita hallitaan erikseen.",
+        "title": "Perustiedot"
       },
       "ha_relationship": {
-        "description": "Home Assistant -laitteet: {ha_devices}. Laite: {asset}. Ensisijainen laite: {current_primary}. Liittyvät laitteet: {related_devices}. Liittyvät laitteet ovat vain viitteitä eivätkä vaikuta laitteen identiteettiin, tietoihin, ostoksiin, käyttötuntiseurantaan, entiteettien sijoitteluun tai Home Assistant -laitteen omistajuuteen.",
+        "description": "{result}\n\nHome Assistant -laitteet: {ha_devices}. Laite: {asset}. Ensisijainen Home Assistant -laite: {current_primary}. Liittyvät Home Assistant -laitteet: {related_devices}. Ensisijainen Home Assistant -laite on tämän laitteen pääasiallinen vastine Home Assistantissa. Liittyvät laitteet ovat vain viitteitä eivätkä vaikuta laitteen identiteettiin, tietoihin, ostoksiin, käyttötuntiseurantaan, entiteettien sijoitteluun tai Home Assistant -laitteen omistajuuteen.",
         "menu_options": {
-          "add_related_device": "Lisää liittyvä laite",
+          "add_related_device": "Lisää liittyvä Home Assistant -laite",
           "manage_asset_menu": "← Takaisin laitteen hallintaan",
-          "manage_primary_device": "Hallitse ensisijaista laitetta",
-          "remove_related_device": "Poista liittyvä laite"
+          "manage_primary_device": "Hallitse ensisijaista Home Assistant -laitetta",
+          "remove_related_device": "Poista liittyvä Home Assistant -laite"
         },
-        "title": "Home Assistant -laitelinkit"
+        "title": "Home Assistant -laitteet"
       },
       "manage_primary_device": {
         "data": {
           "device_id": "Home Assistant -laite",
           "ha_relationship_action": "Toiminto"
         },
-        "description": "Laite: {asset}. Nykyinen ensisijainen laite: {current_device}. Liittäminen, linkityksen poistaminen, vaihtaminen tai liittyvän laitteen muuttaminen ensisijaiseksi ei muuta elinkaaritunnusta eikä Home Assistant -laitetta.",
-        "title": "Hallitse ensisijaista laitetta"
+        "description": "Laite: {asset}. Nykyinen ensisijainen Home Assistant -laite: {current_device}. Liittäminen, linkityksen poistaminen, vaihtaminen tai liittyvän laitteen muuttaminen ensisijaiseksi ei muuta elinkaaritunnusta eikä itse Home Assistant -laitetta.",
+        "title": "Hallitse ensisijaista Home Assistant -laitetta"
       },
       "add_related_device": {
         "data": {
           "device_id": "Home Assistant -laite"
         },
-        "description": "Laite: {asset}. Ensisijainen laite: {current_primary}. Nykyiset liittyvät laitteet: {related_devices}. Liittyvän viitteen lisääminen ei päivitä laitteen tietoja eikä vaikuta ostoksiin, käyttötuntiseurantaan, entiteettien sijoitteluun, käyttöönottoon tai Home Assistant -laitteeseen.",
-        "title": "Lisää liittyvä laite"
+        "description": "Laite: {asset}. Ensisijainen Home Assistant -laite: {current_primary}. Nykyiset liittyvät Home Assistant -laitteet: {related_devices}. Liittyvän viitteen lisääminen ei päivitä laitteen perustietoja eikä vaikuta ostoksiin, käyttötuntiseurantaan, entiteettien sijoitteluun, asennustilaan tai itse Home Assistant -laitteeseen.",
+        "title": "Lisää liittyvä Home Assistant -laite"
       },
       "remove_related_device": {
         "data": {
           "device_id": "Liittyvä Home Assistant -laite"
         },
-        "description": "Laite: {asset}. Ensisijainen laite: {current_primary}. Nykyiset liittyvät laitteet: {related_devices}. Laiterekisteristä puuttuvat laitteet voi valita tästä tallennetun tunnuksen perusteella.",
-        "title": "Poista liittyvä laite"
+        "description": "Laite: {asset}. Ensisijainen Home Assistant -laite: {current_primary}. Nykyiset liittyvät Home Assistant -laitteet: {related_devices}. Myös Home Assistantista poistuneet laitteet voi valita tästä.",
+        "title": "Poista liittyvä Home Assistant -laite"
       },
       "init": {
         "menu_options": {
@@ -457,7 +457,7 @@
         "title": "Hallitse laitetta"
       },
       "manage_asset_menu": {
-        "description": "Valittu laite: {asset}",
+        "description": "Valittu laite: {asset}\n\n{result}",
         "menu_option_descriptions": {
           "asset_deployment": "{deployment}",
           "asset_lifecycle": "{lifecycle}",
@@ -510,9 +510,9 @@
   "selector": {
     "deployment_state": {
       "options": {
-        "deployed": "Käytössä",
-        "not_deployed": "Ei käytössä",
-        "unknown": "Tuntematon"
+        "deployed": "Asennettu",
+        "not_deployed": "Ei asennettu",
+        "unknown": "Ei tiedossa"
       }
     },
     "ha_relationship_action": {
@@ -526,8 +526,8 @@
         "active": "Aktiivinen",
         "disposed": "Hävitetty",
         "lost": "Kadonnut",
-        "retired": "Poistettu käytöstä",
-        "unknown": "Tuntematon"
+        "retired": "Käytöstä poistettu",
+        "unknown": "Ei tiedossa"
       }
     },
     "replacement_action": {

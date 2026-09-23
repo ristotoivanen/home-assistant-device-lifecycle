@@ -157,16 +157,16 @@
       "entry_not_loaded": "Device Lifecycle is not currently loaded. Reload the integration and try again."
     },
     "create_entry": {
-      "asset_created": "Asset {asset_id} — {asset_name} was created.",
-      "asset_deployment_updated": "Deployment status for {asset_id} — {asset_name} was updated.",
-      "asset_ha_relationship_updated": "The Home Assistant device link for {asset_id} — {asset_name} was updated.",
-      "asset_lifecycle_unchanged": "Lifecycle status for {asset_id} — {asset_name} is already current. Nothing was changed.",
-      "asset_lifecycle_updated": "Lifecycle status for {asset_id} — {asset_name} was updated.",
-      "asset_purchase_updated": "The Purchase for {asset_id} — {asset_name} was updated.",
-      "asset_replacement_updated": "The replacement relationship for {asset_id} — {asset_name} was updated.",
-      "asset_related_device_added": "A related Home Assistant device was added to {asset_id} — {asset_name}.",
-      "asset_related_device_removed": "A related Home Assistant device was removed from {asset_id} — {asset_name}.",
-      "asset_updated": "Asset {asset_id} — {asset_name} was updated.",
+      "asset_created": "Asset created.",
+      "asset_deployment_updated": "Installation & location updated.",
+      "asset_ha_relationship_updated": "Home Assistant devices updated.",
+      "asset_lifecycle_unchanged": "Lifecycle status is already {status}. Nothing was changed.",
+      "asset_lifecycle_updated": "Lifecycle updated.",
+      "asset_purchase_updated": "Purchase & warranty updated.",
+      "asset_related_device_added": "Related Home Assistant device added.",
+      "asset_related_device_removed": "Related Home Assistant device removed.",
+      "asset_replacement_updated": "Replacement updated.",
+      "asset_updated": "Asset details updated.",
       "quick_asset_created": "{asset_name} was added to Device Lifecycle."
     },
     "error": {
@@ -180,11 +180,11 @@
       "ha_device_runtime_dependency": "Active Runtime tracking still uses the linked device. Remove that Runtime configuration before unlinking or replacing it.",
       "ha_relationship_changed": "The linked Home Assistant device changed while this form was open. Review the current device and try again.",
       "invalid_area": "Select an existing Home Assistant Area, or explicitly clear the current Area.",
-      "invalid_deployment_state": "Select a valid Deployment status.",
+      "invalid_deployment_state": "Select a valid installation status.",
       "invalid_ha_relationship_action": "Select Link device, Unlink device, or Replace device as appropriate.",
       "invalid_installed_date": "Enter a valid installation date.",
-      "invalid_lifecycle_effective_date": "Enter the Lifecycle effective date in YYYY-MM-DD format.",
-      "invalid_lifecycle_status": "Select a valid Lifecycle status.",
+      "invalid_lifecycle_effective_date": "Enter the lifecycle change's effective date as YYYY-MM-DD.",
+      "invalid_lifecycle_status": "Select a valid lifecycle status.",
       "invalid_purchase": "The selected Purchase cannot be linked to this Asset.",
       "invalid_quick_create_request": "Review the entered Asset details and try again.",
       "invalid_replacement_effective_date": "Enter the replacement effective date in YYYY-MM-DD format.",
@@ -192,8 +192,8 @@
       "invalid_warranty_date": "Enter a valid warranty end date in YYYY-MM-DD format.",
       "invalid_warranty_type": "Select a valid warranty type.",
       "lifecycle_chain_invalid": "The Lifecycle history is inconsistent. Nothing was changed.",
-      "lifecycle_date_in_future": "The Lifecycle effective date cannot be in the future.",
-      "lifecycle_date_not_applicable": "Lifecycle effective date cannot be set when Lifecycle is Unknown.",
+      "lifecycle_date_in_future": "The lifecycle change's effective date cannot be in the future.",
+      "lifecycle_date_not_applicable": "An effective date cannot be set while the lifecycle status is Unknown.",
       "no_assets": "There are no Assets to manage yet.",
       "non_physical_device_not_allowed": "Select a physical Home Assistant device provided by another integration.",
       "purchase_conflict": "This Asset is already linked to a different Purchase. Review its current Purchase and try again.",
@@ -204,9 +204,9 @@
       "purchase_missing": "The selected Purchase no longer exists.",
       "purchase_not_configured": "The selected Purchase is no longer configured.",
       "quick_create_idempotency_conflict": "This Quick Add request conflicts with an existing persisted Asset. Nothing was changed.",
-      "review_replacement_deployment": "A replacement was selected. Review the new Asset's visible Deployment default, now Deployed, and continue.",
+      "review_replacement_deployment": "A replacement was selected. Review the new Asset's installation status default, now Installed, and continue.",
       "related_device_is_primary": "The selected Home Assistant device is already the primary device for this Asset.",
-      "related_device_not_found": "The selected related relationship no longer exists. Review the current relationships and try again.",
+      "related_device_not_found": "The selected related Home Assistant device no longer exists. Review the current devices and try again.",
       "replacement_cycle": "This relationship would create a replacement cycle.",
       "replacement_date_before_predecessor_lifecycle": "The replacement effective date cannot be earlier than the predecessor's current Lifecycle effective date.",
       "replacement_date_in_future": "The replacement effective date cannot be in the future.",
@@ -222,14 +222,14 @@
     "step": {
       "asset_deployment": {
         "data": {
-          "clear_ha_area": "Clear current Area",
+          "clear_ha_area": "Clear current location",
           "clear_installed_date": "Clear installation date",
-          "deployment_state": "Deployment status",
-          "ha_area_id": "Home Assistant Area",
+          "deployment_state": "Installation status",
+          "ha_area_id": "Location",
           "installed_date": "Installation date"
         },
-        "description": "Asset: {asset}. Current Home Assistant Area: {current_area}. Deployment status is independent of any linked Home Assistant device. Use the clear controls to remove the Installation date or Area. An unavailable Area remains unchanged until you clear or replace it.",
-        "title": "Deployment status"
+        "description": "Asset: {asset}. Current location: {current_area}. Not installed means the Asset is not installed right now but still belongs to your inventory. Permanent removal, disposal or loss is recorded under Lifecycle. Installation status is independent of any linked Home Assistant device. A location that is no longer available is kept until you clear or replace it.",
+        "title": "Installation & location"
       },
       "asset_lifecycle": {
         "data": {
@@ -241,25 +241,25 @@
           "effective_date": "Optional. Today is suggested, and you can clear it.",
           "notes": "Optional note recorded only on this immutable transition."
         },
-        "description": "Asset: {asset}. The current status is preselected. Lifecycle and Deployment are independent.",
-        "title": "Lifecycle status"
+        "description": "Asset: {asset}. The current status is preselected. Retired means permanent or deliberate removal from use. An Asset that is temporarily disconnected or in storage belongs under Installation & location · Not installed. Lifecycle and installation status are independent.",
+        "title": "Lifecycle"
       },
       "asset_replacement": {
-        "description": "Replacement: {replacement}. Asset: {asset}. Replacement connects physical Assets only and does not transfer Purchases, warranty, Deployment, Runtime, Areas, or Home Assistant relationships.",
+        "description": "{result}\n\nReplacement: {replacement}. Asset: {asset}. Replacement connects physical Assets only and does not transfer Purchases, warranty, installation status, Runtime, locations, or Home Assistant devices.",
         "menu_options": {
           "manage_asset_menu": "← Back to asset management",
-          "manage_asset_replacement": "Manage existing relationship",
+          "manage_asset_replacement": "Manage existing replacement",
           "replacement_replaced_by": "This Asset was replaced by…",
           "replacement_replaces": "This Asset replaces…"
         },
-        "title": "Asset replacement"
+        "title": "Replacement"
       },
       "change_asset_purchase": {
         "data": {
           "purchase_uuid": "Purchase"
         },
-        "description": "Asset: {asset}. Current Purchase: {current_purchase}. A previous unavailable Purchase is shown only when already linked to this Asset. Select a configured Purchase or No Purchase.",
-        "title": "Change Purchase"
+        "description": "Asset: {asset}. Current Purchase: {current_purchase}. This form changes the Purchase link only. The warranty is the Asset's own detail, shown separately elsewhere: changing the Purchase link does not change the warranty. A previous unavailable Purchase is shown only when already linked to this Asset. Select a configured Purchase or No Purchase.",
+        "title": "Purchase & warranty"
       },
       "quick_add": {
         "menu_options": {
@@ -301,11 +301,11 @@
             }
           },
           "lifecycle": {
-            "name": "Lifecycle and deployment",
+            "name": "Lifecycle and installation",
             "data": {
               "lifecycle_status": "Lifecycle",
               "effective_date": "Lifecycle effective date",
-              "deployment_state": "Deployment",
+              "deployment_state": "Installation status",
               "installed_date": "Installation date",
               "ha_area_id": "Home Assistant Area"
             },
@@ -363,16 +363,16 @@
       },
       "confirm_not_deployed": {
         "data": {
-          "confirm_area_clear": "Confirm clearing the Area"
+          "confirm_area_clear": "Confirm clearing the location"
         },
-        "description": "Changing {asset} to Not deployed will clear its current Home Assistant Area: {current_area}. Its Installation date is preserved unless you explicitly changed or cleared it on the previous form.",
-        "title": "Clear Home Assistant Area?"
+        "description": "Changing {asset} to Not installed will clear its current location: {current_area}. Its installation date is preserved unless you changed or cleared it on the previous form.",
+        "title": "Clear the location?"
       },
       "confirm_disposed": {
         "data": {
           "confirm_disposed": "Confirm disposed status"
         },
-        "description": "Record {asset} as disposed? This does not delete the Asset or its history and can be corrected by a later explicit Lifecycle transition.",
+        "description": "Record {asset} as disposed? This deletes neither the Asset nor its history, and the status can be corrected by a later lifecycle change.",
         "title": "Confirm disposed status"
       },
       "confirm_void_replacement": {
@@ -407,40 +407,40 @@
           "serial_number": "Serial number",
           "sw_version": "Software version"
         },
-        "description": "Edit physical details for {asset}. Its Asset ID, Deployment status, warranty, Purchase, and Home Assistant device link are managed separately.",
-        "title": "Edit Asset metadata"
+        "description": "Edit the details for {asset}. Its Asset ID, installation status, warranty, Purchase and Home Assistant devices are managed separately.",
+        "title": "Asset details"
       },
       "ha_relationship": {
-        "description": "Home Assistant devices: {ha_devices}. Asset: {asset}. Primary device: {current_primary}. Related devices: {related_devices}. Related devices are references only and do not affect Asset identity, metadata, Purchases, Runtime, entity placement, or Home Assistant device ownership.",
+        "description": "{result}\n\nHome Assistant devices: {ha_devices}. Asset: {asset}. Primary Home Assistant device: {current_primary}. Related Home Assistant devices: {related_devices}. The primary Home Assistant device is this Asset's main counterpart in Home Assistant. Related devices are references only and do not affect Asset identity, details, Purchases, Runtime, entity placement, or Home Assistant device ownership.",
         "menu_options": {
-          "add_related_device": "Add related device",
+          "add_related_device": "Add related Home Assistant device",
           "manage_asset_menu": "← Back to asset management",
-          "manage_primary_device": "Manage primary device",
-          "remove_related_device": "Remove related device"
+          "manage_primary_device": "Manage primary Home Assistant device",
+          "remove_related_device": "Remove related Home Assistant device"
         },
-        "title": "Home Assistant relationships"
+        "title": "Home Assistant devices"
       },
       "manage_primary_device": {
         "data": {
           "device_id": "Home Assistant device",
           "ha_relationship_action": "Action"
         },
-        "description": "Asset: {asset}. Current primary device: {current_device}. Linking, unlinking, replacing, or promoting a related device does not change the Asset ID or modify the Home Assistant device.",
-        "title": "Manage primary device"
+        "description": "Asset: {asset}. Current primary Home Assistant device: {current_device}. Linking, unlinking, replacing, or promoting a related device does not change the Asset ID or modify the Home Assistant device itself.",
+        "title": "Manage primary Home Assistant device"
       },
       "add_related_device": {
         "data": {
           "device_id": "Home Assistant device"
         },
-        "description": "Asset: {asset}. Primary device: {current_primary}. Current related devices: {related_devices}. Adding a related reference does not refresh Asset metadata or affect Purchases, Runtime, entity placement, deployment, or the Home Assistant device.",
-        "title": "Add related device"
+        "description": "Asset: {asset}. Primary Home Assistant device: {current_primary}. Current related Home Assistant devices: {related_devices}. Adding a related reference does not refresh Asset details or affect Purchases, Runtime, entity placement, installation status, or the Home Assistant device itself.",
+        "title": "Add related Home Assistant device"
       },
       "remove_related_device": {
         "data": {
           "device_id": "Related Home Assistant device"
         },
-        "description": "Asset: {asset}. Primary device: {current_primary}. Current related devices: {related_devices}. Unavailable devices remain selectable here by their stored ID.",
-        "title": "Remove related device"
+        "description": "Asset: {asset}. Primary Home Assistant device: {current_primary}. Current related Home Assistant devices: {related_devices}. Devices that have left Home Assistant remain selectable here.",
+        "title": "Remove related Home Assistant device"
       },
       "init": {
         "menu_options": {
@@ -457,7 +457,7 @@
         "title": "Manage Asset"
       },
       "manage_asset_menu": {
-        "description": "Selected Asset: {asset}",
+        "description": "Selected Asset: {asset}\n\n{result}",
         "menu_option_descriptions": {
           "asset_deployment": "{deployment}",
           "asset_lifecycle": "{lifecycle}",
@@ -510,8 +510,8 @@
   "selector": {
     "deployment_state": {
       "options": {
-        "deployed": "Deployed",
-        "not_deployed": "Not deployed",
+        "deployed": "Installed",
+        "not_deployed": "Not installed",
         "unknown": "Unknown"
       }
     },

@@ -1223,7 +1223,7 @@ async def test_replacement_noop_states_and_area_removal_are_truthful(
 
     placeholders = confirm["description_placeholders"]
     assert placeholders["predecessor_lifecycle"] == "Unchanged"
-    assert placeholders["predecessor_deployment"] == "Deployed → Not deployed"
+    assert placeholders["predecessor_deployment"] == "Installed → Not installed"
     assert placeholders["predecessor_area"] == "Garage → removed"
     assert QUICK_UUID not in str(placeholders)
     assert "DL" not in str(placeholders)
@@ -1455,7 +1455,7 @@ async def test_confirmation_uses_home_assistant_selector_translations(
 
     placeholders = confirmation["description_placeholders"]
     assert placeholders["lifecycle"] == "Aktiivinen"
-    assert placeholders["deployment"] == "Ei käytössä"
+    assert placeholders["deployment"] == "Ei asennettu"
     assert placeholders["warranty"] == "Ei määritetty"
 
 

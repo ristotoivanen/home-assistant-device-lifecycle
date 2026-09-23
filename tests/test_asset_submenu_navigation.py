@@ -201,7 +201,7 @@ async def test_recording_a_replacement_returns_to_the_replacement_submenu(
 
     assert replaces["step_id"] == REPLACEMENT_STEP
     assert replaces["description_placeholders"]["result"] == (
-        "asset_replacement_updated"
+        "Replacement updated."
     )
     assert flow._selected_asset_uuid == new["asset_uuid"]
     assert manager.active_replacement_predecessor(new["asset_uuid"])[
@@ -309,7 +309,7 @@ async def test_primary_device_change_returns_to_the_ha_submenu(
 
     assert linked["step_id"] == HA_STEP
     assert linked["description_placeholders"]["result"] == (
-        "asset_ha_relationship_updated"
+        "Home Assistant devices updated."
     )
     assert flow._selected_asset_uuid == asset["asset_uuid"]
     assert manager.asset(asset["asset_uuid"])["ha_device_refs"] == [
@@ -337,7 +337,7 @@ async def test_related_device_add_and_remove_return_to_the_ha_submenu(
 
     assert added["step_id"] == HA_STEP
     assert added["description_placeholders"]["result"] == (
-        "asset_related_device_added"
+        "Related Home Assistant device added."
     )
     assert manager.asset(asset["asset_uuid"])["ha_device_refs"] == [
         {"device_id": related.id, "role": "related"}
@@ -349,7 +349,7 @@ async def test_related_device_add_and_remove_return_to_the_ha_submenu(
 
     assert removed["step_id"] == HA_STEP
     assert removed["description_placeholders"]["result"] == (
-        "asset_related_device_removed"
+        "Related Home Assistant device removed."
     )
     assert flow._selected_asset_uuid == asset["asset_uuid"]
     assert manager.asset(asset["asset_uuid"])["ha_device_refs"] == []
@@ -371,7 +371,7 @@ async def test_replacement_result_is_reported_once_and_does_not_follow_back(
         }
     )
     assert saved["description_placeholders"]["result"] == (
-        "asset_replacement_updated"
+        "Replacement updated."
     )
 
     reopened = await flow.async_step_asset_replacement()
@@ -398,7 +398,7 @@ async def test_ha_result_is_reported_once_and_does_not_follow_back(
 
     saved = await flow.async_step_add_related_device({CONF_DEVICE_ID: device.id})
     assert saved["description_placeholders"]["result"] == (
-        "asset_related_device_added"
+        "Related Home Assistant device added."
     )
 
     reopened = await flow.async_step_ha_relationship()

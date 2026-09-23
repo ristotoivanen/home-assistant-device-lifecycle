@@ -621,6 +621,17 @@ def _summary_line(*parts: str | None) -> str:
     return f"{trimmed}…"
 
 
+class _MissingBlank(dict):
+    """Format mapping that leaves an unknown placeholder empty.
+
+    Result copy is translated, so a message may or may not use the value a
+    given operation can supply.
+    """
+
+    def __missing__(self, key: str) -> str:
+        return ""
+
+
 def _summary_date(value: str | None, *, finnish: bool) -> str:
     """Render one canonical ISO date the way each language writes dates.
 
@@ -1406,6 +1417,34 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         result = self._last_result or ""
         self._last_result = None
         return result
+
+    async def _result_message(self, asset: AssetData | None = None) -> str:
+        """Render the pending completion key as the sentence people read.
+
+        The wording lives in `options.create_entry`, the same place it lived
+        when these operations still ended the flow, so there is one copy of
+        it rather than one per rendering surface.
+        """
+        key = self._take_last_result()
+        if not key:
+            return ""
+        translations = await translation_helper.async_get_translations(
+            self.hass,
+            self.hass.config.language,
+            "options",
+            integrations={DOMAIN},
+        )
+        message = translations.get(
+            f"component.{DOMAIN}.options.create_entry.{key}", ""
+        )
+        if not message:
+            return ""
+        status = ""
+        if asset is not None:
+            status = self._lifecycle_status_label(
+                str((asset.get("lifecycle") or {}).get("status") or "")
+            )
+        return message.format_map(_MissingBlank(status=status))
 
     async def _finish_asset_action(
         self,
@@ -2696,7 +2735,6 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         """Collect every value the Asset hub renders for one Asset."""
         return {
             "asset": _asset_label(asset),
-            "result": self._take_last_result(),
             "metadata": self._summary_metadata(asset),
             "purchase_warranty": self._summary_purchase_warranty(asset),
             "deployment": self._summary_deployment(asset),
@@ -2720,7 +2758,10 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         if asset is None:
             return self._show_asset_selection(errors={"base": "asset_missing"})
 
-        placeholders = self._hub_placeholders(asset)
+        placeholders = {
+            **self._hub_placeholders(asset),
+            "result": await self._result_message(asset),
+        }
         return self.async_show_menu(
             step_id="manage_asset_menu",
             menu_options=[
@@ -3014,7 +3055,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             menu_options=menu_options,
             description_placeholders={
                 "asset": _asset_label(asset),
-                "result": self._take_last_result(),
+                "result": await self._result_message(asset),
                 "replacement": self._summary_replacement(asset),
             },
         )
@@ -3608,7 +3649,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             menu_options=menu_options,
             description_placeholders={
                 "asset": _asset_label(asset),
-                "result": self._take_last_result(),
+                "result": await self._result_message(asset),
                 # Name-only context alongside the repair-oriented labels
                 # below, which deliberately carry the stored device ID.
                 "ha_devices": self._summary_ha_devices(asset),
