@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
 from .const import (
@@ -32,15 +34,37 @@ def runtime_unique_id(asset_uuid: str) -> str:
     return f"{asset_uuid}_runtime_hours"
 
 
+def _device_can_be_linked(registry: dr.DeviceRegistry, device_id: str) -> bool:
+    """Return whether Home Assistant will attach an entity to this device ID.
+
+    Device Lifecycle stores Device Registry IDs it does not own, and another
+    integration can remove the device at any time. Home Assistant refuses to
+    attach an entity to a device ID that is not in the registry, including a
+    pre-migration composite ID that `async_get` still resolves to a
+    read-only stand-in. This asks the same question Home Assistant's own
+    check asks: exact ID membership on 2026.8, where `devices` is a device-ID
+    mapping, and `async_get` without composites on 2026.9+, which deprecates
+    that mapping use.
+    """
+    devices = registry.devices
+    if isinstance(devices, Mapping):
+        return device_id in devices
+    return registry.async_get(device_id, include_composite_devices=False) is not None
+
+
 def _migrate_or_relink_entity(
     registry: er.EntityRegistry,
     *,
     old_unique_id: str,
     new_unique_id: str,
     config_subentry_id: str,
-    device_id: str,
+    device_id: str | None,
 ) -> None:
-    """Migrate an existing entity without changing its entity_id/history."""
+    """Migrate an existing entity without changing its entity_id/history.
+
+    A `device_id` of None leaves the entity's device link as it is: the
+    referenced Home Assistant device is gone, and the Asset Device keeps it.
+    """
     new_entity_id = registry.async_get_entity_id(
         Platform.SENSOR,
         DOMAIN,
@@ -75,7 +99,7 @@ def _migrate_or_relink_entity(
         update["new_unique_id"] = new_unique_id
     if registry_entry.config_subentry_id != config_subentry_id:
         update["config_subentry_id"] = config_subentry_id
-    if registry_entry.device_id != device_id:
+    if device_id is not None and registry_entry.device_id != device_id:
         update["device_id"] = device_id
 
     if not update:
@@ -100,6 +124,25 @@ async def async_migrate_entity_registry(
     also keeps existing Runtime hours restore data available during this migration.
     """
     registry = er.async_get(hass)
+    device_registry = dr.async_get(hass)
+
+    def _linkable(device_id: str, asset_id: str, source: str) -> str | None:
+        """Return the device ID to link, or None for a device that is gone.
+
+        A missing device is an unresolved reference, not a setup failure.
+        The stored reference is kept exactly as it is for the person to
+        repair, and nothing else about the Asset changes.
+        """
+        if _device_can_be_linked(device_registry, device_id):
+            return device_id
+        _LOGGER.warning(
+            "The Home Assistant device that %s lists for Asset %s is no longer "
+            "in the Device Registry; keeping the stored reference and "
+            "continuing setup",
+            source,
+            asset_id,
+        )
+        return None
 
     for subentry in entry.subentries.values():
         if subentry.subentry_type == SUBENTRY_TYPE_PURCHASE:
@@ -116,7 +159,11 @@ async def async_migrate_entity_registry(
                     ),
                     new_unique_id=lifecycle_unique_id(asset["asset_uuid"]),
                     config_subentry_id=subentry.subentry_id,
-                    device_id=device_id,
+                    device_id=_linkable(
+                        device_id,
+                        asset["asset_id"],
+                        "a Purchase configuration",
+                    ),
                 )
 
         elif subentry.subentry_type == SUBENTRY_TYPE_RUNTIME:
@@ -142,5 +189,9 @@ async def async_migrate_entity_registry(
                 ),
                 new_unique_id=runtime_unique_id(asset["asset_uuid"]),
                 config_subentry_id=subentry.subentry_id,
-                device_id=device_id,
+                device_id=_linkable(
+                    device_id,
+                    asset["asset_id"],
+                    "a Runtime configuration",
+                ),
             )
