@@ -224,7 +224,7 @@ async def test_the_inverse_creation_step_no_longer_exists(
             "This Asset replaces…",
             "This Asset was replaced by",
             "Replaced by",
-            "A replacement is always recorded from the new Asset.",
+            "A replacement relationship is always recorded from the new Asset.",
         ),
         (
             "fi",

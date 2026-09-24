@@ -693,6 +693,11 @@ def _asset_label(asset: AssetData) -> str:
     return f"{asset['name']} · {asset['asset_id']}"
 
 
+def _view_asset_label(asset: AssetData) -> str:
+    """Name the Asset at the top of a read-only view, within a menu row."""
+    return _summary_line(_short_name(asset["name"]), asset["asset_id"])
+
+
 def _purchase_asset_summary(
     entry: ConfigEntry,
     subentry_id: str,
@@ -2746,33 +2751,6 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         )
         return self._localized_label(english, finnish)
 
-    def _summary_replacement(self, asset: AssetData) -> str:
-        """Name the Assets this one actively replaces or was replaced by.
-
-        Only active records: a voided one is history, and the manager's own
-        accessors already exclude it.
-        """
-        asset_uuid = asset["asset_uuid"]
-        predecessor = self._manager.active_replacement_predecessor(asset_uuid)
-        successor = self._manager.active_replacement_successor(asset_uuid)
-        parts = []
-        if predecessor is not None:
-            label = _asset_label(predecessor)
-            parts.append(
-                self._localized_label(f"Replaces: {label}", f"Korvaa: {label}")
-            )
-        if successor is not None:
-            label = _asset_label(successor)
-            parts.append(
-                self._localized_label(f"Replaced by: {label}", f"Korvattu: {label}")
-            )
-        if not parts:
-            return self._localized_label(
-                "No active replacement",
-                "Ei aktiivista korvaussuhdetta",
-            )
-        return _summary_line(*parts)
-
     def _summary_ha_devices(self, asset: AssetData) -> str:
         """Name the primary Home Assistant device and count the rest.
 
@@ -2856,7 +2834,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             step_id=step_id,
             menu_options=[*actions, "manage_asset_menu"],
             description_placeholders={
-                "asset": _summary_line(_short_name(asset["name"]), asset["asset_id"]),
+                "asset": _view_asset_label(asset),
                 **{key: "\n".join(lines) for key, lines in facts(asset).items()},
             },
         )
@@ -3422,9 +3400,9 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             step_id="asset_replacement",
             menu_options=menu_options,
             description_placeholders={
-                "asset": _asset_label(asset),
+                "asset": _view_asset_label(asset),
                 "result": await self._result_message(asset),
-                "replacement": self._summary_replacement(asset),
+                "replacement": "\n".join(self._replacement_facts(asset)),
             },
         )
 

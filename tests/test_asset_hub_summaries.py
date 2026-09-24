@@ -451,45 +451,6 @@ async def test_lifecycle_replacement_summary_is_a_status_not_a_history(
     assert "Retired" not in summary
 
 
-async def test_replacement_summary_shows_only_active_relationships(
-    hass: HomeAssistant,
-    asset_store_data: AssetStoreData,
-) -> None:
-    """A voided record stops being current, and the summary follows."""
-    manager = _manager(hass, asset_store_data)
-    successor = await manager.async_create_manual_asset(name="Successor unit")
-    flow = await _flow(hass, manager)
-
-    assert flow._summary_replacement(manager.asset(ASSET_UUID)) == (
-        "No active replacement"
-    )
-
-    record = await manager.async_create_asset_replacement(
-        ASSET_UUID,
-        successor["asset_uuid"],
-        reason="failure",
-        effective_date=None,
-        notes=None,
-    )
-    replaced = flow._summary_replacement(manager.asset(ASSET_UUID))
-
-    assert replaced == f"Replaced by: Successor unit · {successor['asset_id']}"
-    assert record["replacement_uuid"] not in replaced
-    assert successor["asset_uuid"] not in replaced
-
-    from_successor = flow._summary_replacement(manager.asset(successor["asset_uuid"]))
-    assert from_successor == "Replaces: Workshop device · DL0007"
-
-    await manager.async_void_asset_replacement(
-        record["replacement_uuid"],
-        void_reason="Recorded in error",
-    )
-
-    assert flow._summary_replacement(manager.asset(ASSET_UUID)) == (
-        "No active replacement"
-    )
-
-
 async def test_lifecycle_replacement_summary_names_each_active_direction(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,

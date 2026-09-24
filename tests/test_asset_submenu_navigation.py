@@ -430,7 +430,8 @@ async def test_submenus_show_context_without_technical_identifiers(
     ha_devices = await flow.async_step_ha_relationship()
 
     assert replacement["description_placeholders"]["replacement"] == (
-        f"Replaced by: New unit · {new['asset_id']}"
+        "This Asset replaces: No active relationship\n"
+        f"This Asset was replaced by: New unit · {new['asset_id']}"
     )
     assert old["asset_uuid"] not in replacement["description_placeholders"][
         "replacement"

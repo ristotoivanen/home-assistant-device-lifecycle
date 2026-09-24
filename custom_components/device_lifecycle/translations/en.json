@@ -247,7 +247,7 @@
         "title": "Lifecycle"
       },
       "asset_replacement": {
-        "description": "{result}\n\nReplacement: {replacement}. Asset: {asset}. A replacement is always recorded from the new Asset. It connects physical Assets only and does not transfer Purchases, warranty, installation status, Runtime, locations, or Home Assistant devices.",
+        "description": "{asset}\n\n{result}\n\n**Replacement**\n{replacement}\n\nA replacement relationship is always recorded from the new Asset.",
         "menu_options": {
           "manage_asset_menu": "← Back to asset management",
           "manage_asset_replacement": "Manage existing replacement",

@@ -247,7 +247,7 @@
         "title": "Elinkaari"
       },
       "asset_replacement": {
-        "description": "{result}\n\nKorvaaminen: {replacement}. Laite: {asset}. Korvaussuhde kirjataan aina uudesta laitteesta, ja se yhdistää vain fyysiset laitteet eikä siirrä ostoksia, takuuta, asennustilaa, käyttötunteja, sijaintia tai Home Assistant -laitteita.",
+        "description": "{asset}\n\n{result}\n\n**Korvaaminen**\n{replacement}\n\nKorvaussuhde kirjataan aina uudesta laitteesta.",
         "menu_options": {
           "manage_asset_menu": "← Takaisin laitteen hallintaan",
           "manage_asset_replacement": "Hallitse nykyistä korvaussuhdetta",
