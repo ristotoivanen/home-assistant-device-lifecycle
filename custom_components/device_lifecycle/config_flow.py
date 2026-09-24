@@ -2611,52 +2611,54 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         """Render one canonical date in the reader's language."""
         return _summary_date(value, finnish=self._finnish)
 
-    def _summary_metadata(self, asset: AssetData) -> str:
-        """Say what the Asset physically is."""
-        manufacturer = _short_name(asset.get(CONF_MANUFACTURER))
-        model = _short_name(asset.get(CONF_MODEL))
-        if line := _summary_line(manufacturer, model):
-            return line
-        if category := _short_name(asset.get(CONF_CATEGORY)):
-            return category
-        return self._localized_label(
-            "No manufacturer or model recorded",
-            "Ei valmistaja- tai mallitietoa",
-        )
+    def _warranty_status(self, asset: AssetData) -> tuple[str, date | None]:
+        """Classify the Asset's own warranty the way its warranty sensor does.
 
-    def _summary_purchase(self, asset: AssetData) -> str:
-        """Name the Purchase this Asset belongs to."""
-        purchase_uuid = asset.get("purchase_uuid")
-        purchase = (
-            None if purchase_uuid is None else self._manager.purchase(purchase_uuid)
-        )
-        if purchase is None:
-            return self._localized_label("Not linked", "Ei liitetty")
-        return _short_name(_stored_purchase_label(purchase))
-
-    def _summary_warranty(self, asset: AssetData) -> str:
-        """Say how long the warranty runs, independently of any Purchase."""
-        warranty = asset.get("warranty") or {}
-        if str(warranty.get("type") or WARRANTY_NONE) == WARRANTY_NONE:
-            return self._localized_label("None", "Ei takuuta")
-        until = self._localized_date(warranty.get("until"))
-        if not until:
-            return self._localized_label("Unknown", "Ei tiedossa")
-        return self._localized_label(f"until {until}", f"{until} asti")
-
-    def _summary_purchase_warranty(self, asset: AssetData) -> str:
-        """Report the Purchase and the warranty as the separate facts they are.
-
-        Both sides are resolved from the Asset on their own. The warranty is
-        the Asset's own, so the wording never suggests it came from, or
-        depends on, whichever Purchase happens to be shown beside it.
+        An end date decides: valid through that day, expired after it.
+        Without one, a recorded warranty type means the end date is unknown,
+        and no type is what the editor calls "Not specified": the data does
+        not say whether there is no warranty or it was never recorded.
         """
-        purchase = self._summary_purchase(asset)
-        warranty = self._summary_warranty(asset)
-        return _summary_line(
-            self._localized_label(f"Purchase: {purchase}", f"Ostos: {purchase}"),
-            self._localized_label(f"Warranty: {warranty}", f"Takuu: {warranty}"),
-        )
+        warranty = asset.get("warranty") or {}
+        until = dt_util.parse_date(str(warranty.get("until") or ""))
+        if until is not None:
+            status = "valid" if until >= dt_util.now().date() else "expired"
+            return status, until
+        if str(warranty.get("type") or WARRANTY_NONE) == WARRANTY_NONE:
+            return "not_specified", None
+        return "end_unknown", None
+
+    def _identity_summary(self, asset: AssetData) -> str:
+        """Name the device the way people say it: manufacturer and model."""
+        manufacturer = " ".join(str(asset.get(CONF_MANUFACTURER) or "").split())
+        model = " ".join(str(asset.get(CONF_MODEL) or "").split())
+        # "Shelly" + "Shelly Plug S" reads as "Shelly Plug S", not twice.
+        if manufacturer and model.casefold().startswith(manufacturer.casefold()):
+            manufacturer = ""
+        identity = " ".join(part for part in (manufacturer, model) if part)
+        return identity or " ".join(str(asset.get(CONF_CATEGORY) or "").split())
+
+    def _summary_details_warranty(self, asset: AssetData) -> str:
+        """Lead with the warranty, then say which device this is.
+
+        The Purchase is not summarized here: the warranty is the Asset's own
+        fact, and the line never suggests it came from a Purchase.
+        """
+        status, until = self._warranty_status(asset)
+        if status == "valid":
+            date_text = self._localized_date(until.isoformat())
+            warranty = self._localized_label(
+                f"Warranty until {date_text}", f"Takuu {date_text} asti"
+            )
+        elif status == "expired":
+            warranty = self._localized_label("Warranty expired", "Takuu päättynyt")
+        elif status == "end_unknown":
+            warranty = self._localized_label("Warranty unknown", "Takuu ei tiedossa")
+        else:
+            warranty = self._localized_label(
+                "Warranty not specified", "Takuu ei määritetty"
+            )
+        return _summary_line(warranty, self._identity_summary(asset))
 
     def _summary_deployment(self, asset: AssetData) -> str:
         """Say whether the Asset is installed, and where."""
@@ -2778,8 +2780,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         """Collect every value the Asset hub renders for one Asset."""
         return {
             "asset": _asset_label(asset),
-            "metadata": self._summary_metadata(asset),
-            "purchase_warranty": self._summary_purchase_warranty(asset),
+            "details_warranty": self._summary_details_warranty(asset),
             "deployment": self._summary_deployment(asset),
             "lifecycle": self._summary_lifecycle(asset),
             "replacement": self._summary_replacement(asset),
@@ -2808,8 +2809,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         return self.async_show_menu(
             step_id="manage_asset_menu",
             menu_options=[
-                "asset_details_menu",
-                "asset_purchase_menu",
+                "asset_details_warranty_menu",
                 "asset_installation_menu",
                 "asset_lifecycle_menu",
                 "asset_replacement",
@@ -2822,26 +2822,38 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
     def _show_section_menu(
         self,
         step_id: str,
-        action: str,
-        facts: Callable[[AssetData], list[str]],
+        actions: list[str],
+        facts: Callable[[AssetData], dict[str, list[str]]],
     ) -> ConfigFlowResult:
-        """Show one hub section's current state, its editor, and Back.
+        """Show one hub section's current state, its editors, and Back.
 
         Read-only like the hub: the facts are read from the current manager
         on every render and nothing is kept in the flow, so Back to the hub
-        writes nothing, reloads nothing and carries no result.
+        writes nothing, reloads nothing and carries no result. `facts` maps
+        each description placeholder to its lines.
         """
         asset = self._manager.asset(getattr(self, "_selected_asset_uuid", None))
         if asset is None:
             return self._show_asset_selection(errors={"base": "asset_missing"})
         return self.async_show_menu(
             step_id=step_id,
-            menu_options=[action, "manage_asset_menu"],
+            menu_options=[*actions, "manage_asset_menu"],
             description_placeholders={
                 "asset": _summary_line(_short_name(asset["name"]), asset["asset_id"]),
-                "facts": "\n".join(facts(asset)),
+                **{key: "\n".join(lines) for key, lines in facts(asset).items()},
             },
         )
+
+    def _details_warranty_facts(self, asset: AssetData) -> dict[str, list[str]]:
+        """Group the Asset's details, its Purchase and its warranty.
+
+        Three separate facts shown together; each keeps its own editor.
+        """
+        return {
+            "details": self._details_facts(asset),
+            "purchase": self._purchase_facts(asset),
+            "warranty": self._warranty_facts(asset),
+        }
 
     def _details_facts(self, asset: AssetData) -> list[str]:
         """List the physical details people look up, one labelled line each.
@@ -2883,7 +2895,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         return facts
 
     def _purchase_facts(self, asset: AssetData) -> list[str]:
-        """Name the Purchase, and the Asset's own warranty beside it."""
+        """Name the linked Purchase, when it was made and where."""
         purchase_uuid = asset.get("purchase_uuid")
         purchase = (
             None if purchase_uuid is None else self._manager.purchase(purchase_uuid)
@@ -2918,10 +2930,38 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 facts.append(
                     self._localized_label(f"Seller: {seller}", f"Myyjä: {seller}")
                 )
-        warranty = self._summary_warranty(asset)
-        facts.append(
-            self._localized_label(f"Warranty: {warranty}", f"Takuu: {warranty}")
-        )
+        return facts
+
+    def _warranty_facts(self, asset: AssetData) -> list[str]:
+        """Say whether the Asset's own warranty runs, and of which type."""
+        status, until = self._warranty_status(asset)
+        date_text = "" if until is None else self._localized_date(until.isoformat())
+        facts = [
+            {
+                "valid": self._localized_label(
+                    f"Valid until {date_text}", f"Voimassa {date_text} asti"
+                ),
+                "expired": self._localized_label(
+                    f"Expired on {date_text}", f"Päättynyt {date_text}"
+                ),
+                "end_unknown": self._localized_label(
+                    "End date unknown", "Päättymispäivä ei tiedossa"
+                ),
+                "not_specified": self._localized_label(
+                    "Not specified", "Ei määritetty"
+                ),
+            }[status]
+        ]
+        warranty_type = str((asset.get("warranty") or {}).get("type") or "")
+        if type_label := {
+            WARRANTY_ONE_YEAR: ("1 year", "1 vuosi"),
+            WARRANTY_TWO_YEARS: ("2 years", "2 vuotta"),
+            WARRANTY_MANUAL: ("Manual", "Manuaalinen"),
+        }.get(warranty_type):
+            english, finnish = type_label
+            facts.append(
+                self._localized_label(f"Type: {english}", f"Tyyppi: {finnish}")
+            )
         return facts
 
     def _installation_facts(self, asset: AssetData) -> list[str]:
@@ -2982,22 +3022,15 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             )
         return facts
 
-    async def async_step_asset_details_menu(
+    async def async_step_asset_details_warranty_menu(
         self,
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
-        """Show the Asset details section of the hub."""
+        """Show the Details & warranty section of the hub."""
         return self._show_section_menu(
-            "asset_details_menu", "edit_asset_metadata", self._details_facts
-        )
-
-    async def async_step_asset_purchase_menu(
-        self,
-        user_input: dict[str, Any] | None = None,
-    ) -> ConfigFlowResult:
-        """Show the Purchase & warranty section of the hub."""
-        return self._show_section_menu(
-            "asset_purchase_menu", "change_asset_purchase", self._purchase_facts
+            "asset_details_warranty_menu",
+            ["edit_asset_metadata", "change_asset_purchase"],
+            self._details_warranty_facts,
         )
 
     async def async_step_asset_installation_menu(
@@ -3006,7 +3039,9 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
     ) -> ConfigFlowResult:
         """Show the Installation & location section of the hub."""
         return self._show_section_menu(
-            "asset_installation_menu", "asset_deployment", self._installation_facts
+            "asset_installation_menu",
+            ["asset_deployment"],
+            lambda asset: {"facts": self._installation_facts(asset)},
         )
 
     async def async_step_asset_lifecycle_menu(
@@ -3015,7 +3050,9 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
     ) -> ConfigFlowResult:
         """Show the Lifecycle section of the hub."""
         return self._show_section_menu(
-            "asset_lifecycle_menu", "asset_lifecycle", self._lifecycle_facts
+            "asset_lifecycle_menu",
+            ["asset_lifecycle"],
+            lambda asset: {"facts": self._lifecycle_facts(asset)},
         )
 
     async def async_step_edit_asset_metadata(

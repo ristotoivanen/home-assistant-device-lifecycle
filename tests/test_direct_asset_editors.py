@@ -1,6 +1,6 @@
-"""The four direct editors reached straight from the Asset hub.
+"""The four direct editors reached from the Asset hub's sections.
 
-Details, Purchase & warranty, Installation & location and Lifecycle each
+Asset details, Linked purchase, Installation & location and Lifecycle each
 open their own form and, once saved, hand the person back to the hub for
 the same Asset. These tests own that navigation contract: what each path
 returns to, whether it reloads, and what it must leave alone in the
@@ -123,7 +123,7 @@ async def test_purchase_relink_returns_to_the_hub_and_keeps_warranty(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
 ) -> None:
-    """Purchase & warranty: relinking moves the Purchase, nothing else."""
+    """Linked purchase: relinking moves the Purchase, nothing else."""
     manager = _manager(hass, _data_with_second_purchase(asset_store_data))
     flow = await _hub_flow(hass, manager)
     identity = _identity(manager, ASSET_UUID)
@@ -150,7 +150,7 @@ async def test_purchase_cleared_returns_to_the_hub_and_keeps_warranty(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
 ) -> None:
-    """Purchase & warranty: choosing no Purchase does not strip the warranty."""
+    """Linked purchase: choosing no Purchase does not strip the warranty."""
     manager = _manager(hass, asset_store_data)
     flow = await _hub_flow(hass, manager)
     warranty = deepcopy(manager.asset(ASSET_UUID)["warranty"])
@@ -406,7 +406,7 @@ async def test_confirmed_disposed_returns_to_the_hub_and_leaves_deployment(
         (
             "change_asset_purchase",
             {CONF_PURCHASE_UUID: NO_PURCHASE_SELECTION},
-            "Purchase & warranty updated.",
+            "Linked purchase updated.",
         ),
         (
             "asset_deployment",

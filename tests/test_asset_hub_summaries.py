@@ -38,6 +38,7 @@ from custom_components.device_lifecycle.const import (
     LIFECYCLE_STATUS_DISPOSED,
     LIFECYCLE_STATUS_LOST,
     LIFECYCLE_STATUS_RETIRED,
+    WARRANTY_MANUAL,
     WARRANTY_NONE,
     WARRANTY_TWO_YEARS,
 )
@@ -133,37 +134,111 @@ def test_summary_date_speaks_each_language(
 @pytest.mark.parametrize(
     ("fields", "expected"),
     [
-        ({}, "Example manufacturer · Example model"),
+        ({}, "Example manufacturer Example model"),
         ({CONF_MODEL: None}, "Example manufacturer"),
         ({CONF_MANUFACTURER: None}, "Example model"),
+        ({CONF_MANUFACTURER: None, CONF_MODEL: None}, "Tool"),
+        ({CONF_MANUFACTURER: None, CONF_MODEL: None, CONF_CATEGORY: None}, ""),
         (
-            {CONF_MANUFACTURER: None, CONF_MODEL: None},
-            "Tool",
-        ),
-        (
-            {CONF_MANUFACTURER: None, CONF_MODEL: None, CONF_CATEGORY: None},
-            "No manufacturer or model recorded",
+            {CONF_MANUFACTURER: "Shelly", CONF_MODEL: "Shelly Outdoor Plug S Gen3"},
+            "Shelly Outdoor Plug S Gen3",
         ),
     ],
 )
-async def test_metadata_summary_falls_back_in_order(
+async def test_identity_falls_back_in_order(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
     fields: dict,
     expected: str,
 ) -> None:
-    """Manufacturer and model first, then category, then an honest blank."""
+    """Manufacturer and model as people say them, then category, then nothing."""
     manager = _manager(hass, _asset_with(asset_store_data, **fields))
     flow = await _flow(hass, manager)
 
-    assert flow._summary_metadata(manager.asset(ASSET_UUID)) == expected
+    assert flow._identity_summary(manager.asset(ASSET_UUID)) == expected
 
 
-async def test_metadata_summary_shortens_long_values(
+@pytest.mark.parametrize(
+    ("language", "warranty", "expected"),
+    [
+        (
+            "en",
+            {"type": WARRANTY_TWO_YEARS, "until": "2028-01-15"},
+            "Warranty until 15 Jan 2028 · Shelly Plug S",
+        ),
+        (
+            "en",
+            {"type": WARRANTY_MANUAL, "until": "2026-09-24"},
+            "Warranty until 24 Sep 2026 · Shelly Plug S",
+        ),
+        (
+            "en",
+            {"type": WARRANTY_MANUAL, "until": "2026-09-23"},
+            "Warranty expired · Shelly Plug S",
+        ),
+        (
+            "en",
+            {"type": WARRANTY_TWO_YEARS, "until": None},
+            "Warranty unknown · Shelly Plug S",
+        ),
+        (
+            "en",
+            {"type": WARRANTY_NONE, "until": None},
+            "Warranty not specified · Shelly Plug S",
+        ),
+        ("en", {}, "Warranty not specified · Shelly Plug S"),
+        (
+            "fi",
+            {"type": WARRANTY_TWO_YEARS, "until": "2028-01-15"},
+            "Takuu 15.1.2028 asti · Shelly Plug S",
+        ),
+        (
+            "fi",
+            {"type": WARRANTY_MANUAL, "until": "2025-03-01"},
+            "Takuu päättynyt · Shelly Plug S",
+        ),
+        (
+            "fi",
+            {"type": WARRANTY_TWO_YEARS, "until": None},
+            "Takuu ei tiedossa · Shelly Plug S",
+        ),
+        (
+            "fi",
+            {"type": WARRANTY_NONE, "until": None},
+            "Takuu ei määritetty · Shelly Plug S",
+        ),
+    ],
+)
+async def test_details_warranty_summary_leads_with_the_warranty(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
+    freezer,
+    language: str,
+    warranty: dict,
+    expected: str,
 ) -> None:
-    """Two long values still leave a readable line."""
+    """Valid through its end date, expired after it, never guessed without one."""
+    freezer.move_to("2026-09-24 12:00:00+00:00")
+    manager = _manager(
+        hass,
+        _asset_with(
+            asset_store_data,
+            warranty=warranty,
+            **{CONF_MANUFACTURER: "Shelly", CONF_MODEL: "Plug S"},
+        ),
+    )
+    flow = await _flow(hass, manager, language)
+
+    assert flow._summary_details_warranty(manager.asset(ASSET_UUID)) == expected
+
+
+async def test_details_warranty_summary_stays_one_short_line(
+    hass: HomeAssistant,
+    asset_store_data: AssetStoreData,
+    freezer,
+) -> None:
+    """A long device name gives way; the warranty half stays whole."""
+    freezer.move_to("2026-09-24 12:00:00+00:00")
     manager = _manager(
         hass,
         _asset_with(
@@ -176,70 +251,31 @@ async def test_metadata_summary_shortens_long_values(
     )
     flow = await _flow(hass, manager)
 
-    summary = flow._summary_metadata(manager.asset(ASSET_UUID))
+    summary = flow._summary_details_warranty(manager.asset(ASSET_UUID))
 
     assert len(summary) <= SUMMARY_MAX_LENGTH
-    assert "·" in summary
+    assert summary.startswith("Warranty until 15 Jan 2028 · Manufacturer")
+    assert summary.endswith("…")
 
 
-async def test_purchase_and_warranty_are_summarized_independently(
+async def test_details_warranty_summary_never_implies_the_purchase(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
+    freezer,
 ) -> None:
-    """The warranty is the Asset's own, whichever Purchase sits beside it."""
+    """The warranty is the Asset's own; clearing the Purchase changes nothing."""
+    freezer.move_to("2026-09-24 12:00:00+00:00")
     manager = _manager(hass, asset_store_data)
     flow = await _flow(hass, manager)
 
-    linked = flow._summary_purchase_warranty(manager.asset(ASSET_UUID))
-
-    assert linked == (
-        "Purchase: Workshop equipment · Warranty: until 15 Jan 2028"
-    )
-
-    # Clearing the Purchase must not touch the warranty half of the line.
+    linked = flow._summary_details_warranty(manager.asset(ASSET_UUID))
     await manager.async_set_asset_purchase(ASSET_UUID, None)
-    unlinked = flow._summary_purchase_warranty(manager.asset(ASSET_UUID))
+    unlinked = flow._summary_details_warranty(manager.asset(ASSET_UUID))
 
-    assert unlinked == "Purchase: Not linked · Warranty: until 15 Jan 2028"
+    assert linked == unlinked
     assert manager.asset(ASSET_UUID)["warranty"]["until"] == "2028-01-15"
-
-
-@pytest.mark.parametrize(
-    ("warranty", "expected"),
-    [
-        ({"type": WARRANTY_TWO_YEARS, "until": "2028-01-15"}, "until 15 Jan 2028"),
-        ({"type": WARRANTY_TWO_YEARS, "until": None}, "Unknown"),
-        ({"type": WARRANTY_NONE, "until": None}, "None"),
-        ({}, "None"),
-    ],
-)
-async def test_warranty_half_covers_every_recorded_shape(
-    hass: HomeAssistant,
-    asset_store_data: AssetStoreData,
-    warranty: dict,
-    expected: str,
-) -> None:
-    """Whatever is recorded, the warranty half says something true."""
-    manager = _manager(hass, _asset_with(asset_store_data, warranty=warranty))
-    flow = await _flow(hass, manager)
-
-    assert flow._summary_warranty(manager.asset(ASSET_UUID)) == expected
-
-
-async def test_purchase_warranty_summary_never_implies_provenance(
-    hass: HomeAssistant,
-    asset_store_data: AssetStoreData,
-) -> None:
-    """Nothing in the line claims the warranty came from the Purchase."""
-    manager = _manager(hass, asset_store_data)
-    flow = await _flow(hass, manager)
-
-    summary = flow._summary_purchase_warranty(manager.asset(ASSET_UUID))
-
-    assert summary.startswith("Purchase: ")
-    assert " · Warranty: " in summary
-    for implication in ("from", "via", "covered by", "included"):
-        assert implication not in summary.casefold()
+    for implication in ("purchase", "from", "via", "covered by", "included"):
+        assert implication not in linked.casefold()
 
 
 async def test_deployed_summary_shows_area_and_date_when_present(
@@ -519,8 +555,10 @@ async def test_ha_devices_summary_counts_stale_references_too(
 async def test_every_summary_is_localized_in_finnish(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
+    freezer,
 ) -> None:
     """Finnish readers get Finnish, and never a canonical enum value."""
+    freezer.move_to("2026-09-24 12:00:00+00:00")
     manager = _manager(
         hass,
         _asset_with(
@@ -541,16 +579,16 @@ async def test_every_summary_is_localized_in_finnish(
     asset = manager.asset(ASSET_UUID)
 
     summaries = {
-        "metadata": flow._summary_metadata(asset),
-        "purchase_warranty": flow._summary_purchase_warranty(asset),
+        "details_warranty": flow._summary_details_warranty(asset),
         "deployment": flow._summary_deployment(asset),
         "lifecycle": flow._summary_lifecycle(asset),
         "replacement": flow._summary_replacement(asset),
         "ha_devices": flow._summary_ha_devices(asset),
     }
 
-    assert summaries["purchase_warranty"].startswith("Ostos: ")
-    assert "Takuu: 15.1.2028 asti" in summaries["purchase_warranty"]
+    assert summaries["details_warranty"] == (
+        "Takuu 15.1.2028 asti · Example manufacturer Example model"
+    )
     assert summaries["deployment"] == "Ei asennettu"
     assert summaries["lifecycle"] == "Käytöstä poistettu · 12.9.2026"
     assert summaries["replacement"] == "Ei aktiivista korvaussuhdetta"
@@ -565,7 +603,7 @@ async def test_the_hub_renders_every_summary_and_writes_nothing(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
 ) -> None:
-    """All six reach the hub, and building them changes no stored data."""
+    """All five reach the hub, and building them changes no stored data."""
     manager = _manager(hass, asset_store_data)
     flow = await _flow(hass, manager)
     before = deepcopy(manager._data)
@@ -576,8 +614,7 @@ async def test_the_hub_renders_every_summary_and_writes_nothing(
 
     placeholders = hub["description_placeholders"]
     for key in (
-        "metadata",
-        "purchase_warranty",
+        "details_warranty",
         "deployment",
         "lifecycle",
         "replacement",
@@ -615,8 +652,7 @@ def test_each_hub_row_carries_its_own_summary(language: str) -> None:
     step = _hub_step(language)
 
     assert step["menu_option_descriptions"] == {
-        "asset_details_menu": "{metadata}",
-        "asset_purchase_menu": "{purchase_warranty}",
+        "asset_details_warranty_menu": "{details_warranty}",
         "asset_installation_menu": "{deployment}",
         "asset_lifecycle_menu": "{lifecycle}",
         "asset_replacement": "{replacement}",
@@ -625,11 +661,11 @@ def test_each_hub_row_carries_its_own_summary(language: str) -> None:
 
 
 @pytest.mark.parametrize("language", ["en", "fi"])
-def test_only_the_six_action_rows_are_described(language: str) -> None:
+def test_only_the_five_section_rows_are_described(language: str) -> None:
     """Choosing another Asset is navigation, so it summarizes nothing."""
     step = _hub_step(language)
 
-    assert len(step["menu_options"]) == 7
+    assert len(step["menu_options"]) == 6
     assert set(step["menu_option_descriptions"]) == (
         set(step["menu_options"]) - {"manage_asset"}
     )
@@ -645,8 +681,7 @@ def test_the_hub_step_description_stays_general(language: str) -> None:
 
     assert "{asset}" in description
     for key in (
-        "metadata",
-        "purchase_warranty",
+        "details_warranty",
         "deployment",
         "lifecycle",
         "replacement",

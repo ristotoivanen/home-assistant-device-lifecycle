@@ -162,7 +162,7 @@
       "asset_ha_relationship_updated": "Home Assistant -laitteet päivitettiin.",
       "asset_lifecycle_unchanged": "Elinkaaritila on jo {status}. Mitään ei muutettu.",
       "asset_lifecycle_updated": "Elinkaari päivitettiin.",
-      "asset_purchase_updated": "Osto ja takuu päivitettiin.",
+      "asset_purchase_updated": "Ostoslinkitys päivitettiin.",
       "asset_related_device_added": "Liittyvä Home Assistant -laite lisättiin.",
       "asset_related_device_removed": "Liittyvä Home Assistant -laite poistettiin.",
       "asset_replacement_updated": "Korvaaminen päivitettiin.",
@@ -261,7 +261,8 @@
           "purchase_uuid": "Ostos"
         },
         "description": "Laite: {asset}. Nykyinen ostos: {current_purchase}. Tällä lomakkeella muutetaan vain ostoslinkitystä. Takuu on laitteen oma tieto, ja se näytetään muualla erikseen: ostoslinkityksen muuttaminen ei muuta takuuta. Aiempi ostos, joka ei ole enää käytettävissä, näytetään vain silloin, kun laite on jo liitetty siihen. Valitse käytettävissä oleva ostos tai Ei ostosta.",
-        "title": "Osto ja takuu"
+        "submit": "Tallenna",
+        "title": "Ostoslinkitys"
       },
       "quick_add": {
         "menu_options": {
@@ -463,39 +464,30 @@
       "manage_asset_menu": {
         "description": "Valittu laite: {asset}\n\n{result}",
         "menu_option_descriptions": {
-          "asset_details_menu": "{metadata}",
+          "asset_details_warranty_menu": "{details_warranty}",
           "asset_installation_menu": "{deployment}",
           "asset_lifecycle_menu": "{lifecycle}",
-          "asset_purchase_menu": "{purchase_warranty}",
           "asset_replacement": "{replacement}",
           "ha_relationship": "{ha_devices}"
         },
         "menu_options": {
-          "asset_details_menu": "Perustiedot",
+          "asset_details_warranty_menu": "Tiedot ja takuu",
           "asset_installation_menu": "Asennus ja sijainti",
           "asset_lifecycle_menu": "Elinkaari",
-          "asset_purchase_menu": "Osto ja takuu",
           "asset_replacement": "Korvaaminen",
           "ha_relationship": "Home Assistant -laitteet",
           "manage_asset": "Valitse toinen laite"
         },
         "title": "Hallitse laitetta"
       },
-      "asset_details_menu": {
-        "description": "{asset}\n\n{facts}",
+      "asset_details_warranty_menu": {
+        "description": "{asset}\n\n**Perustiedot**\n{details}\n\n**Osto**\n{purchase}\n\n**Takuu**\n{warranty}",
         "menu_options": {
+          "change_asset_purchase": "Vaihda ostoslinkitystä",
           "edit_asset_metadata": "Muokkaa perustietoja",
           "manage_asset_menu": "← Takaisin laitteen hallintaan"
         },
-        "title": "Perustiedot"
-      },
-      "asset_purchase_menu": {
-        "description": "{asset}\n\n{facts}",
-        "menu_options": {
-          "change_asset_purchase": "Vaihda ostos",
-          "manage_asset_menu": "← Takaisin laitteen hallintaan"
-        },
-        "title": "Osto ja takuu"
+        "title": "Tiedot ja takuu"
       },
       "asset_installation_menu": {
         "description": "{asset}\n\n{facts}",

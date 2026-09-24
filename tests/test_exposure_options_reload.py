@@ -142,8 +142,8 @@ async def _setup_loaded_entry(
 
 
 SECTION_MENUS = {
-    "edit_asset_metadata": "asset_details_menu",
-    "change_asset_purchase": "asset_purchase_menu",
+    "edit_asset_metadata": "asset_details_warranty_menu",
+    "change_asset_purchase": "asset_details_warranty_menu",
     "asset_deployment": "asset_installation_menu",
     "asset_lifecycle": "asset_lifecycle_menu",
 }

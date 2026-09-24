@@ -56,8 +56,7 @@ MACHINE_STATES = {state for state in RAW_STATES if "_" in state}
 MANAGEMENT_STEPS = (
     "manage_asset",
     "manage_asset_menu",
-    "asset_details_menu",
-    "asset_purchase_menu",
+    "asset_details_warranty_menu",
     "asset_installation_menu",
     "asset_lifecycle_menu",
     "edit_asset_metadata",
@@ -330,15 +329,14 @@ def test_home_assistant_devices_are_always_named_in_full(
 
 @pytest.mark.parametrize("language", ["en", "fi"])
 def test_the_hub_rows_carry_the_frozen_names(language: str) -> None:
-    """The seven hub rows are the frozen vocabulary, in order."""
+    """The six hub rows are the frozen vocabulary, in order."""
     rows = _translation(language)["options"]["step"]["manage_asset_menu"][
         "menu_options"
     ]
 
     if language == "en":
         assert rows == {
-            "asset_details_menu": "Asset details",
-            "asset_purchase_menu": "Purchase & warranty",
+            "asset_details_warranty_menu": "Details & warranty",
             "asset_installation_menu": "Installation & location",
             "asset_lifecycle_menu": "Lifecycle",
             "asset_replacement": "Replacement",
@@ -347,8 +345,7 @@ def test_the_hub_rows_carry_the_frozen_names(language: str) -> None:
         }
     else:
         assert rows == {
-            "asset_details_menu": "Perustiedot",
-            "asset_purchase_menu": "Osto ja takuu",
+            "asset_details_warranty_menu": "Tiedot ja takuu",
             "asset_installation_menu": "Asennus ja sijainti",
             "asset_lifecycle_menu": "Elinkaari",
             "asset_replacement": "Korvaaminen",

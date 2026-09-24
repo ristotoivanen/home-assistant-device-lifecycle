@@ -162,7 +162,7 @@
       "asset_ha_relationship_updated": "Home Assistant devices updated.",
       "asset_lifecycle_unchanged": "Lifecycle status is already {status}. Nothing was changed.",
       "asset_lifecycle_updated": "Lifecycle updated.",
-      "asset_purchase_updated": "Purchase & warranty updated.",
+      "asset_purchase_updated": "Linked purchase updated.",
       "asset_related_device_added": "Related Home Assistant device added.",
       "asset_related_device_removed": "Related Home Assistant device removed.",
       "asset_replacement_updated": "Replacement updated.",
@@ -261,7 +261,8 @@
           "purchase_uuid": "Purchase"
         },
         "description": "Asset: {asset}. Current Purchase: {current_purchase}. This form changes the Purchase link only. The warranty is the Asset's own detail, shown separately elsewhere: changing the Purchase link does not change the warranty. A previous unavailable Purchase is shown only when already linked to this Asset. Select a configured Purchase or No Purchase.",
-        "title": "Purchase & warranty"
+        "submit": "Save",
+        "title": "Linked purchase"
       },
       "quick_add": {
         "menu_options": {
@@ -463,39 +464,30 @@
       "manage_asset_menu": {
         "description": "Selected Asset: {asset}\n\n{result}",
         "menu_option_descriptions": {
-          "asset_details_menu": "{metadata}",
+          "asset_details_warranty_menu": "{details_warranty}",
           "asset_installation_menu": "{deployment}",
           "asset_lifecycle_menu": "{lifecycle}",
-          "asset_purchase_menu": "{purchase_warranty}",
           "asset_replacement": "{replacement}",
           "ha_relationship": "{ha_devices}"
         },
         "menu_options": {
-          "asset_details_menu": "Asset details",
+          "asset_details_warranty_menu": "Details & warranty",
           "asset_installation_menu": "Installation & location",
           "asset_lifecycle_menu": "Lifecycle",
-          "asset_purchase_menu": "Purchase & warranty",
           "asset_replacement": "Replacement",
           "ha_relationship": "Home Assistant devices",
           "manage_asset": "Choose another device"
         },
         "title": "Manage Asset"
       },
-      "asset_details_menu": {
-        "description": "{asset}\n\n{facts}",
+      "asset_details_warranty_menu": {
+        "description": "{asset}\n\n**Asset details**\n{details}\n\n**Purchase**\n{purchase}\n\n**Warranty**\n{warranty}",
         "menu_options": {
+          "change_asset_purchase": "Change linked purchase",
           "edit_asset_metadata": "Edit asset details",
           "manage_asset_menu": "← Back to asset management"
         },
-        "title": "Asset details"
-      },
-      "asset_purchase_menu": {
-        "description": "{asset}\n\n{facts}",
-        "menu_options": {
-          "change_asset_purchase": "Change linked purchase",
-          "manage_asset_menu": "← Back to asset management"
-        },
-        "title": "Purchase & warranty"
+        "title": "Details & warranty"
       },
       "asset_installation_menu": {
         "description": "{asset}\n\n{facts}",

@@ -161,7 +161,7 @@ async def test_a_user_purchase_choice_survives_the_reload_it_triggers(
         assert hub["type"] is FlowResultType.MENU
         assert hub["step_id"] == HUB
         assert hub["description_placeholders"]["result"] == (
-            "Purchase & warranty updated."
+            "Linked purchase updated."
         )
 
         # The person's choice is canonical in the manager setup rebuilt, and
@@ -183,10 +183,10 @@ async def test_a_user_purchase_choice_survives_the_reload_it_triggers(
         # on the new state.
         section = await hass.config_entries.options.async_configure(
             flow_id,
-            {"next_step_id": "asset_purchase_menu"},
+            {"next_step_id": "asset_details_warranty_menu"},
         )
         assert section["type"] is FlowResultType.MENU
-        assert section["step_id"] == "asset_purchase_menu"
+        assert section["step_id"] == "asset_details_warranty_menu"
         editor = await hass.config_entries.options.async_configure(
             flow_id,
             {"next_step_id": "change_asset_purchase"},
@@ -279,9 +279,13 @@ async def test_a_finnish_management_session_end_to_end(
         assert hub["description_placeholders"]["result"] == ""
 
         # Section menu → editor → same Asset's hub, from the new manager.
-        section = await step({"next_step_id": "asset_details_menu"})
-        assert section["step_id"] == "asset_details_menu"
-        assert section["menu_options"] == ["edit_asset_metadata", HUB]
+        section = await step({"next_step_id": "asset_details_warranty_menu"})
+        assert section["step_id"] == "asset_details_warranty_menu"
+        assert section["menu_options"] == [
+            "edit_asset_metadata",
+            "change_asset_purchase",
+            HUB,
+        ]
         await step({"next_step_id": "edit_asset_metadata"})
         edit = _identical_metadata_input(managers[-1].asset(ASSET_UUID))
         edit[CONF_ASSET_NAME] = "Työpajan laite"

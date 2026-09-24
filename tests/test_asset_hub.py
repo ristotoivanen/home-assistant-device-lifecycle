@@ -19,7 +19,6 @@ from custom_components.device_lifecycle.const import (
     CONF_ASSET_NAME,
     CONF_ASSET_UUID,
     CONF_MANUFACTURER,
-    CONF_MODEL,
     DEPLOYMENT_STATE_DEPLOYED,
 )
 from custom_components.device_lifecycle.models import AssetStoreData
@@ -34,8 +33,7 @@ from .test_options_flow import (
 )
 
 HUB_ROWS = [
-    "asset_details_menu",
-    "asset_purchase_menu",
+    "asset_details_warranty_menu",
     "asset_installation_menu",
     "asset_lifecycle_menu",
     "asset_replacement",
@@ -44,8 +42,7 @@ HUB_ROWS = [
 ]
 
 SUMMARY_PLACEHOLDERS = [
-    "metadata",
-    "purchase_warranty",
+    "details_warranty",
     "deployment",
     "lifecycle",
     "replacement",
@@ -79,11 +76,11 @@ async def test_selecting_an_asset_opens_its_hub(
     assert hub["description_placeholders"]["asset"] == "Workshop device · DL0007"
 
 
-async def test_hub_offers_exactly_the_seven_rows_in_order(
+async def test_hub_offers_exactly_the_six_rows_in_order(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
 ) -> None:
-    """The hub's shape is fixed: six actions, then choosing another Asset."""
+    """The hub's shape is fixed: five sections, then choosing another Asset."""
     manager = _manager(hass, asset_store_data)
 
     _flow, hub = await _hub(hass, manager)
@@ -94,8 +91,11 @@ async def test_hub_offers_exactly_the_seven_rows_in_order(
 @pytest.mark.parametrize(
     ("row", "step_id", "result_type"),
     [
-        ("asset_details_menu", "asset_details_menu", FlowResultType.MENU),
-        ("asset_purchase_menu", "asset_purchase_menu", FlowResultType.MENU),
+        (
+            "asset_details_warranty_menu",
+            "asset_details_warranty_menu",
+            FlowResultType.MENU,
+        ),
         ("asset_installation_menu", "asset_installation_menu", FlowResultType.MENU),
         ("asset_lifecycle_menu", "asset_lifecycle_menu", FlowResultType.MENU),
         ("asset_replacement", "asset_replacement", FlowResultType.MENU),
@@ -197,8 +197,10 @@ async def test_summaries_read_the_selected_asset(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
     device_registry: dr.DeviceRegistry,
+    freezer,
 ) -> None:
     """The summaries describe this Asset, not a default or a neighbour."""
+    freezer.move_to("2026-09-24 12:00:00+00:00")
     data = deepcopy(asset_store_data)
     manager = _manager(hass, data)
     area = hass.data["area_registry"].async_get_or_create("Workshop")
@@ -212,11 +214,8 @@ async def test_summaries_read_the_selected_asset(
 
     placeholders = hub["description_placeholders"]
     asset = manager.asset(ASSET_UUID)
-    assert placeholders["metadata"] == (
-        f"{asset[CONF_MANUFACTURER]} · {asset[CONF_MODEL]}"
-    )
-    assert placeholders["purchase_warranty"].startswith(
-        "Purchase: Workshop equipment · Warranty: "
+    assert placeholders["details_warranty"].startswith(
+        f"Warranty until 15 Jan 2028 · {asset[CONF_MANUFACTURER]}"
     )
     assert "Workshop" in placeholders["deployment"]
 
