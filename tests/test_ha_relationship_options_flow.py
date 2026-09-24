@@ -14,6 +14,7 @@ import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.device_lifecycle.config_flow import (
+    NOT_SELECTED,
     DeviceLifecycleOptionsFlow,
 )
 from custom_components.device_lifecycle.const import (
@@ -1084,7 +1085,9 @@ async def test_remove_related_uses_stored_options_and_removes_stale_ref(
     )
 
     assert isinstance(validator, selector.SelectSelector)
-    assert {option["value"] for option in options} == {
+    # The placeholder comes first, so nothing is preselected for removal.
+    assert options[0]["value"] == NOT_SELECTED
+    assert {option["value"] for option in options[1:]} == {
         current.id,
         "missing-related",
     }

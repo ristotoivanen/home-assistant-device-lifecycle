@@ -126,6 +126,12 @@ from .storage import (
 MAIN_UNIQUE_ID = "device_lifecycle_main"
 NO_PURCHASE_SELECTION = "__no_purchase__"
 NO_REPLACEMENT_SELECTION = "__no_replacement__"
+# Unlike the two above, "not chosen yet" is never a valid answer. Home
+# Assistant's frontend preselects the first option of a required select, so
+# a selector whose value is a mutation target starts on this placeholder
+# instead of on a real Asset or device. It exists only in the flow: the
+# handlers reject it before any manager call, so it never reaches the Store.
+NOT_SELECTED = "__not_selected__"
 
 QUICK_SECTION_IDENTITY = "identity"
 QUICK_SECTION_DETAILS = "details"
@@ -251,6 +257,19 @@ def _primary_device_id(asset: AssetData) -> str | None:
         if reference.get("role") == "primary":
             return str(reference.get("device_id") or "") or None
     return None
+
+
+def _explicit_selection(value: Any) -> str | None:
+    """Return a submitted selector value, or None when nothing was chosen.
+
+    Both a missing value and the placeholder mean the person has not picked
+    anything, whether the submission came from the frontend or straight
+    through the flow API.
+    """
+    selected = str(value or "")
+    if selected in ("", NOT_SELECTED):
+        return None
+    return selected
 
 
 def _related_device_ids(asset: AssetData) -> list[str]:
@@ -1033,6 +1052,13 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 key=lambda item: (str(item["name"]).casefold(), item["asset_id"]),
             )
         ]
+
+    def _not_selected_option(self) -> selector.SelectOptionDict:
+        """Return the placeholder that heads every mutation-target selector."""
+        return selector.SelectOptionDict(
+            value=NOT_SELECTED,
+            label=self._localized_label("Select a device…", "Valitse laite…"),
+        )
 
     def _replacement_target_choices(
         self,
@@ -2017,22 +2043,36 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         *,
         errors: dict[str, str] | None = None,
     ) -> ConfigFlowResult:
-        """Show the all-Asset selector, including legacy and Runtime Assets."""
+        """Show the all-Asset selector, including legacy and Runtime Assets.
+
+        Opened from an Asset's hub, the selector starts on that Asset, so
+        opening it without changing the choice goes back to the same hub
+        instead of to whichever Asset sorts first. Before any Asset has been
+        selected the frontend's own first-option default is kept: that path
+        only navigates.
+        """
         choices = self._asset_choices()
         if not choices and not errors:
             errors = {"base": "no_assets"}
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_ASSET_UUID): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=choices,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                )
+            }
+        )
+        current_uuid = getattr(self, "_selected_asset_uuid", None)
+        if current_uuid in {choice["value"] for choice in choices}:
+            schema = self.add_suggested_values_to_schema(
+                schema,
+                {CONF_ASSET_UUID: current_uuid},
+            )
         return self.async_show_form(
             step_id="manage_asset",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_ASSET_UUID): selector.SelectSelector(
-                        selector.SelectSelectorConfig(
-                            options=choices,
-                            mode=selector.SelectSelectorMode.DROPDOWN,
-                        )
-                    )
-                }
-            ),
+            data_schema=schema,
             errors=errors or {},
         )
 
@@ -3070,15 +3110,25 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         user_input: dict[str, Any] | None = None,
         errors: dict[str, str] | None = None,
     ) -> ConfigFlowResult:
-        """Show one UUID-backed replacement creation form."""
+        """Show one UUID-backed replacement creation form.
+
+        The target starts on the placeholder: a relationship is permanent
+        history, so it is recorded only for an Asset somebody picked.
+        """
         schema = vol.Schema(
             {
-                vol.Required(CONF_REPLACEMENT_TARGET_ASSET_UUID): (
+                vol.Required(
+                    CONF_REPLACEMENT_TARGET_ASSET_UUID,
+                    default=NOT_SELECTED,
+                ): (
                     selector.SelectSelector(
                         selector.SelectSelectorConfig(
-                            options=self._replacement_target_choices(
-                                asset["asset_uuid"]
-                            ),
+                            options=[
+                                self._not_selected_option(),
+                                *self._replacement_target_choices(
+                                    asset["asset_uuid"]
+                                ),
+                            ],
                             mode=selector.SelectSelectorMode.DROPDOWN,
                         )
                     )
@@ -3123,9 +3173,23 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             return self._show_asset_selection(errors={"base": "asset_missing"})
         if user_input is None:
             return self._show_replacement_create_form(asset, step_id=step_id)
-        target_uuid = str(
-            user_input.get(CONF_REPLACEMENT_TARGET_ASSET_UUID) or ""
+        target_uuid = _explicit_selection(
+            user_input.get(CONF_REPLACEMENT_TARGET_ASSET_UUID)
         )
+        if target_uuid is None:
+            return self._show_replacement_create_form(
+                asset,
+                step_id=step_id,
+                user_input={
+                    **user_input,
+                    CONF_REPLACEMENT_TARGET_ASSET_UUID: NOT_SELECTED,
+                },
+                errors={
+                    CONF_REPLACEMENT_TARGET_ASSET_UUID: (
+                        "replacement_target_required"
+                    )
+                },
+            )
         if self._manager.asset(target_uuid) is None:
             return self._show_replacement_create_form(
                 asset,
@@ -3922,12 +3986,23 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         user_input: dict[str, Any] | None = None,
         errors: dict[str, str] | None = None,
     ) -> ConfigFlowResult:
-        """Show stored related references, including stale device IDs."""
+        """Show stored related references, including stale device IDs.
+
+        The list starts on the placeholder, so nothing is removed until a
+        reference is picked. That matters most for a stale reference, which
+        cannot be added back once its device has left Home Assistant.
+        """
         schema = vol.Schema(
             {
-                vol.Required(CONF_DEVICE_ID): selector.SelectSelector(
+                vol.Required(
+                    CONF_DEVICE_ID,
+                    default=NOT_SELECTED,
+                ): selector.SelectSelector(
                     selector.SelectSelectorConfig(
-                        options=self._related_device_options(asset),
+                        options=[
+                            self._not_selected_option(),
+                            *self._related_device_options(asset),
+                        ],
                         mode=selector.SelectSelectorMode.DROPDOWN,
                     )
                 )
@@ -3963,7 +4038,13 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         if user_input is None:
             return self._show_remove_related_device_form(asset)
 
-        target_device_id = str(user_input.get(CONF_DEVICE_ID) or "")
+        target_device_id = _explicit_selection(user_input.get(CONF_DEVICE_ID))
+        if target_device_id is None:
+            return self._show_remove_related_device_form(
+                asset,
+                user_input={CONF_DEVICE_ID: NOT_SELECTED},
+                errors={CONF_DEVICE_ID: "related_device_required"},
+            )
         if target_device_id not in related_device_ids:
             return self._show_remove_related_device_form(
                 asset,

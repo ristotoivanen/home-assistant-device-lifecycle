@@ -42,6 +42,8 @@ TRANSLATIONS = (
     / "translations"
 )
 BASELINE_REVISION = "01dc4cb"
+# The published 0.7.4 release (tag v0.7.4).
+RELEASED_0_7_4_REVISION = "aed576a"
 
 # Canonical values are storage, never copy. The underscored ones can only
 # ever be a leak; the single words are ordinary English too ("an active
@@ -531,3 +533,22 @@ def test_entity_translations_are_untouched_since_the_release_baseline() -> None:
         current = _translation(language)
 
         assert current["entity"] == baseline["entity"], language
+
+
+def test_entity_translations_are_untouched_since_the_0_7_4_release() -> None:
+    """0.7.5 changes flow copy only; entity names and states stay as released."""
+    for language in ("en", "fi"):
+        path = (
+            f"custom_components/device_lifecycle/translations/{language}.json"
+        )
+        released = json.loads(
+            subprocess.run(
+                ["git", "show", f"{RELEASED_0_7_4_REVISION}:{path}"],
+                capture_output=True,
+                text=True,
+                check=True,
+                cwd=Path(__file__).parents[1],
+            ).stdout
+        )
+
+        assert _translation(language)["entity"] == released["entity"], language

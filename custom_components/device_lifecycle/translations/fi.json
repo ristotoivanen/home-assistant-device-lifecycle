@@ -207,6 +207,7 @@
       "review_replacement_deployment": "Korvattava laite on valittu. Tarkista uuden laitteen asennustilan oletusarvo Asennettu ja jatka.",
       "related_device_is_primary": "Valittu Home Assistant -laite on jo tämän laitteen ensisijainen laite.",
       "related_device_not_found": "Valittua liittyvää Home Assistant -laitetta ei enää ole. Tarkista nykyiset laitteet ja yritä uudelleen.",
+      "related_device_required": "Valitse poistettava liittyvä Home Assistant -laite. Mitään ei poisteta ennen valintaa.",
       "replacement_cycle": "Tämä suhde muodostaisi korvausketjuun silmukan.",
       "replacement_date_before_predecessor_lifecycle": "Korvauksen voimaantulopäivä ei voi olla aikaisempi kuin edeltävän laitteen nykyisen elinkaaritilan voimaantulopäivä.",
       "replacement_date_in_future": "Korvauksen voimaantulopäivä ei voi olla tulevaisuudessa.",
@@ -215,6 +216,7 @@
       "replacement_predecessor_conflict": "Edeltävällä laitteella on jo aktiivinen seuraaja.",
       "replacement_self_reference": "Laite ei voi korvata itseään.",
       "replacement_successor_conflict": "Seuraavalla laitteella on jo aktiivinen edeltäjä.",
+      "replacement_target_required": "Valitse laite. Korvaussuhdetta ei kirjata ennen valintaa.",
       "replacement_void_reason_required": "Anna korvaussuhteen mitätöinnille syy.",
       "manual_warranty_date_required": "Anna manuaalinen takuun päättymispäivä.",
       "service_device_not_allowed": "Valittu kohde on Home Assistant -palvelu eikä fyysinen laite."
@@ -454,6 +456,7 @@
           "asset_uuid": "Laite"
         },
         "description": "Valitse laite pysyvän elinkaaritunnuksen ja näyttönimen perusteella.",
+        "submit": "Avaa",
         "title": "Hallitse laitetta"
       },
       "manage_asset_menu": {

@@ -207,6 +207,7 @@
       "review_replacement_deployment": "A replacement was selected. Review the new Asset's installation status default, now Installed, and continue.",
       "related_device_is_primary": "The selected Home Assistant device is already the primary device for this Asset.",
       "related_device_not_found": "The selected related Home Assistant device no longer exists. Review the current devices and try again.",
+      "related_device_required": "Select the related Home Assistant device to remove. Nothing is removed until you choose one.",
       "replacement_cycle": "This relationship would create a replacement cycle.",
       "replacement_date_before_predecessor_lifecycle": "The replacement effective date cannot be earlier than the predecessor's current Lifecycle effective date.",
       "replacement_date_in_future": "The replacement effective date cannot be in the future.",
@@ -215,6 +216,7 @@
       "replacement_predecessor_conflict": "The predecessor Asset already has an active successor.",
       "replacement_self_reference": "An Asset cannot replace itself.",
       "replacement_successor_conflict": "The successor Asset already has an active predecessor.",
+      "replacement_target_required": "Select a device. No replacement is recorded until you choose one.",
       "replacement_void_reason_required": "Enter a non-empty reason for voiding the relationship.",
       "manual_warranty_date_required": "Enter a manual warranty end date.",
       "service_device_not_allowed": "The selected item is a Home Assistant service rather than a physical device."
@@ -454,6 +456,7 @@
           "asset_uuid": "Asset"
         },
         "description": "Select an Asset by its persistent Asset ID and display name.",
+        "submit": "Open",
         "title": "Manage Asset"
       },
       "manage_asset_menu": {

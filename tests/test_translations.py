@@ -74,6 +74,17 @@ def _emitted_options_errors() -> set[str]:
     """Collect literal OptionsFlow error keys, including helper return values."""
     error_keys: set[str] = set()
     for node in ast.walk(_options_flow_tree()):
+        if (
+            isinstance(node, ast.keyword)
+            and node.arg == "errors"
+            and isinstance(node.value, ast.Dict)
+        ):
+            # Field-level errors are keyed by the field, not by "base".
+            error_keys.update(
+                value.value
+                for value in node.value.values
+                if isinstance(value, ast.Constant) and isinstance(value.value, str)
+            )
         if isinstance(node, ast.Dict):
             for key, value in zip(node.keys, node.values, strict=True):
                 if (

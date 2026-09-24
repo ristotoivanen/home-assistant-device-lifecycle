@@ -12,6 +12,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 
+from custom_components.device_lifecycle.config_flow import NOT_SELECTED
 from custom_components.device_lifecycle.const import (
     CONF_ASSET_UUID,
     CONF_DEVICE_ID,
@@ -24,6 +25,13 @@ from .test_ha_relationship_options_flow import _external_device, _schema_validat
 from .test_options_flow import _manager, _options_flow
 
 STALE_DEVICE_IDS = ("gone-first", "gone-second", "gone-third")
+
+
+def _removal_options(form: dict) -> list[dict[str, str]]:
+    """Return the removable references listed after the leading placeholder."""
+    placeholder, *options = _schema_validator(form, CONF_DEVICE_ID).config["options"]
+    assert placeholder == {"value": NOT_SELECTED, "label": "Select a device…"}
+    return options
 
 
 async def _on_asset(
@@ -85,7 +93,7 @@ async def test_related_devices_are_named_not_identified(
 
     submenu = await flow.async_step_ha_relationship()
     form = await flow.async_step_remove_related_device()
-    options = list(_schema_validator(form, CONF_DEVICE_ID).config["options"])
+    options = _removal_options(form)
 
     related_text = submenu["description_placeholders"]["related_devices"]
     assert related_text == "Hallway sensor; Porch light"
@@ -112,7 +120,7 @@ async def test_a_single_stale_reference_reads_as_unavailable(
 
     submenu = await flow.async_step_ha_relationship()
     form = await flow.async_step_remove_related_device()
-    options = list(_schema_validator(form, CONF_DEVICE_ID).config["options"])
+    options = _removal_options(form)
 
     assert submenu["description_placeholders"]["related_devices"] == (
         "Home Assistant device unavailable"
@@ -146,7 +154,7 @@ async def test_several_stale_references_stay_distinguishable(
 
     submenu = await flow.async_step_ha_relationship()
     form = await flow.async_step_remove_related_device()
-    options = list(_schema_validator(form, CONF_DEVICE_ID).config["options"])
+    options = _removal_options(form)
 
     labels = [option["label"] for option in options]
     assert labels == [
