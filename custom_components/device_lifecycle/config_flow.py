@@ -3404,12 +3404,17 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         self,
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
-        """Show physical replacement operations for the selected Asset."""
+        """Show physical replacement operations for the selected Asset.
+
+        A relationship is created only from the new Asset, which names the
+        one it replaces. That the Asset was itself replaced is shown, read
+        only, once the new Asset has recorded it.
+        """
         asset_uuid = getattr(self, "_selected_asset_uuid", None)
         asset = self._manager.asset(asset_uuid)
         if asset is None:
             return self._show_asset_selection(errors={"base": "asset_missing"})
-        menu_options = ["replacement_replaces", "replacement_replaced_by"]
+        menu_options = ["replacement_replaces"]
         if self._manager.replacement_records_for_asset(asset["asset_uuid"]):
             menu_options.append("manage_asset_replacement")
         menu_options.append("manage_asset_menu")
@@ -3483,11 +3488,14 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
     async def _async_replacement_create(
         self,
         *,
-        selected_is_successor: bool,
         step_id: str,
         user_input: dict[str, Any] | None,
     ) -> ConfigFlowResult:
-        """Create one direction-specific relationship with Store authority."""
+        """Record, with Store authority, that the selected Asset replaces one.
+
+        The selected Asset is always the successor and the chosen Asset its
+        predecessor: the one creation direction the UI offers.
+        """
         asset_uuid = getattr(self, "_selected_asset_uuid", None)
         asset = self._manager.asset(asset_uuid)
         if asset is None:
@@ -3518,12 +3526,10 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 user_input=user_input,
                 errors={"base": "asset_missing"},
             )
-        predecessor_uuid = target_uuid if selected_is_successor else asset["asset_uuid"]
-        successor_uuid = asset["asset_uuid"] if selected_is_successor else target_uuid
         try:
             await self._manager.async_create_asset_replacement(
-                predecessor_uuid,
-                successor_uuid,
+                target_uuid,
+                asset["asset_uuid"],
                 reason=str(user_input.get(CONF_REPLACEMENT_REASON) or ""),
                 effective_date=user_input.get(CONF_EFFECTIVE_DATE),
                 notes=user_input.get(CONF_NOTES),
@@ -3550,19 +3556,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
     ) -> ConfigFlowResult:
         """Record that this Asset replaces a predecessor Asset."""
         return await self._async_replacement_create(
-            selected_is_successor=True,
             step_id="replacement_replaces",
-            user_input=user_input,
-        )
-
-    async def async_step_replacement_replaced_by(
-        self,
-        user_input: dict[str, Any] | None = None,
-    ) -> ConfigFlowResult:
-        """Record that this Asset was replaced by a successor Asset."""
-        return await self._async_replacement_create(
-            selected_is_successor=False,
-            step_id="replacement_replaced_by",
             user_input=user_input,
         )
 

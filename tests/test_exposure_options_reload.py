@@ -592,15 +592,16 @@ async def test_manage_replacement_reload_enables_canonical_entities(
         assert replacement_entry is not None
         assert replacement_entry.disabled_by is er.RegistryEntryDisabler.INTEGRATION
 
+    # Recorded from the new Asset, the only creation direction offered.
     flow_id = await _start_asset_action(
         hass,
         entry,
-        ASSET_UUID,
+        successor_uuid,
         "asset_replacement",
     )
     replacement_form = await hass.config_entries.options.async_configure(
         flow_id,
-        {"next_step_id": "replacement_replaced_by"},
+        {"next_step_id": "replacement_replaces"},
     )
     assert replacement_form["type"] is FlowResultType.FORM
     original_reload = hass.config_entries.async_reload
@@ -617,7 +618,7 @@ async def test_manage_replacement_reload_enables_canonical_entities(
         completed = await hass.config_entries.options.async_configure(
             flow_id,
             {
-                CONF_REPLACEMENT_TARGET_ASSET_UUID: successor_uuid,
+                CONF_REPLACEMENT_TARGET_ASSET_UUID: ASSET_UUID,
                 CONF_REPLACEMENT_REASON: "failure",
             },
         )

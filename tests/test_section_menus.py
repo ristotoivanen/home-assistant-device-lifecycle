@@ -1057,11 +1057,11 @@ async def test_lifecycle_and_replacement_read_in_finnish(
     )
 
 
-async def test_manage_replacement_opens_the_unchanged_submenu(
+async def test_manage_replacement_opens_the_replacement_submenu(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
 ) -> None:
-    """End to end: the same operations, and its own Back to the hub."""
+    """End to end: the submenu's own operations, and its own Back to the hub."""
     manager = _manager(hass, asset_store_data)
     await _chain(manager, replaces=False)
     flow_id = await _flow_manager_on_asset(hass, manager, ASSET_UUID)
@@ -1083,7 +1083,6 @@ async def test_manage_replacement_opens_the_unchanged_submenu(
     assert submenu["step_id"] == REPLACEMENT_SUBMENU
     assert submenu["menu_options"] == [
         "replacement_replaces",
-        "replacement_replaced_by",
         "manage_asset_replacement",
         BACK,
     ]

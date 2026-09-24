@@ -247,11 +247,10 @@
         "title": "Elinkaari"
       },
       "asset_replacement": {
-        "description": "{result}\n\nKorvaaminen: {replacement}. Laite: {asset}. Korvaussuhde yhdistää vain fyysiset laitteet eikä siirrä ostoksia, takuuta, asennustilaa, käyttötunteja, sijaintia tai Home Assistant -laitteita.",
+        "description": "{result}\n\nKorvaaminen: {replacement}. Laite: {asset}. Korvaussuhde kirjataan aina uudesta laitteesta, ja se yhdistää vain fyysiset laitteet eikä siirrä ostoksia, takuuta, asennustilaa, käyttötunteja, sijaintia tai Home Assistant -laitteita.",
         "menu_options": {
           "manage_asset_menu": "← Takaisin laitteen hallintaan",
           "manage_asset_replacement": "Hallitse nykyistä korvaussuhdetta",
-          "replacement_replaced_by": "Tämän laitteen korvasi…",
           "replacement_replaces": "Tämä laite korvaa…"
         },
         "title": "Korvaaminen"
@@ -511,16 +510,6 @@
         },
         "description": "Laite: {asset}. Valitse korjattava tai mitätöitävä aktiivinen suhde.",
         "title": "Hallitse korvaussuhdetta"
-      },
-      "replacement_replaced_by": {
-        "data": {
-          "effective_date": "Voimaantulopäivä",
-          "notes": "Muistiinpanot",
-          "replacement_reason": "Korvauksen syy",
-          "replacement_target_asset_uuid": "Seuraava laite"
-        },
-        "description": "Laite: {asset}. Valitse fyysinen laite, joka korvasi tämän laitteen.",
-        "title": "Tämän laitteen korvasi…"
       },
       "replacement_replaces": {
         "data": {

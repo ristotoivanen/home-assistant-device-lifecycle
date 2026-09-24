@@ -70,7 +70,6 @@ MANAGEMENT_STEPS = (
     "correct_asset_replacement",
     "confirm_void_replacement",
     "replacement_replaces",
-    "replacement_replaced_by",
     "ha_relationship",
     "manage_primary_device",
     "add_related_device",

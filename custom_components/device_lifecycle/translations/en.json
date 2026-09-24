@@ -247,11 +247,10 @@
         "title": "Lifecycle"
       },
       "asset_replacement": {
-        "description": "{result}\n\nReplacement: {replacement}. Asset: {asset}. Replacement connects physical Assets only and does not transfer Purchases, warranty, installation status, Runtime, locations, or Home Assistant devices.",
+        "description": "{result}\n\nReplacement: {replacement}. Asset: {asset}. A replacement is always recorded from the new Asset. It connects physical Assets only and does not transfer Purchases, warranty, installation status, Runtime, locations, or Home Assistant devices.",
         "menu_options": {
           "manage_asset_menu": "← Back to asset management",
           "manage_asset_replacement": "Manage existing replacement",
-          "replacement_replaced_by": "This Asset was replaced by…",
           "replacement_replaces": "This Asset replaces…"
         },
         "title": "Replacement"
@@ -511,16 +510,6 @@
         },
         "description": "Asset: {asset}. Select an active relationship to correct or void.",
         "title": "Manage replacement relationship"
-      },
-      "replacement_replaced_by": {
-        "data": {
-          "effective_date": "Effective date",
-          "notes": "Notes",
-          "replacement_reason": "Replacement reason",
-          "replacement_target_asset_uuid": "Successor Asset"
-        },
-        "description": "Asset: {asset}. Select the physical Asset that replaced this Asset.",
-        "title": "This Asset was replaced by…"
       },
       "replacement_replaces": {
         "data": {

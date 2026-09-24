@@ -191,9 +191,10 @@ async def test_lifecycle_asset_disappearing_before_submit_is_safe(
     schedule_reload.assert_not_called()
 
 
-async def test_replacement_both_direction_workflows(
+async def test_replacement_is_recorded_and_rerecorded_from_the_new_asset(
     hass: HomeAssistant,
 ) -> None:
+    """Either relationship of the old Asset is recorded by its new Asset."""
     manager = _manager(hass)
     old, new, other = await _three_assets(manager)
     manager._store.async_save.reset_mock()
@@ -218,18 +219,18 @@ async def test_replacement_both_direction_workflows(
         manager.replacement_records_for_asset(old["asset_uuid"])[0][
             "replacement_uuid"
         ],
-        void_reason="Exercise reverse workflow",
+        void_reason="Exercise a second successor",
     )
     manager._store.async_save.reset_mock()
-    replaced_by_flow = await _select(hass, manager, old["asset_uuid"])
+    other_flow = await _select(hass, manager, other["asset_uuid"])
     with capture_reloads(hass) as schedule_reload:
-        replaced_by = await replaced_by_flow.async_step_replacement_replaced_by(
+        rerecorded = await other_flow.async_step_replacement_replaces(
             {
-                CONF_REPLACEMENT_TARGET_ASSET_UUID: other["asset_uuid"],
+                CONF_REPLACEMENT_TARGET_ASSET_UUID: old["asset_uuid"],
                 CONF_REPLACEMENT_REASON: "upgrade",
             }
         )
-    assert replaced_by["type"] is FlowResultType.MENU
+    assert rerecorded["type"] is FlowResultType.MENU
     assert manager.active_replacement_successor(old["asset_uuid"])["asset_uuid"] == (
         other["asset_uuid"]
     )
@@ -255,7 +256,7 @@ async def test_replacement_stale_target_and_graph_change_are_store_authoritative
     )
     assert stale["errors"] == {"base": "asset_missing"}
 
-    conflict_flow = await _select(hass, manager, old["asset_uuid"])
+    conflict_flow = await _select(hass, manager, new["asset_uuid"])
     await manager.async_create_asset_replacement(
         old["asset_uuid"],
         new["asset_uuid"],
@@ -264,9 +265,9 @@ async def test_replacement_stale_target_and_graph_change_are_store_authoritative
         notes=None,
     )
     with capture_reloads(hass) as schedule_reload:
-        conflict = await conflict_flow.async_step_replacement_replaced_by(
+        conflict = await conflict_flow.async_step_replacement_replaces(
             {
-                CONF_REPLACEMENT_TARGET_ASSET_UUID: new["asset_uuid"],
+                CONF_REPLACEMENT_TARGET_ASSET_UUID: old["asset_uuid"],
                 CONF_REPLACEMENT_REASON: "failure",
             }
         )
@@ -286,19 +287,21 @@ async def test_replacement_cycle_and_incoming_conflict_are_flow_errors(
         effective_date=None,
         notes=None,
     )
-    cycle_flow = await _select(hass, manager, b["asset_uuid"])
-    cycle = await cycle_flow.async_step_replacement_replaced_by(
+    # a -> b exists; a claiming to replace b would close the loop b -> a.
+    cycle_flow = await _select(hass, manager, a["asset_uuid"])
+    cycle = await cycle_flow.async_step_replacement_replaces(
         {
-            CONF_REPLACEMENT_TARGET_ASSET_UUID: a["asset_uuid"],
+            CONF_REPLACEMENT_TARGET_ASSET_UUID: b["asset_uuid"],
             CONF_REPLACEMENT_REASON: "failure",
         }
     )
     assert cycle["errors"] == {"base": "replacement_cycle"}
 
-    incoming_flow = await _select(hass, manager, c["asset_uuid"])
-    incoming = await incoming_flow.async_step_replacement_replaced_by(
+    # b already replaces a, so it cannot also replace c.
+    incoming_flow = await _select(hass, manager, b["asset_uuid"])
+    incoming = await incoming_flow.async_step_replacement_replaces(
         {
-            CONF_REPLACEMENT_TARGET_ASSET_UUID: b["asset_uuid"],
+            CONF_REPLACEMENT_TARGET_ASSET_UUID: c["asset_uuid"],
             CONF_REPLACEMENT_REASON: "other",
         }
     )
@@ -386,14 +389,14 @@ async def test_replacement_persistence_failure_has_zero_reload(
 ) -> None:
     manager = _manager(hass)
     old, new, _other = await _three_assets(manager)
-    flow = await _select(hass, manager, old["asset_uuid"])
+    flow = await _select(hass, manager, new["asset_uuid"])
     before = deepcopy(manager._data)
     manager._store.async_save = AsyncMock(side_effect=OSError("save failed"))
 
     with capture_reloads(hass) as schedule_reload:
-        result = await flow.async_step_replacement_replaced_by(
+        result = await flow.async_step_replacement_replaces(
             {
-                CONF_REPLACEMENT_TARGET_ASSET_UUID: new["asset_uuid"],
+                CONF_REPLACEMENT_TARGET_ASSET_UUID: old["asset_uuid"],
                 CONF_REPLACEMENT_REASON: "failure",
             }
         )
@@ -410,13 +413,13 @@ async def test_replacement_malformed_effective_date_has_specific_flow_error(
     """Malformed replacement dates use their stable error and never reload."""
     manager = _manager(hass)
     old, new, _other = await _three_assets(manager)
-    flow = await _select(hass, manager, old["asset_uuid"])
+    flow = await _select(hass, manager, new["asset_uuid"])
     manager._store.async_save.reset_mock()
 
     with capture_reloads(hass) as schedule_reload:
-        result = await flow.async_step_replacement_replaced_by(
+        result = await flow.async_step_replacement_replaces(
             {
-                CONF_REPLACEMENT_TARGET_ASSET_UUID: new["asset_uuid"],
+                CONF_REPLACEMENT_TARGET_ASSET_UUID: old["asset_uuid"],
                 CONF_REPLACEMENT_REASON: "failure",
                 CONF_EFFECTIVE_DATE: "20260810",
             }
@@ -508,7 +511,7 @@ async def test_replacement_menu_and_initial_forms_cover_current_graph_state(
     flow = await _select(hass, manager, old["asset_uuid"])
 
     empty_menu = await flow.async_step_asset_replacement()
-    initial_create = await flow.async_step_replacement_replaced_by()
+    initial_create = await flow.async_step_replacement_replaces()
     record = await manager.async_create_asset_replacement(
         old["asset_uuid"],
         new["asset_uuid"],
@@ -521,10 +524,9 @@ async def test_replacement_menu_and_initial_forms_cover_current_graph_state(
 
     assert empty_menu["menu_options"] == [
         "replacement_replaces",
-        "replacement_replaced_by",
         "manage_asset_menu",
     ]
-    assert initial_create["step_id"] == "replacement_replaced_by"
+    assert initial_create["step_id"] == "replacement_replaces"
     assert populated_menu["menu_options"][-2] == "manage_asset_replacement"
     assert populated_menu["menu_options"][-1] == "manage_asset_menu"
     assert initial_manage["step_id"] == "manage_asset_replacement"
@@ -549,7 +551,7 @@ async def test_replacement_selected_asset_stale_paths_return_to_selector(
     manager._data["lifecycle_events"].clear()
 
     menu = await flow.async_step_asset_replacement()
-    create = await flow.async_step_replacement_replaced_by()
+    create = await flow.async_step_replacement_replaces()
     manage = await flow.async_step_manage_asset_replacement()
     correct = await flow.async_step_correct_asset_replacement()
     void = await flow.async_step_confirm_void_replacement()
@@ -715,12 +717,12 @@ async def test_replacement_create_detects_post_mutation_asset_disappearance(
     """The completion path does not reload if the selected Asset disappears."""
     manager = _manager(hass)
     old, new, _other = await _three_assets(manager)
-    flow = await _select(hass, manager, old["asset_uuid"])
+    flow = await _select(hass, manager, new["asset_uuid"])
 
-    with patch.object(manager, "asset", Mock(side_effect=[old, new, None])), capture_reloads(hass) as reload:
-        result = await flow.async_step_replacement_replaced_by(
+    with patch.object(manager, "asset", Mock(side_effect=[new, old, None])), capture_reloads(hass) as reload:
+        result = await flow.async_step_replacement_replaces(
             {
-                CONF_REPLACEMENT_TARGET_ASSET_UUID: new["asset_uuid"],
+                CONF_REPLACEMENT_TARGET_ASSET_UUID: old["asset_uuid"],
                 CONF_REPLACEMENT_REASON: "failure",
             }
         )

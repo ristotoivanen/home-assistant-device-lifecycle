@@ -83,7 +83,6 @@ async def test_replacement_submenu_lists_its_operations_then_back(
     assert empty["type"] is FlowResultType.MENU
     assert empty["menu_options"] == [
         "replacement_replaces",
-        "replacement_replaced_by",
         BACK_ROW,
     ]
 
@@ -93,7 +92,6 @@ async def test_replacement_submenu_lists_its_operations_then_back(
 
     assert populated["menu_options"] == [
         "replacement_replaces",
-        "replacement_replaced_by",
         "manage_asset_replacement",
         BACK_ROW,
     ]
@@ -183,7 +181,7 @@ async def test_back_returns_to_the_same_asset_hub_without_touching_anything(
 async def test_recording_a_replacement_returns_to_the_replacement_submenu(
     hass: HomeAssistant,
 ) -> None:
-    """Both directions of recording stay in the Replacement submenu."""
+    """Recording, also from the middle of a chain, stays in the submenu."""
     manager = _manager(hass)
     old = await manager.async_create_manual_asset(name="Old unit")
     new = await manager.async_create_manual_asset(name="New unit")
@@ -208,16 +206,20 @@ async def test_recording_a_replacement_returns_to_the_replacement_submenu(
         "asset_uuid"
     ] == old["asset_uuid"]
 
-    other_flow = await _on_asset(hass, manager, other["asset_uuid"])
-    replaced_by = await other_flow.async_step_replacement_replaced_by(
+    # The replaced Asset records what it replaced in turn: other -> old -> new.
+    old_flow = await _on_asset(hass, manager, old["asset_uuid"])
+    middle = await old_flow.async_step_replacement_replaces(
         {
-            CONF_REPLACEMENT_TARGET_ASSET_UUID: old["asset_uuid"],
+            CONF_REPLACEMENT_TARGET_ASSET_UUID: other["asset_uuid"],
             CONF_REPLACEMENT_REASON: "upgrade",
         }
     )
 
-    assert replaced_by["step_id"] == REPLACEMENT_STEP
-    assert other_flow._selected_asset_uuid == other["asset_uuid"]
+    assert middle["step_id"] == REPLACEMENT_STEP
+    assert old_flow._selected_asset_uuid == old["asset_uuid"]
+    assert manager.active_replacement_predecessor(old["asset_uuid"])[
+        "asset_uuid"
+    ] == other["asset_uuid"]
 
 
 async def test_correcting_a_replacement_returns_to_the_replacement_submenu(

@@ -62,10 +62,10 @@ TRANSLATIONS = (
     / "translations"
 )
 
-# Step id -> whether the Asset being managed is the successor.
+# Step id -> whether the Asset being managed is the successor. A
+# relationship is created only from the new Asset, so there is one form.
 DIRECTIONS = {
     "replacement_replaces": True,
-    "replacement_replaced_by": False,
 }
 NOTHING_CHOSEN = (
     pytest.param({CONF_REPLACEMENT_TARGET_ASSET_UUID: NOT_SELECTED}, id="placeholder"),

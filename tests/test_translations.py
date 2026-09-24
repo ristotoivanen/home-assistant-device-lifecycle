@@ -34,7 +34,6 @@ LIFECYCLE_REPLACEMENT_STEPS = {
     "confirm_void_replacement",
     "correct_asset_replacement",
     "manage_asset_replacement",
-    "replacement_replaced_by",
     "replacement_replaces",
 }
 
@@ -290,7 +289,6 @@ def test_every_menu_action_and_step_has_translation(language: str) -> None:
     assert set(steps["asset_replacement"]["menu_options"]) == {
         "manage_asset_menu",
         "manage_asset_replacement",
-        "replacement_replaced_by",
         "replacement_replaces",
     }
     menu_actions = {
