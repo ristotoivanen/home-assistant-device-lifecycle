@@ -1120,14 +1120,24 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         return label
 
     def _replacement_record_label(self, record: ReplacementRecordData) -> str:
-        """Return a stable Asset-ID label for one replacement record."""
-        predecessor = self._manager.asset(record["predecessor_asset_uuid"])
-        successor = self._manager.asset(record["successor_asset_uuid"])
-        predecessor_label = (
-            predecessor["asset_id"] if predecessor is not None else "?"
-        )
-        successor_label = successor["asset_id"] if successor is not None else "?"
-        return f"{predecessor_label} → {successor_label}"
+        """Name one relationship by its two Assets, predecessor first.
+
+        "Name · DLxxxx → Name · DLxxxx", shortened the way every read-only
+        view names an Asset. An Asset that is no longer available is named
+        in words, never by its UUID.
+        """
+
+        def side(asset_uuid: str) -> str:
+            asset = self._manager.asset(asset_uuid)
+            if asset is None:
+                return self._localized_label(
+                    "Unavailable Asset", "Laite ei ole enää käytettävissä"
+                )
+            return _view_asset_label(asset)
+
+        predecessor = side(record["predecessor_asset_uuid"])
+        successor = side(record["successor_asset_uuid"])
+        return f"{predecessor} → {successor}"
 
     def _purchase_choices(
         self,

@@ -383,6 +383,7 @@
           "void_reason": "Mitätöinnin syy"
         },
         "description": "Mitätöidäänkö laitteen {asset} suhde {relationship}? Historiatietue säilyy pysyvästi.",
+        "submit": "Mitätöi ja palaa",
         "title": "Mitätöi korvaussuhde"
       },
       "correct_asset_replacement": {
@@ -395,6 +396,7 @@
           "void_reason": "Vanhan suhteen korjaamisen syy"
         },
         "description": "Korjaa laitteen {asset} suhde {relationship}. Vanha tietue mitätöidään ja uusi suhde luodaan yhdellä atomisella tallennuksella.",
+        "submit": "Tallenna ja palaa",
         "title": "Korjaa korvaussuhde"
       },
       "edit_asset_metadata": {
@@ -509,6 +511,7 @@
           "replacement_uuid": "Aktiivinen suhde"
         },
         "description": "Laite: {asset}. Valitse korjattava tai mitätöitävä aktiivinen suhde.",
+        "submit": "Jatka",
         "title": "Hallitse korvaussuhdetta"
       },
       "replacement_replaces": {

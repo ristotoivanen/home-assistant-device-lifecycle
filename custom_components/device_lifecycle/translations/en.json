@@ -383,6 +383,7 @@
           "void_reason": "Void reason"
         },
         "description": "Void relationship {relationship} for {asset}? The historical record remains stored permanently.",
+        "submit": "Void and return",
         "title": "Void replacement relationship"
       },
       "correct_asset_replacement": {
@@ -395,6 +396,7 @@
           "void_reason": "Reason for correcting the old relationship"
         },
         "description": "Correct {relationship} for {asset}. The old record is voided and the new relationship is created in one atomic save.",
+        "submit": "Save and return",
         "title": "Correct replacement relationship"
       },
       "edit_asset_metadata": {
@@ -509,6 +511,7 @@
           "replacement_uuid": "Active relationship"
         },
         "description": "Asset: {asset}. Select an active relationship to correct or void.",
+        "submit": "Continue",
         "title": "Manage replacement relationship"
       },
       "replacement_replaces": {
