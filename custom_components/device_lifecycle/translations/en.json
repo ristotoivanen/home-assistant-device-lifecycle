@@ -231,6 +231,7 @@
           "installed_date": "Installation date"
         },
         "description": "{asset}\n\n{facts}\n\nNot installed means the Asset is disconnected or in storage but still part of your inventory. Permanent removal, disposal or loss is recorded under Lifecycle.",
+        "submit": "Save and return",
         "title": "Installation & location"
       },
       "asset_lifecycle": {
@@ -244,6 +245,7 @@
           "notes": "Optional note recorded only on this immutable transition."
         },
         "description": "{asset}\n\nCurrent status: {current_status}\n\nRetired means permanent or deliberate removal from use.\n\nTemporary disconnection or storage belongs under Installation & location → Not installed.",
+        "submit": "Save and return",
         "title": "Lifecycle"
       },
       "asset_replacement": {
@@ -260,7 +262,7 @@
           "purchase_uuid": "Purchase"
         },
         "description": "{asset}\n\nCurrent Purchase: {current_purchase}\n\nThis form changes the Purchase link only. The warranty is the Asset's own detail: changing the Purchase link does not change the warranty.",
-        "submit": "Save",
+        "submit": "Save and return",
         "title": "Linked purchase"
       },
       "quick_add": {
@@ -278,10 +280,12 @@
           "device_id": "Select one physical device owned by another Home Assistant integration."
         },
         "description": "Choose a Home Assistant device to prefill editable physical details. The external device remains independently owned.",
+        "submit": "Continue",
         "title": "Add from Home Assistant"
       },
       "quick_add_details": {
         "description": "Review the physical Asset before permanent identity is created. Suggested values remain editable, and no data is stored until final confirmation.",
+        "submit": "Continue",
         "sections": {
           "identity": {
             "name": "Identity",
@@ -354,6 +358,7 @@
           "notes": "Stored only on the immutable replacement record."
         },
         "description": "Review how {predecessor_name} is replaced. Disposed and lost predecessors are never automatically retired; installation date is preserved.",
+        "submit": "Continue",
         "title": "Replacement details"
       },
       "quick_add_confirm": {
@@ -361,6 +366,7 @@
           "confirm_quick_add": "Confirm and add device"
         },
         "description": "**New device**\n\nName: {asset_name}\n\nManufacturer / model: {manufacturer_model}\n\nLifecycle: {lifecycle}\n\nLifecycle effective date: {lifecycle_date}\n\nDeployment: {deployment}\n\nInstallation date: {installed_date}\n\nArea: {area}\n\nPurchase: {purchase}\n\nWarranty: {warranty}\n\nHome Assistant device: {ha_device}\n\n{disposed_warning}\n\n**Replacement review**\n\nOld device: {predecessor_name}\n\nLifecycle: {predecessor_lifecycle}\n\nDeployment: {predecessor_deployment}\n\nArea: {predecessor_area}\n\nReason: {replacement_reason}\n\nEffective date: {replacement_date}\n\nNothing is stored until you confirm.",
+        "submit": "Add device",
         "title": "Confirm device"
       },
       "confirm_not_deployed": {
@@ -368,6 +374,7 @@
           "confirm_area_clear": "Confirm clearing the location"
         },
         "description": "{asset}\n\nLocation to clear: {current_area}\n\nMarking the Asset Not installed clears its location. The installation date is kept unless you changed it on the previous form.",
+        "submit": "Save and return",
         "title": "Clear the location?"
       },
       "confirm_disposed": {
@@ -375,6 +382,7 @@
           "confirm_disposed": "Confirm disposed status"
         },
         "description": "{asset}\n\nRecord this Asset as disposed?\n\nNeither the Asset nor its history is deleted, and a later lifecycle change can correct the status.",
+        "submit": "Save and return",
         "title": "Confirm disposed status"
       },
       "confirm_void_replacement": {
@@ -412,7 +420,7 @@
           "sw_version": "Software version"
         },
         "description": "{asset}\n\nEdit the Asset's details.",
-        "submit": "Save",
+        "submit": "Save and return",
         "title": "Asset details"
       },
       "ha_relationship": {
@@ -431,6 +439,7 @@
           "ha_relationship_action": "Action"
         },
         "description": "{asset}\n\nCurrent primary Home Assistant device: {current_device}\n\nChanging it does not change the Asset ID or the Home Assistant device itself.",
+        "submit": "Save and return",
         "title": "Manage primary Home Assistant device"
       },
       "add_related_device": {
@@ -438,6 +447,7 @@
           "device_id": "Home Assistant device"
         },
         "description": "{asset}\n\nPrimary: {current_primary}\nRelated: {related_devices}\n\nA related Home Assistant device is a reference only: it changes neither the Asset's details nor the Home Assistant device itself.",
+        "submit": "Add and return",
         "title": "Add related Home Assistant device"
       },
       "remove_related_device": {
@@ -445,6 +455,7 @@
           "device_id": "Related Home Assistant device"
         },
         "description": "{asset}\n\nRelated: {related_devices}\n\nReferences to devices that have left Home Assistant can be selected too.",
+        "submit": "Remove and return",
         "title": "Remove related Home Assistant device"
       },
       "init": {
@@ -522,6 +533,7 @@
           "replacement_target_asset_uuid": "Predecessor Asset"
         },
         "description": "{asset}\n\nSelect the old Asset that this Asset replaces.",
+        "submit": "Save and return",
         "title": "This Asset replaces…"
       }
     }

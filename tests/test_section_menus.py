@@ -637,9 +637,12 @@ def test_detail_labels_match_the_editor_fields(language: str) -> None:
 
 
 @pytest.mark.parametrize("editor", ["edit_asset_metadata", "change_asset_purchase"])
-@pytest.mark.parametrize(("language", "label"), [("en", "Save"), ("fi", "Tallenna")])
+@pytest.mark.parametrize(
+    ("language", "label"),
+    [("en", "Save and return"), ("fi", "Tallenna ja palaa")],
+)
 def test_both_editors_buttons_save(language: str, label: str, editor: str) -> None:
-    """Reached through an explicit edit row, each editor's button says Save."""
+    """Each editor saves and returns to the section it was opened from."""
     assert _translations(language)[editor]["submit"] == label
 
 

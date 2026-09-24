@@ -248,8 +248,8 @@ def test_each_management_button_says_what_it_does(language: str) -> None:
     selection = steps[MANAGE]["submit"].casefold()
     for word in SAVING_WORDS:
         assert word not in selection, word
-    # Creating a relationship is not part of this cleanup.
-    assert "submit" not in steps["replacement_replaces"]
+    # Recording a relationship saves it and returns to the submenu.
+    assert steps["replacement_replaces"]["submit"] == SUBMIT[CORRECT][language]
 
 
 async def test_the_selection_step_only_routes(
