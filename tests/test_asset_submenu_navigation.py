@@ -40,6 +40,8 @@ from .test_ha_relationship_options_flow import _external_device
 from .test_options_flow import _manager, _options_flow
 
 BACK_ROW = "manage_asset_menu"
+# Replacement is opened from Lifecycle & replacement, so Back returns there.
+REPLACEMENT_BACK_ROW = "asset_lifecycle_replacement_menu"
 HUB_STEP = "manage_asset_menu"
 REPLACEMENT_STEP = "asset_replacement"
 HA_STEP = "ha_relationship"
@@ -83,7 +85,7 @@ async def test_replacement_submenu_lists_its_operations_then_back(
     assert empty["type"] is FlowResultType.MENU
     assert empty["menu_options"] == [
         "replacement_replaces",
-        BACK_ROW,
+        REPLACEMENT_BACK_ROW,
     ]
 
     old, _new, _record = await _replacement_pair(manager)
@@ -93,7 +95,7 @@ async def test_replacement_submenu_lists_its_operations_then_back(
     assert populated["menu_options"] == [
         "replacement_replaces",
         "manage_asset_replacement",
-        BACK_ROW,
+        REPLACEMENT_BACK_ROW,
     ]
 
 

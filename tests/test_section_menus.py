@@ -3,6 +3,8 @@
 Details & warranty, Installation & location and Lifecycle & replacement
 each show the Asset's current state in a few short lines, offer their
 existing operations as rows, and go back to the hub with a real menu row.
+An editor saved from a section returns to that section, which shows the
+result once.
 A section that groups several facts keeps them apart: Details & warranty
 shows the Asset's details, its linked Purchase and its own warranty, and
 Lifecycle & replacement shows the Lifecycle state beside the replacement
@@ -226,8 +228,13 @@ async def test_each_hub_row_opens_its_section_menu(
     assert result["type"] is FlowResultType.MENU
     assert result["step_id"] == section
     assert result["menu_options"] == [*editors, BACK]
-    assert set(result["description_placeholders"]) == {"asset", *GROUPS[section]}
+    assert set(result["description_placeholders"]) == {
+        "asset",
+        "result",
+        *GROUPS[section],
+    }
     assert result["description_placeholders"]["asset"] == "Workshop device · DL0007"
+    assert result["description_placeholders"]["result"] == ""
 
 
 async def test_details_and_purchase_no_longer_have_sections_of_their_own(
@@ -817,15 +824,13 @@ async def test_changing_the_purchase_from_the_section_leaves_the_warranty_alone(
         flow_id, {"next_step_id": "change_asset_purchase"}
     )
     with capture_reloads(hass):
-        hub = await hass.config_entries.options.async_configure(
+        after = await hass.config_entries.options.async_configure(
             flow_id, {CONF_PURCHASE_UUID: SECOND_PURCHASE_UUID}
         )
-    after = await hass.config_entries.options.async_configure(
-        flow_id, {"next_step_id": DETAILS_WARRANTY}
-    )
 
-    assert hub["step_id"] == HUB_STEP
-    assert hub["description_placeholders"]["result"] == "Linked purchase updated."
+    # The save returns to Details & warranty, which reads the new state.
+    assert after["step_id"] == DETAILS_WARRANTY
+    assert after["description_placeholders"]["result"] == "Linked purchase updated."
     asset = manager.asset(ASSET_UUID)
     assert asset["purchase_uuid"] == SECOND_PURCHASE_UUID
     assert asset["warranty"] == warranty
@@ -1064,7 +1069,7 @@ async def test_manage_replacement_opens_the_replacement_submenu(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
 ) -> None:
-    """End to end: the submenu's own operations, and its own Back to the hub."""
+    """End to end: the submenu's own operations, and Back to its section."""
     manager = _manager(hass, asset_store_data)
     await _chain(manager, replaces=False)
     flow_id = await _flow_manager_on_asset(hass, manager, ASSET_UUID)
@@ -1078,8 +1083,8 @@ async def test_manage_replacement_opens_the_replacement_submenu(
         submenu = await hass.config_entries.options.async_configure(
             flow_id, {"next_step_id": REPLACEMENT_SUBMENU}
         )
-        hub = await hass.config_entries.options.async_configure(
-            flow_id, {"next_step_id": BACK}
+        section = await hass.config_entries.options.async_configure(
+            flow_id, {"next_step_id": LIFECYCLE_REPLACEMENT}
         )
 
     assert submenu["type"] is FlowResultType.MENU
@@ -1087,11 +1092,12 @@ async def test_manage_replacement_opens_the_replacement_submenu(
     assert submenu["menu_options"] == [
         "replacement_replaces",
         "manage_asset_replacement",
-        BACK,
+        LIFECYCLE_REPLACEMENT,
     ]
     assert submenu["description_placeholders"]["result"] == ""
-    assert hub["step_id"] == HUB_STEP
-    assert hub["description_placeholders"]["result"] == ""
+    assert section["step_id"] == LIFECYCLE_REPLACEMENT
+    assert section["description_placeholders"]["asset"] == "Workshop device · DL0007"
+    assert section["description_placeholders"]["result"] == ""
     manager._store.async_save.assert_not_awaited()
     reload.assert_not_called()
     assert manager._data == before
@@ -1129,9 +1135,7 @@ async def test_recording_a_replacement_leaves_the_lifecycle_alone(
                 CONF_EFFECTIVE_DATE: "2026-08-11",
             },
         )
-    await hass.config_entries.options.async_configure(
-        flow_id, {"next_step_id": BACK}
-    )
+    # Back from the submenu is the section it was opened from.
     after = await hass.config_entries.options.async_configure(
         flow_id, {"next_step_id": LIFECYCLE_REPLACEMENT}
     )
@@ -1175,16 +1179,14 @@ async def test_recording_a_lifecycle_change_leaves_replacement_alone(
         flow_id, {"next_step_id": "asset_lifecycle"}
     )
     with capture_reloads(hass):
-        hub = await hass.config_entries.options.async_configure(
+        after = await hass.config_entries.options.async_configure(
             flow_id,
             {CONF_LIFECYCLE_STATUS: "retired", CONF_EFFECTIVE_DATE: "2026-09-12"},
         )
-    after = await hass.config_entries.options.async_configure(
-        flow_id, {"next_step_id": LIFECYCLE_REPLACEMENT}
-    )
 
-    assert hub["step_id"] == HUB_STEP
-    assert hub["description_placeholders"]["result"] == "Lifecycle updated."
+    # The save returns to Lifecycle & replacement, which reads the new state.
+    assert after["step_id"] == LIFECYCLE_REPLACEMENT
+    assert after["description_placeholders"]["result"] == "Lifecycle updated."
     assert manager._data["replacement_records"] == records
     assert _lines(after, "lifecycle") == [
         "Status: Retired",
@@ -1407,11 +1409,11 @@ async def test_long_values_stay_within_the_summary_budget(
     assert LONG not in _shown(result)
 
 
-async def test_saving_from_a_section_still_lands_on_the_hub(
+async def test_saving_from_a_section_returns_to_that_section(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
 ) -> None:
-    """End to end: the editors keep their 0.7.4 destination after a save."""
+    """End to end: each editor saves, then returns to the section it came from."""
     manager = _manager(hass, asset_store_data)
     flow_id = await _flow_manager_on_asset(hass, manager, ASSET_UUID)
     submissions = [
@@ -1447,7 +1449,21 @@ async def test_saving_from_a_section_still_lands_on_the_hub(
         landed = await hass.config_entries.options.async_configure(
             flow_id, submission
         )
+        manager._store.async_save.reset_mock()
+        with capture_reloads(hass) as reload:
+            hub = await hass.config_entries.options.async_configure(
+                flow_id, {"next_step_id": BACK}
+            )
 
+        # The save lands on the section, with its result shown once there.
         assert landed["type"] is FlowResultType.MENU, editor
-        assert landed["step_id"] == HUB_STEP, editor
+        assert landed["step_id"] == section, editor
         assert landed["description_placeholders"]["result"], editor
+        assert landed["description_placeholders"]["asset"] == (
+            "Workshop device · DL0007"
+        ), editor
+        # Back from the section is navigation only: no write, reload or result.
+        assert hub["step_id"] == HUB_STEP, editor
+        assert hub["description_placeholders"]["result"] == "", editor
+        manager._store.async_save.assert_not_awaited()
+        reload.assert_not_called()

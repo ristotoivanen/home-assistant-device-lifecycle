@@ -235,7 +235,7 @@ async def test_no_change_path_keeps_the_same_selected_asset(
         )
 
     assert result["type"] is FlowResultType.MENU
-    assert result["step_id"] == "manage_asset_menu"
+    assert result["step_id"] == "asset_lifecycle_replacement_menu"
     assert flow._selected_asset_uuid == ASSET_UUID
     assert manager._data == before
     manager._store.async_save.assert_not_awaited()

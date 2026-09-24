@@ -251,7 +251,7 @@
       "asset_replacement": {
         "description": "{asset}\n\n{result}\n\n**Replacement**\n{replacement}\n\nA replacement relationship is always recorded from the new Asset.",
         "menu_options": {
-          "manage_asset_menu": "← Back to asset management",
+          "asset_lifecycle_replacement_menu": "← Back to lifecycle & replacement",
           "manage_asset_replacement": "Manage existing replacement",
           "replacement_replaces": "This Asset replaces…"
         },
@@ -491,7 +491,7 @@
         "title": "Manage Asset"
       },
       "asset_details_warranty_menu": {
-        "description": "{asset}\n\n**Asset details**\n{details}\n\n**Purchase**\n{purchase}\n\n**Warranty**\n{warranty}",
+        "description": "{asset}\n\n{result}\n\n**Asset details**\n{details}\n\n**Purchase**\n{purchase}\n\n**Warranty**\n{warranty}",
         "menu_options": {
           "change_asset_purchase": "Change linked purchase",
           "edit_asset_metadata": "Edit asset details",
@@ -500,7 +500,7 @@
         "title": "Details & warranty"
       },
       "asset_installation_menu": {
-        "description": "{asset}\n\n**Installation & location**\n{facts}",
+        "description": "{asset}\n\n{result}\n\n**Installation & location**\n{facts}",
         "menu_options": {
           "asset_deployment": "Edit installation and location",
           "manage_asset_menu": "← Back to asset management"
@@ -508,7 +508,7 @@
         "title": "Installation & location"
       },
       "asset_lifecycle_replacement_menu": {
-        "description": "{asset}\n\n**Lifecycle**\n{lifecycle}\n\n**Replacement**\n{replacement}",
+        "description": "{asset}\n\n{result}\n\n**Lifecycle**\n{lifecycle}\n\n**Replacement**\n{replacement}",
         "menu_options": {
           "asset_lifecycle": "Record a lifecycle change",
           "asset_replacement": "Manage replacement",

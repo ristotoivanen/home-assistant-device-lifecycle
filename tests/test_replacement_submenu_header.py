@@ -32,7 +32,8 @@ from .test_options_flow import _manager, _options_flow
 
 SUBMENU = "asset_replacement"
 SECTION = "asset_lifecycle_replacement_menu"
-BACK = "manage_asset_menu"
+# Back returns to the section the submenu was opened from.
+BACK = SECTION
 TRANSLATIONS = (
     Path(__file__).parents[1]
     / "custom_components"
@@ -54,7 +55,7 @@ COPY = {
         "actions": {
             "replacement_replaces": "This Asset replaces…",
             "manage_asset_replacement": "Manage existing replacement",
-            BACK: "← Back to asset management",
+            BACK: "← Back to lifecycle & replacement",
         },
     },
     "fi": {
@@ -68,7 +69,7 @@ COPY = {
         "actions": {
             "replacement_replaces": "Tämä laite korvaa…",
             "manage_asset_replacement": "Hallitse nykyistä korvaussuhdetta",
-            BACK: "← Takaisin laitteen hallintaan",
+            BACK: "← Takaisin elinkaareen ja korvaamiseen",
         },
     },
 }
@@ -130,8 +131,8 @@ def test_the_header_is_short_lines_not_a_paragraph(language: str) -> None:
 
 
 @pytest.mark.parametrize("language", ["en", "fi"])
-def test_the_actions_are_unchanged(language: str) -> None:
-    """Only the header changed: the operations keep their labels."""
+def test_the_actions_keep_their_labels(language: str) -> None:
+    """The operations keep their labels; Back names the section it returns to."""
     assert _step(language)["menu_options"] == COPY[language]["actions"]
 
 

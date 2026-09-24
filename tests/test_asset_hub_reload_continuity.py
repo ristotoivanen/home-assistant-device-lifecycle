@@ -125,20 +125,15 @@ async def test_options_flow_survives_the_real_reload_it_triggers(
             DEPLOYMENT_STATE_DEPLOYED
         )
 
-        # The flow survived: same object, same selection, no abort.
+        # The flow survived: same object, same selection, no abort, and back
+        # in the section the editor was opened from.
         assert completed["type"] is FlowResultType.MENU
-        assert completed["step_id"] == "manage_asset_menu"
+        assert completed["step_id"] == "asset_installation_menu"
         assert _options_flow_handler(hass, flow_id) is flow
         assert flow._selected_asset_uuid == ASSET_UUID
 
         # And the next Asset-management step opens normally against the new
         # manager, which is exactly what the pre-0.7.4 scheduled reload raced.
-        section = await hass.config_entries.options.async_configure(
-            flow_id,
-            {"next_step_id": "asset_installation_menu"},
-        )
-        assert section["type"] is FlowResultType.MENU
-        assert section["step_id"] == "asset_installation_menu"
         next_step = await hass.config_entries.options.async_configure(
             flow_id,
             {"next_step_id": "asset_deployment"},
@@ -260,15 +255,15 @@ async def test_the_mutation_result_waits_for_its_reload_to_finish(
     assert entry.runtime_data is not original_manager
 
 
-async def test_the_hub_shown_after_a_real_reload_reads_the_new_manager(
+async def test_the_section_shown_after_a_real_reload_reads_the_new_manager(
     hass: HomeAssistant,
     hass_storage: dict,
     asset_store_data: AssetStoreData,
 ) -> None:
-    """The returned hub renders data only the post-reload manager has.
+    """The section the editor returns to renders post-reload data only.
 
-    A rename is the sharpest probe available: the hub's identity line can
-    only carry the new name if it came from the manager the reload
+    A rename is the sharpest probe available: the section's identity line
+    can only carry the new name if it came from the manager the reload
     installed, not from the Asset the editor was holding.
     """
     with _verified_store_readback(hass_storage):
@@ -291,13 +286,14 @@ async def test_the_hub_shown_after_a_real_reload_reads_the_new_manager(
         await hass.async_block_till_done()
 
     assert completed["type"] is FlowResultType.MENU
-    assert completed["step_id"] == "manage_asset_menu"
+    assert completed["step_id"] == "asset_details_warranty_menu"
     assert entry.runtime_data is not original_manager
     assert entry.runtime_data.asset(ASSET_UUID)["name"] == (
         "Renamed across a real reload"
     )
+    # Section headers shorten a long name the way every read-only view does.
     assert completed["description_placeholders"]["asset"] == (
-        "Renamed across a real reload · DL0007"
+        "Renamed across a real r… · DL0007"
     )
     assert completed["description_placeholders"]["result"] == "Asset details updated."
 
@@ -327,11 +323,8 @@ async def test_second_mutation_in_the_same_flow_uses_the_reloaded_manager(
         # Captured without draining the loop: each reload must already be
         # complete when its own mutation returns.
         managers.append(entry.runtime_data)
+        assert first["step_id"] == "asset_installation_menu"
 
-        await hass.config_entries.options.async_configure(
-            flow_id,
-            {"next_step_id": "asset_installation_menu"},
-        )
         await hass.config_entries.options.async_configure(
             flow_id,
             {"next_step_id": "asset_deployment"},
@@ -356,19 +349,21 @@ async def test_second_mutation_in_the_same_flow_uses_the_reloaded_manager(
 
 
 @pytest.mark.parametrize(
-    ("submenu", "operation", "payload", "result"),
+    ("submenu", "operation", "payload", "result", "parent"),
     [
         (
             "asset_replacement",
             "replacement_replaces",
             {CONF_REPLACEMENT_REASON: "failure"},
             "Replacement updated.",
+            "asset_lifecycle_replacement_menu",
         ),
         (
             "ha_relationship",
             "add_related_device",
             {},
             "Related Home Assistant device added.",
+            "manage_asset_menu",
         ),
     ],
 )
@@ -381,6 +376,7 @@ async def test_submenu_operations_survive_their_real_reload(
     operation: str,
     payload: dict,
     result: str,
+    parent: str,
 ) -> None:
     """A submenu operation reloads for real and stays in its own submenu.
 
@@ -433,14 +429,15 @@ async def test_submenu_operations_survive_their_real_reload(
         assert flow._manager is new_manager
         assert flow._selected_asset_uuid == ASSET_UUID
 
-        # The submenu still works against the manager the reload installed.
+        # The submenu still works against the manager the reload installed,
+        # and its Back goes to the view it was opened from.
         next_action = await hass.config_entries.options.async_configure(
             flow_id,
-            {"next_step_id": "manage_asset_menu"},
+            {"next_step_id": parent},
         )
 
         assert next_action["type"] is FlowResultType.MENU
-        assert next_action["step_id"] == "manage_asset_menu"
+        assert next_action["step_id"] == parent
         assert next_action["description_placeholders"]["result"] == ""
 
         await hass.async_block_till_done()

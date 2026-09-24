@@ -252,11 +252,11 @@ async def test_hub_never_shows_technical_identifiers(
     assert area.id not in rendered
 
 
-async def test_hub_reports_the_last_result_once(
+async def test_a_result_is_reported_once_where_the_operation_returns(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
 ) -> None:
-    """A completed operation is reported on the hub it returns to, then gone."""
+    """A completed operation is reported in its section, then never again."""
     manager = _manager(hass, asset_store_data)
     flow, hub = await _hub(hass, manager)
 
@@ -267,11 +267,14 @@ async def test_hub_reports_the_last_result_once(
     )
 
     assert completed["type"] is FlowResultType.MENU
+    assert completed["step_id"] == "asset_details_warranty_menu"
     assert completed["description_placeholders"]["result"] == "Asset details updated."
 
-    reopened = await flow.async_step_manage_asset_menu()
+    reopened = await flow.async_step_asset_details_warranty_menu()
+    hub = await flow.async_step_manage_asset_menu()
 
     assert reopened["description_placeholders"]["result"] == ""
+    assert hub["description_placeholders"]["result"] == ""
 
 
 async def test_choosing_another_device_drops_the_previous_result(
@@ -288,7 +291,7 @@ async def test_choosing_another_device_drops_the_previous_result(
     )
     assert completed["description_placeholders"]["result"] == "Asset details updated."
 
-    # Without an intervening hub render, so the result is still pending.
+    # Without an intervening render, so the result is still pending.
     flow._last_result = "asset_updated"
     switched = await flow.async_step_manage_asset(
         {CONF_ASSET_UUID: other["asset_uuid"]}
@@ -297,7 +300,7 @@ async def test_choosing_another_device_drops_the_previous_result(
     assert switched["description_placeholders"]["result"] == ""
 
 
-async def test_a_no_op_operation_still_returns_to_the_same_hub(
+async def test_a_no_op_operation_still_returns_to_its_section(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
 ) -> None:
@@ -313,7 +316,7 @@ async def test_a_no_op_operation_still_returns_to_the_same_hub(
         )
 
     assert result["type"] is FlowResultType.MENU
-    assert result["step_id"] == "manage_asset_menu"
+    assert result["step_id"] == "asset_details_warranty_menu"
     assert flow._selected_asset_uuid == ASSET_UUID
     assert manager._data == before
     manager._store.async_save.assert_not_awaited()

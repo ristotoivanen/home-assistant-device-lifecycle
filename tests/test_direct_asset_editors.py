@@ -1,8 +1,8 @@
 """The four direct editors reached from the Asset hub's sections.
 
 Asset details, Linked purchase, Installation & location and Lifecycle each
-open their own form and, once saved, hand the person back to the hub for
-the same Asset. These tests own that navigation contract: what each path
+open their own form from a hub section and, once saved, hand the person back
+to that section for the same Asset. These tests own that navigation contract: what each path
 returns to, whether it reloads, and what it must leave alone in the
 neighbouring domains.
 """
@@ -52,6 +52,16 @@ from .test_purchase_reconciliation import (
 )
 
 HUB_STEP = "manage_asset_menu"
+DETAILS_SECTION = "asset_details_warranty_menu"
+INSTALLATION_SECTION = "asset_installation_menu"
+LIFECYCLE_SECTION = "asset_lifecycle_replacement_menu"
+# Editor -> the section it was opened from, and returns to after a save.
+SECTION_OF = {
+    "edit_asset_metadata": DETAILS_SECTION,
+    "change_asset_purchase": DETAILS_SECTION,
+    "asset_deployment": INSTALLATION_SECTION,
+    "asset_lifecycle": LIFECYCLE_SECTION,
+}
 
 
 async def _hub_flow(
@@ -72,11 +82,11 @@ def _identity(manager: AssetStoreManager, asset_uuid: str) -> tuple[str, str]:
     return asset["asset_uuid"], asset["asset_id"]
 
 
-async def test_details_change_saves_reloads_and_returns_to_the_hub(
+async def test_details_change_saves_reloads_and_returns_to_its_section(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
 ) -> None:
-    """Asset details: a real edit saves, reloads, and lands back on the hub."""
+    """Asset details: a real edit saves, reloads, and lands on its section."""
     manager = _manager(hass, asset_store_data)
     flow = await _hub_flow(hass, manager)
     identity = _identity(manager, ASSET_UUID)
@@ -90,14 +100,14 @@ async def test_details_change_saves_reloads_and_returns_to_the_hub(
 
     assert form["step_id"] == "edit_asset_metadata"
     assert saved["type"] is FlowResultType.MENU
-    assert saved["step_id"] == HUB_STEP
+    assert saved["step_id"] == DETAILS_SECTION
     assert flow._selected_asset_uuid == ASSET_UUID
     assert manager.asset(ASSET_UUID)["name"] == "Bench computer"
     assert _identity(manager, ASSET_UUID) == identity
     reload.assert_called_once()
 
 
-async def test_details_resubmission_returns_to_the_hub_without_reloading(
+async def test_details_resubmission_returns_to_its_section_without_reloading(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
 ) -> None:
@@ -112,14 +122,14 @@ async def test_details_resubmission_returns_to_the_hub_without_reloading(
             _identical_metadata_input(manager.asset(ASSET_UUID))
         )
 
-    assert saved["step_id"] == HUB_STEP
+    assert saved["step_id"] == DETAILS_SECTION
     assert flow._selected_asset_uuid == ASSET_UUID
     assert manager._data == before
     manager._store.async_save.assert_not_awaited()
     reload.assert_not_called()
 
 
-async def test_purchase_relink_returns_to_the_hub_and_keeps_warranty(
+async def test_purchase_relink_returns_to_its_section_and_keeps_warranty(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
 ) -> None:
@@ -136,7 +146,7 @@ async def test_purchase_relink_returns_to_the_hub_and_keeps_warranty(
         )
 
     asset = manager.asset(ASSET_UUID)
-    assert saved["step_id"] == HUB_STEP
+    assert saved["step_id"] == DETAILS_SECTION
     assert flow._selected_asset_uuid == ASSET_UUID
     assert asset["purchase_uuid"] == SECOND_PURCHASE_UUID
     assert asset["field_sources"]["purchase_uuid"] == "user"
@@ -146,7 +156,7 @@ async def test_purchase_relink_returns_to_the_hub_and_keeps_warranty(
     reload.assert_called_once()
 
 
-async def test_purchase_cleared_returns_to_the_hub_and_keeps_warranty(
+async def test_purchase_cleared_returns_to_its_section_and_keeps_warranty(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
 ) -> None:
@@ -161,7 +171,7 @@ async def test_purchase_cleared_returns_to_the_hub_and_keeps_warranty(
         )
 
     asset = manager.asset(ASSET_UUID)
-    assert saved["step_id"] == HUB_STEP
+    assert saved["step_id"] == DETAILS_SECTION
     assert asset["purchase_uuid"] is None
     assert asset["field_sources"]["purchase_uuid"] == "user"
     assert asset["warranty"] == warranty
@@ -169,7 +179,7 @@ async def test_purchase_cleared_returns_to_the_hub_and_keeps_warranty(
     reload.assert_called_once()
 
 
-async def test_deployment_change_returns_to_the_hub_and_leaves_lifecycle_alone(
+async def test_deployment_change_returns_to_its_section_and_leaves_lifecycle_alone(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
     area_registry: ar.AreaRegistry,
@@ -190,7 +200,7 @@ async def test_deployment_change_returns_to_the_hub_and_leaves_lifecycle_alone(
         )
 
     asset = manager.asset(ASSET_UUID)
-    assert saved["step_id"] == HUB_STEP
+    assert saved["step_id"] == INSTALLATION_SECTION
     assert flow._selected_asset_uuid == ASSET_UUID
     assert asset[CONF_DEPLOYMENT_STATE] == DEPLOYMENT_STATE_DEPLOYED
     assert asset[CONF_HA_AREA_ID] == office.id
@@ -200,7 +210,7 @@ async def test_deployment_change_returns_to_the_hub_and_leaves_lifecycle_alone(
     reload.assert_called_once()
 
 
-async def test_deployment_resubmission_returns_to_the_hub_without_reloading(
+async def test_deployment_resubmission_returns_to_its_section_without_reloading(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
 ) -> None:
@@ -215,18 +225,18 @@ async def test_deployment_resubmission_returns_to_the_hub_without_reloading(
             {CONF_DEPLOYMENT_STATE: DEPLOYMENT_STATE_UNKNOWN}
         )
 
-    assert saved["step_id"] == HUB_STEP
+    assert saved["step_id"] == INSTALLATION_SECTION
     assert manager._data == before
     manager._store.async_save.assert_not_awaited()
     reload.assert_not_called()
 
 
-async def test_confirmed_not_deployed_clears_the_area_and_returns_to_the_hub(
+async def test_confirmed_not_deployed_clears_the_area_and_returns_to_its_section(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
     area_registry: ar.AreaRegistry,
 ) -> None:
-    """Installation & location: the Area-clearing confirmation ends on the hub."""
+    """Installation & location: the Area-clearing confirmation ends there."""
     office = area_registry.async_create("Office")
     data = deepcopy(asset_store_data)
     asset_data = data["assets"][ASSET_UUID]
@@ -250,7 +260,7 @@ async def test_confirmed_not_deployed_clears_the_area_and_returns_to_the_hub(
         )
 
     asset = manager.asset(ASSET_UUID)
-    assert saved["step_id"] == HUB_STEP
+    assert saved["step_id"] == INSTALLATION_SECTION
     assert flow._selected_asset_uuid == ASSET_UUID
     assert asset[CONF_DEPLOYMENT_STATE] == DEPLOYMENT_STATE_NOT_DEPLOYED
     assert asset[CONF_HA_AREA_ID] is None
@@ -275,12 +285,12 @@ async def test_active_asset_may_be_not_deployed(
     )
 
     asset = manager.asset(ASSET_UUID)
-    assert saved["step_id"] == HUB_STEP
+    assert saved["step_id"] == INSTALLATION_SECTION
     assert asset["lifecycle"]["status"] == LIFECYCLE_STATUS_ACTIVE
     assert asset[CONF_DEPLOYMENT_STATE] == DEPLOYMENT_STATE_NOT_DEPLOYED
 
 
-async def test_lifecycle_change_returns_to_the_hub_and_appends_history(
+async def test_lifecycle_change_returns_to_its_section_and_appends_history(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
 ) -> None:
@@ -301,7 +311,7 @@ async def test_lifecycle_change_returns_to_the_hub_and_appends_history(
 
     asset = manager.asset(ASSET_UUID)
     history = manager.lifecycle_events_for_asset(ASSET_UUID)
-    assert saved["step_id"] == HUB_STEP
+    assert saved["step_id"] == LIFECYCLE_SECTION
     assert flow._selected_asset_uuid == ASSET_UUID
     assert asset["lifecycle"]["status"] == LIFECYCLE_STATUS_ACTIVE
     assert asset[CONF_DEPLOYMENT_STATE] == deployment
@@ -328,7 +338,7 @@ async def test_lifecycle_history_is_append_only_across_transitions(
     )
 
     history = manager.lifecycle_events_for_asset(ASSET_UUID)
-    assert saved["step_id"] == HUB_STEP
+    assert saved["step_id"] == LIFECYCLE_SECTION
     assert len(first) == 1
     assert len(history) == 2
     assert history[0] == first[0]
@@ -336,7 +346,7 @@ async def test_lifecycle_history_is_append_only_across_transitions(
     assert history[-1]["to_status"] == LIFECYCLE_STATUS_RETIRED
 
 
-async def test_same_lifecycle_status_returns_to_the_hub_without_a_transition(
+async def test_same_lifecycle_status_returns_to_its_section_without_a_transition(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
 ) -> None:
@@ -354,18 +364,18 @@ async def test_same_lifecycle_status_returns_to_the_hub_without_a_transition(
             {CONF_LIFECYCLE_STATUS: LIFECYCLE_STATUS_ACTIVE}
         )
 
-    assert saved["step_id"] == HUB_STEP
+    assert saved["step_id"] == LIFECYCLE_SECTION
     assert flow._selected_asset_uuid == ASSET_UUID
     assert manager._data == before
     manager._store.async_save.assert_not_awaited()
     reload.assert_not_called()
 
 
-async def test_confirmed_disposed_returns_to_the_hub_and_leaves_deployment(
+async def test_confirmed_disposed_returns_to_its_section_and_leaves_deployment(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
 ) -> None:
-    """Lifecycle: disposal needs its own confirmation and ends on the hub."""
+    """Lifecycle: disposal needs its own confirmation and ends in its section."""
     manager = _manager(hass, asset_store_data)
     flow = await _hub_flow(hass, manager)
     identity = _identity(manager, ASSET_UUID)
@@ -387,7 +397,7 @@ async def test_confirmed_disposed_returns_to_the_hub_and_leaves_deployment(
         )
 
     asset = manager.asset(ASSET_UUID)
-    assert saved["step_id"] == HUB_STEP
+    assert saved["step_id"] == LIFECYCLE_SECTION
     assert flow._selected_asset_uuid == ASSET_UUID
     assert asset["lifecycle"]["status"] == LIFECYCLE_STATUS_DISPOSED
     assert asset[CONF_DEPLOYMENT_STATE] == deployment
@@ -427,7 +437,7 @@ async def test_each_editor_reports_its_result_once(
     payload: dict,
     result: str,
 ) -> None:
-    """Every direct editor names what it did, on the hub it returns to."""
+    """Every direct editor names what it did, once, in the section it returns to."""
     manager = _manager(hass, asset_store_data)
     flow = await _hub_flow(hass, manager)
     if step == "edit_asset_metadata":
@@ -438,22 +448,24 @@ async def test_each_editor_reports_its_result_once(
 
     saved = await getattr(flow, f"async_step_{step}")(payload)
 
-    assert saved["step_id"] == HUB_STEP
+    assert saved["step_id"] == SECTION_OF[step]
     assert saved["description_placeholders"]["result"] == result
 
-    reopened = await flow.async_step_manage_asset_menu()
+    reopened = await getattr(flow, f"async_step_{SECTION_OF[step]}")()
+    hub = await flow.async_step_manage_asset_menu()
 
     assert reopened["description_placeholders"]["result"] == ""
+    assert hub["description_placeholders"]["result"] == ""
 
 
-async def test_the_hub_after_a_save_reads_the_current_manager(
+async def test_the_section_after_a_save_reads_the_current_manager(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
 ) -> None:
-    """The hub renders post-mutation data, never the pre-mutation snapshot.
+    """The section renders post-mutation data, never the pre-mutation snapshot.
 
     The manager is swapped underneath the flow the way a reload swaps it, so
-    a hub reading a cached Asset would still show the old identity.
+    a section reading a cached Asset would still show the old identity.
     """
     manager = _manager(hass, asset_store_data)
     flow, entry = _options_flow(hass, manager)
@@ -476,7 +488,7 @@ async def test_the_hub_after_a_save_reads_the_current_manager(
     ):
         saved = await flow.async_step_edit_asset_metadata(edit)
 
-    assert saved["step_id"] == HUB_STEP
+    assert saved["step_id"] == DETAILS_SECTION
     assert flow._manager is entry.runtime_data
     assert flow._manager is not manager
     assert saved["description_placeholders"]["asset"] == (

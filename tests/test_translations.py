@@ -287,7 +287,7 @@ def test_every_menu_action_and_step_has_translation(language: str) -> None:
         "remove_related_device",
     }
     assert set(steps["asset_replacement"]["menu_options"]) == {
-        "manage_asset_menu",
+        "asset_lifecycle_replacement_menu",
         "manage_asset_replacement",
         "replacement_replaces",
     }

@@ -251,7 +251,7 @@
       "asset_replacement": {
         "description": "{asset}\n\n{result}\n\n**Korvaaminen**\n{replacement}\n\nKorvaussuhde kirjataan aina uudesta laitteesta.",
         "menu_options": {
-          "manage_asset_menu": "← Takaisin laitteen hallintaan",
+          "asset_lifecycle_replacement_menu": "← Takaisin elinkaareen ja korvaamiseen",
           "manage_asset_replacement": "Hallitse nykyistä korvaussuhdetta",
           "replacement_replaces": "Tämä laite korvaa…"
         },
@@ -491,7 +491,7 @@
         "title": "Hallitse laitetta"
       },
       "asset_details_warranty_menu": {
-        "description": "{asset}\n\n**Perustiedot**\n{details}\n\n**Osto**\n{purchase}\n\n**Takuu**\n{warranty}",
+        "description": "{asset}\n\n{result}\n\n**Perustiedot**\n{details}\n\n**Osto**\n{purchase}\n\n**Takuu**\n{warranty}",
         "menu_options": {
           "change_asset_purchase": "Vaihda ostoslinkitystä",
           "edit_asset_metadata": "Muokkaa perustietoja",
@@ -500,7 +500,7 @@
         "title": "Tiedot ja takuu"
       },
       "asset_installation_menu": {
-        "description": "{asset}\n\n**Asennus ja sijainti**\n{facts}",
+        "description": "{asset}\n\n{result}\n\n**Asennus ja sijainti**\n{facts}",
         "menu_options": {
           "asset_deployment": "Muokkaa asennusta ja sijaintia",
           "manage_asset_menu": "← Takaisin laitteen hallintaan"
@@ -508,7 +508,7 @@
         "title": "Asennus ja sijainti"
       },
       "asset_lifecycle_replacement_menu": {
-        "description": "{asset}\n\n**Elinkaari**\n{lifecycle}\n\n**Korvaaminen**\n{replacement}",
+        "description": "{asset}\n\n{result}\n\n**Elinkaari**\n{lifecycle}\n\n**Korvaaminen**\n{replacement}",
         "menu_options": {
           "asset_lifecycle": "Kirjaa elinkaaren muutos",
           "asset_replacement": "Hallitse korvaamista",

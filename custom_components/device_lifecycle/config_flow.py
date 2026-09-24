@@ -1506,10 +1506,10 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         manager whether their mutation was a canonical no-op (0.7.2 WP2 /
         F-2/F-3) pass `reload=False` to skip the redundant reload.
 
-        `destination` is where the person lands afterwards, defaulting to the
-        Asset hub. An operation reached through a submenu passes that submenu
-        instead, so somebody recording several replacements or relinking
-        several devices stays where they are working.
+        `destination` is where the person lands afterwards: the section or
+        submenu the operation was opened from, its immediate logical parent,
+        so somebody recording several replacements or editing several details
+        stays where they are working. Without one it is the Asset hub.
 
         `description` is the operation's completion key. The destination shows
         it once, and the wording behind the key comes from the existing
@@ -2824,7 +2824,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             description_placeholders=placeholders,
         )
 
-    def _show_section_menu(
+    async def _show_section_menu(
         self,
         step_id: str,
         actions: list[str],
@@ -2834,8 +2834,10 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
 
         Read-only like the hub: the facts are read from the current manager
         on every render and nothing is kept in the flow, so Back to the hub
-        writes nothing, reloads nothing and carries no result. `facts` maps
-        each description placeholder to its lines.
+        writes nothing and reloads nothing. An editor saved from here returns
+        here, and its result is shown once, then forgotten, so it never
+        follows Back to the hub. `facts` maps each description placeholder
+        to its lines.
         """
         asset = self._manager.asset(getattr(self, "_selected_asset_uuid", None))
         if asset is None:
@@ -2845,6 +2847,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             menu_options=[*actions, "manage_asset_menu"],
             description_placeholders={
                 "asset": _view_asset_label(asset),
+                "result": await self._result_message(asset),
                 **{key: "\n".join(lines) for key, lines in facts(asset).items()},
             },
         )
@@ -3097,7 +3100,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
         """Show the Details & warranty section of the hub."""
-        return self._show_section_menu(
+        return await self._show_section_menu(
             "asset_details_warranty_menu",
             ["edit_asset_metadata", "change_asset_purchase"],
             self._details_warranty_facts,
@@ -3108,7 +3111,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
         """Show the Installation & location section of the hub."""
-        return self._show_section_menu(
+        return await self._show_section_menu(
             "asset_installation_menu",
             ["asset_deployment"],
             lambda asset: {"facts": self._installation_facts(asset)},
@@ -3119,7 +3122,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
         """Show the Lifecycle & replacement section of the hub."""
-        return self._show_section_menu(
+        return await self._show_section_menu(
             "asset_lifecycle_replacement_menu",
             ["asset_lifecycle", "asset_replacement"],
             self._lifecycle_replacement_facts,
@@ -3147,7 +3150,10 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 errors["base"] = self._storage_error_key(err)
             else:
                 return await self._finish_asset_action(
-                    asset, "asset_updated", reload=changed
+                    asset,
+                    "asset_updated",
+                    reload=changed,
+                    destination=self.async_step_asset_details_warranty_menu,
                 )
 
         defaults = {
@@ -3211,6 +3217,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                         asset,
                         "asset_purchase_updated",
                         reload=changed,
+                        destination=self.async_step_asset_details_warranty_menu,
                     )
 
         return self.async_show_form(
@@ -3315,7 +3322,10 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                     errors={"base": self._storage_error_key(err)},
                 )
             return await self._finish_asset_action(
-                asset, "asset_lifecycle_unchanged", reload=changed
+                asset,
+                "asset_lifecycle_unchanged",
+                reload=changed,
+                destination=self.async_step_asset_lifecycle_replacement_menu,
             )
         if status == LIFECYCLE_STATUS_DISPOSED:
             self._pending_lifecycle_update = {
@@ -3340,7 +3350,10 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 errors={"base": self._storage_error_key(err)},
             )
         return await self._finish_asset_action(
-            asset, "asset_lifecycle_updated", reload=changed
+            asset,
+            "asset_lifecycle_updated",
+            reload=changed,
+            destination=self.async_step_asset_lifecycle_replacement_menu,
         )
 
     async def async_step_confirm_disposed(
@@ -3378,6 +3391,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                     asset,
                     "asset_lifecycle_updated",
                     reload=changed,
+                    destination=self.async_step_asset_lifecycle_replacement_menu,
                 )
         return self.async_show_form(
             step_id="confirm_disposed",
@@ -3410,7 +3424,8 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         menu_options = ["replacement_replaces"]
         if self._manager.replacement_records_for_asset(asset["asset_uuid"]):
             menu_options.append("manage_asset_replacement")
-        menu_options.append("manage_asset_menu")
+        # Back to the section this submenu was opened from.
+        menu_options.append("asset_lifecycle_replacement_menu")
         return self.async_show_menu(
             step_id="asset_replacement",
             menu_options=menu_options,
@@ -3953,7 +3968,10 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 errors={"base": self._storage_error_key(err)},
             )
         return await self._finish_asset_action(
-            asset, "asset_deployment_updated", reload=changed
+            asset,
+            "asset_deployment_updated",
+            reload=changed,
+            destination=self.async_step_asset_installation_menu,
         )
 
     async def async_step_confirm_not_deployed(
@@ -3988,6 +4006,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                     asset,
                     "asset_deployment_updated",
                     reload=changed,
+                    destination=self.async_step_asset_installation_menu,
                 )
 
         return self.async_show_form(

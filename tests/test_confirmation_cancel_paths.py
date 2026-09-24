@@ -114,7 +114,7 @@ async def test_declining_to_clear_the_area_returns_to_the_installation_editor(
     reload.assert_not_called()
 
 
-async def test_confirming_the_area_clear_still_saves_and_returns_to_the_hub(
+async def test_confirming_the_area_clear_still_saves_and_returns_to_its_section(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
     area_registry: ar.AreaRegistry,
@@ -133,7 +133,7 @@ async def test_confirming_the_area_clear_still_saves_and_returns_to_the_hub(
         )
 
     asset = manager.asset(ASSET_UUID)
-    assert confirmed["step_id"] == HUB_STEP
+    assert confirmed["step_id"] == "asset_installation_menu"
     assert asset[CONF_DEPLOYMENT_STATE] == DEPLOYMENT_STATE_NOT_DEPLOYED
     assert asset[CONF_HA_AREA_ID] is None
     reload.assert_called_once()
@@ -179,7 +179,7 @@ async def test_declining_disposal_returns_to_the_lifecycle_editor(
     reload.assert_not_called()
 
 
-async def test_confirming_disposal_still_appends_and_returns_to_the_hub(
+async def test_confirming_disposal_still_appends_and_returns_to_its_section(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
 ) -> None:
@@ -199,7 +199,7 @@ async def test_confirming_disposal_still_appends_and_returns_to_the_hub(
             {CONF_CONFIRM_DISPOSED: True}
         )
 
-    assert confirmed["step_id"] == HUB_STEP
+    assert confirmed["step_id"] == "asset_lifecycle_replacement_menu"
     assert manager.asset(ASSET_UUID)["lifecycle"]["status"] == (
         LIFECYCLE_STATUS_DISPOSED
     )

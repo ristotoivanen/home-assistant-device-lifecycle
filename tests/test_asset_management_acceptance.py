@@ -146,7 +146,7 @@ async def test_a_user_purchase_choice_survives_the_reload_it_triggers(
     )
 
     with _verified_store_readback(hass_storage):
-        hub = await hass.config_entries.options.async_configure(
+        section = await hass.config_entries.options.async_configure(
             flow_id,
             {CONF_PURCHASE_UUID: selection},
         )
@@ -158,9 +158,10 @@ async def test_a_user_purchase_choice_survives_the_reload_it_triggers(
         manager = entry.runtime_data
         assert manager is not original_manager
 
-        assert hub["type"] is FlowResultType.MENU
-        assert hub["step_id"] == HUB
-        assert hub["description_placeholders"]["result"] == (
+        # The save returns to Details & warranty, with its result once.
+        assert section["type"] is FlowResultType.MENU
+        assert section["step_id"] == "asset_details_warranty_menu"
+        assert section["description_placeholders"]["result"] == (
             "Linked purchase updated."
         )
 
@@ -179,14 +180,8 @@ async def test_a_user_purchase_choice_survives_the_reload_it_triggers(
         assert asset["installed_date"] == before["installed_date"]
         assert asset["asset_id"] == before["asset_id"]
 
-        # The person keeps working: the section and then the editor reopen
-        # on the new state.
-        section = await hass.config_entries.options.async_configure(
-            flow_id,
-            {"next_step_id": "asset_details_warranty_menu"},
-        )
-        assert section["type"] is FlowResultType.MENU
-        assert section["step_id"] == "asset_details_warranty_menu"
+        # The person keeps working: the editor reopens from the section on
+        # the new state.
         editor = await hass.config_entries.options.async_configure(
             flow_id,
             {"next_step_id": "change_asset_purchase"},
@@ -278,7 +273,7 @@ async def test_a_finnish_management_session_end_to_end(
         )
         assert hub["description_placeholders"]["result"] == ""
 
-        # Section menu → editor → same Asset's hub, from the new manager.
+        # Section menu → editor → the same section, from the new manager.
         section = await step({"next_step_id": "asset_details_warranty_menu"})
         assert section["step_id"] == "asset_details_warranty_menu"
         assert section["menu_options"] == [
@@ -289,15 +284,19 @@ async def test_a_finnish_management_session_end_to_end(
         await step({"next_step_id": "edit_asset_metadata"})
         edit = _identical_metadata_input(managers[-1].asset(ASSET_UUID))
         edit[CONF_ASSET_NAME] = "Työpajan laite"
-        hub = await step(edit)
+        section = await step(edit)
         managers.append(entry.runtime_data)
-        assert hub["step_id"] == HUB
-        assert hub["description_placeholders"]["asset"] == (
+        assert section["step_id"] == "asset_details_warranty_menu"
+        assert section["description_placeholders"]["asset"] == (
             "Työpajan laite · DL0007"
         )
-        assert hub["description_placeholders"]["result"] == (
+        assert section["description_placeholders"]["result"] == (
             "Perustiedot päivitettiin."
         )
+        # Back to the hub: the result stayed in the section it belongs to.
+        hub = await step({"next_step_id": HUB})
+        assert hub["step_id"] == HUB
+        assert hub["description_placeholders"]["result"] == ""
 
         # Replacement submenu, reached through Lifecycle & replacement: the
         # operation stays in the submenu.
@@ -318,7 +317,10 @@ async def test_a_finnish_management_session_end_to_end(
             "Korvaaminen päivitettiin."
         )
 
-        # Back is navigation: the result stayed in the submenu it belongs to.
+        # Back is navigation, to the section and then the hub: the result
+        # stayed in the submenu it belongs to.
+        section = await step({"next_step_id": "asset_lifecycle_replacement_menu"})
+        assert section["description_placeholders"]["result"] == ""
         hub = await step({"next_step_id": HUB})
         assert hub["step_id"] == HUB
         assert hub["description_placeholders"]["result"] == ""

@@ -54,7 +54,9 @@ SUBMENU = "asset_replacement"
 CREATE = "replacement_replaces"
 INVERSE = "replacement_replaced_by"
 MANAGE = "manage_asset_replacement"
-BACK = "manage_asset_menu"
+# The submenu's Back returns to the section; the section's to the hub.
+BACK = SECTION
+HUB_BACK = "manage_asset_menu"
 TRANSLATIONS = (
     Path(__file__).parents[1]
     / "custom_components"
@@ -97,7 +99,8 @@ async def _record_replaces(
     """From the hub, record that the current Asset replaces another one.
 
     The only creation path the UI offers: Lifecycle & replacement, Manage
-    replacement, This Asset replaces…, then back to the hub.
+    replacement, This Asset replaces…, then back through the section to the
+    hub.
     """
     await _configure(hass, flow_id, {"next_step_id": SECTION})
     submenu = await _configure(hass, flow_id, {"next_step_id": SUBMENU})
@@ -117,13 +120,14 @@ async def _record_replaces(
     assert recorded["step_id"] == SUBMENU
     assert recorded["description_placeholders"]["result"] == "Replacement updated."
     await _configure(hass, flow_id, {"next_step_id": BACK})
+    await _configure(hass, flow_id, {"next_step_id": HUB_BACK})
     return recorded
 
 
 async def _section_lines(hass: HomeAssistant, flow_id: str) -> list[str]:
     """Open Lifecycle & replacement from the hub, read it, and go back."""
     section = await _configure(hass, flow_id, {"next_step_id": SECTION})
-    await _configure(hass, flow_id, {"next_step_id": BACK})
+    await _configure(hass, flow_id, {"next_step_id": HUB_BACK})
     return section["description_placeholders"]["replacement"].split("\n")
 
 
@@ -132,6 +136,7 @@ async def _submenu_options(hass: HomeAssistant, flow_id: str) -> list[str]:
     await _configure(hass, flow_id, {"next_step_id": SECTION})
     submenu = await _configure(hass, flow_id, {"next_step_id": SUBMENU})
     await _configure(hass, flow_id, {"next_step_id": BACK})
+    await _configure(hass, flow_id, {"next_step_id": HUB_BACK})
     return submenu["menu_options"]
 
 
