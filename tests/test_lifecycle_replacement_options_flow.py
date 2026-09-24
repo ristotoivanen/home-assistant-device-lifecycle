@@ -688,9 +688,11 @@ async def test_void_confirmation_guards_errors_and_disappearing_asset(
         )
 
     assert initial["step_id"] == "confirm_void_replacement"
-    assert unconfirmed["step_id"] == "manage_asset_replacement"
-    assert not unconfirmed["errors"]
-    assert empty_reason["errors"] == {"base": "replacement_void_reason_required"}
+    assert unconfirmed["step_id"] == "confirm_void_replacement"
+    assert unconfirmed["errors"] == {CONF_CONFIRM_VOID: "void_confirmation_required"}
+    assert empty_reason["errors"] == {
+        CONF_VOID_REASON: "replacement_void_reason_required"
+    }
     assert failed["errors"] == {"base": "asset_store_error"}
 
     manager2 = _manager(hass)

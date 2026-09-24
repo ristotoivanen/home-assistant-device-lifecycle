@@ -3724,6 +3724,13 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             )
         if user_input is None:
             return self._show_correct_replacement_form(asset, record)
+        if not str(user_input.get(CONF_VOID_REASON) or "").strip():
+            return self._show_correct_replacement_form(
+                asset,
+                record,
+                user_input=user_input,
+                errors={CONF_VOID_REASON: "correction_reason_required"},
+            )
         try:
             await self._manager.async_correct_asset_replacement(
                 record["replacement_uuid"],
@@ -3774,14 +3781,14 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         errors: dict[str, str] = {}
         if user_input is not None:
             void_reason = str(user_input.get(CONF_VOID_REASON) or "")
-            if not user_input.get(CONF_CONFIRM_VOID):
-                # Declining leaves the record exactly as it is and returns to
-                # the editor the void was started from.
-                del self._pending_replacement_uuid
-                return self._show_manage_replacement_form(asset)
+            # Nothing is voided until both are given. The button says Void, so
+            # an unconfirmed submit stays here with the reason kept, rather
+            # than going back as if it had been done; the X leaves unchanged.
             if not void_reason.strip():
-                errors["base"] = "replacement_void_reason_required"
-            else:
+                errors[CONF_VOID_REASON] = "replacement_void_reason_required"
+            if not user_input.get(CONF_CONFIRM_VOID):
+                errors[CONF_CONFIRM_VOID] = "void_confirmation_required"
+            if not errors:
                 try:
                     await self._manager.async_void_asset_replacement(
                         record["replacement_uuid"],
@@ -4065,7 +4072,10 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         current_device_id = _primary_device_id(asset)
         fields: dict[Any, Any] = {}
         if current_device_id is None:
-            fields[vol.Required(CONF_DEVICE_ID)] = _physical_device_selector(
+            # Optional in the schema only: nothing is linked until a device is
+            # chosen, and the flow names what is missing. A required field
+            # would be stopped by the frontend with its generic message.
+            fields[vol.Optional(CONF_DEVICE_ID)] = _physical_device_selector(
                 self.hass,
                 multiple=False,
             )
@@ -4159,7 +4169,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             return self._show_primary_device_form(
                 asset,
                 user_input=user_input,
-                errors={"base": "device_missing"},
+                errors={CONF_DEVICE_ID: "primary_device_required"},
             )
         if (
             current_device_id is not None
@@ -4231,10 +4241,14 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         user_input: dict[str, Any] | None = None,
         errors: dict[str, str] | None = None,
     ) -> ConfigFlowResult:
-        """Show one DeviceSelector for adding a related relationship."""
+        """Show one DeviceSelector for adding a related relationship.
+
+        Optional in the schema only, like the primary device: nothing is added
+        until a device is chosen, and the flow names what is missing.
+        """
         schema = vol.Schema(
             {
-                vol.Required(CONF_DEVICE_ID): _physical_device_selector(
+                vol.Optional(CONF_DEVICE_ID): _physical_device_selector(
                     self.hass,
                     multiple=False,
                 )
@@ -4272,7 +4286,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             return self._show_add_related_device_form(
                 asset,
                 user_input=user_input,
-                errors={"base": "device_missing"},
+                errors={CONF_DEVICE_ID: "related_device_to_add_required"},
             )
 
         _device, validation_error = self._validate_ha_link_target(

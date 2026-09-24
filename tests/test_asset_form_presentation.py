@@ -34,6 +34,11 @@ from custom_components.device_lifecycle.storage import AssetStoreManager
 from .conftest import ASSET_UUID, DEVICE_ID, PURCHASE_UUID
 from .test_options_flow import _manager, _options_flow
 
+# The last line of every edit or action form: how to leave without saving.
+EXIT = {
+    "en": "Close the window without saving by using the X button in the upper-left corner.",
+    "fi": "Sulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
+}
 TRANSLATIONS = (
     Path(__file__).parents[1]
     / "custom_components"
@@ -177,6 +182,7 @@ async def test_the_lifecycle_form_says_what_retired_is_not(
         status,
         retired,
         temporary,
+        EXIT[language],
     ]
 
 
@@ -227,7 +233,7 @@ async def test_the_installation_form_shows_the_current_state_first(
     form = await flow.async_step_asset_deployment()
     lines = _rendered(language, form)
 
-    assert lines == ["Workshop device · DL0007", *facts, guidance]
+    assert lines == ["Workshop device · DL0007", *facts, guidance, EXIT[language]]
     assert workshop.id not in "\n".join(lines)
 
 
@@ -268,7 +274,7 @@ async def test_the_purchase_form_keeps_the_warranty_apart(
 
     lines = _rendered(language, await flow.async_step_change_asset_purchase())
 
-    assert lines == expected
+    assert lines == [*expected, EXIT[language]]
     assert PURCHASE_UUID not in "\n".join(lines)
 
 
@@ -302,10 +308,12 @@ async def test_short_forms_say_only_what_they_are_for(
     assert _rendered(language, await flow.async_step_edit_asset_metadata()) == [
         "Workshop device · DL0007",
         details,
+        EXIT[language],
     ]
     assert _rendered(language, await flow.async_step_replacement_replaces()) == [
         "Workshop device · DL0007",
         replaces,
+        EXIT[language],
     ]
 
 
@@ -336,11 +344,13 @@ async def test_replacement_management_names_the_relationship_on_its_own_line(
         f"Relationship to correct: {relationship}",
         ("The old relationship is voided and the corrected one saved in the same "
         "step."),
+        EXIT["en"],
     ]
     assert _rendered("en", void) == [
         "New heater · DL0002",
         f"Relationship to void: {relationship}",
         "The relationship stops being current; its history is kept.",
+        EXIT["en"],
     ]
 
 

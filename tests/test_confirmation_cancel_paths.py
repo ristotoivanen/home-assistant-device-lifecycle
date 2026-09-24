@@ -2,8 +2,10 @@
 
 Three operations ask before they act: clearing an Area when an Asset stops
 being installed, recording a disposal, and voiding a replacement. Declining
-any of them is a decision, not an error — it hands back the editor the
-person came from and leaves every byte of stored data alone.
+the first two is a decision, not an error — it hands back the editor the
+person came from. A void's button says Void, so an unconfirmed void stays
+on its form and names what is missing; the window's X is how to leave it.
+Either way every byte of stored data is left alone.
 """
 
 from __future__ import annotations
@@ -209,10 +211,10 @@ async def test_confirming_disposal_still_appends_and_returns_to_its_section(
     reload.assert_called_once()
 
 
-async def test_declining_a_void_returns_to_the_replacement_manage_editor(
+async def test_an_unconfirmed_void_stays_on_its_form_and_changes_nothing(
     hass: HomeAssistant,
 ) -> None:
-    """The record survives the question intact, still active."""
+    """The record survives the question intact, and the reason is kept."""
     manager = _manager(hass)
     flow, old, record = await _replacement_under_management(hass, manager)
 
@@ -236,8 +238,14 @@ async def test_declining_a_void_returns_to_the_replacement_manage_editor(
         )
 
     assert declined["type"] is FlowResultType.FORM
-    assert declined["step_id"] == "manage_asset_replacement"
-    assert not declined["errors"]
+    assert declined["step_id"] == "confirm_void_replacement"
+    assert declined["errors"] == {CONF_CONFIRM_VOID: "void_confirmation_required"}
+    reason = next(
+        marker
+        for marker in declined["data_schema"].schema
+        if marker == CONF_VOID_REASON
+    )
+    assert reason.description["suggested_value"] == "Changed my mind"
     assert flow._selected_asset_uuid == old["asset_uuid"]
     assert manager._data == before
     assert manager.replacement_records_for_asset(old["asset_uuid"]) == (
@@ -296,7 +304,7 @@ async def test_a_confirmed_void_still_needs_its_reason(
         )
 
     assert blocked["step_id"] == "confirm_void_replacement"
-    assert blocked["errors"] == {"base": "replacement_void_reason_required"}
+    assert blocked["errors"] == {CONF_VOID_REASON: "replacement_void_reason_required"}
     assert manager._data == before
     assert manager.replacement_record(record["replacement_uuid"])["voided_at"] is (
         None

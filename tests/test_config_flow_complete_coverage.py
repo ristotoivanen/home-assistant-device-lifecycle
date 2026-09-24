@@ -333,7 +333,7 @@ async def test_primary_relationship_invalid_input_and_unlink_failure_retry(
         {CONF_ASSET_UUID: empty_asset["asset_uuid"]}
     )
     missing_target = await empty_flow.async_step_manage_primary_device({})
-    assert missing_target["errors"] == {"base": "device_missing"}
+    assert missing_target["errors"] == {CONF_DEVICE_ID: "primary_device_required"}
 
 
 async def test_related_relationship_empty_stale_and_persistence_recovery(
@@ -346,7 +346,7 @@ async def test_related_relationship_empty_stale_and_persistence_recovery(
     await flow.async_step_manage_asset({CONF_ASSET_UUID: asset["asset_uuid"]})
 
     missing_add = await flow.async_step_add_related_device({})
-    assert missing_add["errors"] == {"base": "device_missing"}
+    assert missing_add["errors"] == {CONF_DEVICE_ID: "related_device_to_add_required"}
 
     no_relationship = await flow.async_step_remove_related_device()
     assert no_relationship["step_id"] == "ha_relationship"

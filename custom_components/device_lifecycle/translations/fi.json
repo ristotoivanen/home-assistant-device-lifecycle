@@ -16,7 +16,7 @@
       "step": {
         "user": {
           "title": "Lisää ostos",
-          "description": "Tallenna ostos, vaikka laitteita ei olisi vielä saapunut tai lisätty Home Assistantiin. Voit valita Home Assistant -laitteet nyt tai liittää laitteita ostokseen myöhemmin.",
+          "description": "Tallenna ostos, vaikka laitteita ei olisi vielä saapunut tai lisätty Home Assistantiin. Voit valita Home Assistant -laitteet nyt tai liittää laitteita ostokseen myöhemmin.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
           "data": {
             "device_ids": "Home Assistant -laitteet (valinnainen)",
             "purchase_name": "Ostoksen nimi",
@@ -42,7 +42,7 @@
         },
         "reconfigure": {
           "title": "Muokkaa ostosta",
-          "description": "Ostokseen liitetyt elinkaarilaitteet:\n\n{linked_assets}\n\nYllä oleva luettelo on tässä näkymässä vain tiedoksi. Muokkaa ostoksen tietoja tai Home Assistantin laiterekisterin laitteita alla. Ostos säilyy ilman laitteitakin. Laiterekisterin laitteen poistaminen poistaa tämän ostoksen Elinkaari-entiteetin, mutta laite ja sen elinkaaritunnus säilyvät. Muuta manuaalisesti hallitun laitteen ostosta kohdasta Hallitse laitetta → Liitä ostokseen.",
+          "description": "Ostokseen liitetyt elinkaarilaitteet:\n\n{linked_assets}\n\nYllä oleva luettelo on tässä näkymässä vain tiedoksi. Muokkaa ostoksen tietoja tai Home Assistantin laiterekisterin laitteita alla. Ostos säilyy ilman laitteitakin. Laiterekisterin laitteen poistaminen poistaa tämän ostoksen Elinkaari-entiteetin, mutta laite ja sen elinkaaritunnus säilyvät. Muuta manuaalisesti hallitun laitteen ostosta kohdasta Hallitse laitetta → Liitä ostokseen.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
           "data": {
             "device_ids": "Home Assistant -laitteet (valinnainen)",
             "purchase_name": "Ostoksen nimi",
@@ -87,7 +87,7 @@
       "step": {
         "user": {
           "title": "Lisää käyttötuntiseuranta",
-          "description": "Valitse ensin fyysinen laite ja käyntiajan tunnistustapa. Seuraavaksi valitaan siihen sopiva lähde-entiteetti.",
+          "description": "Valitse ensin fyysinen laite ja käyntiajan tunnistustapa. Seuraavaksi valitaan siihen sopiva lähde-entiteetti.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
           "data": {
             "device_id": "Seurattava laite",
             "runtime_mode": "Seurantatapa"
@@ -99,7 +99,7 @@
         },
         "runtime_source": {
           "title": "Määritä käyntiajan lähde",
-          "description": "Lähdelista suodatetaan valitun seurantatavan mukaan. Tehoseurannassa näytetään vain varsinaiset tehosensorit ja päällä-tilassa järkevät on/off-entiteetit.",
+          "description": "Lähdelista suodatetaan valitun seurantatavan mukaan. Tehoseurannassa näytetään vain varsinaiset tehosensorit ja päällä-tilassa järkevät on/off-entiteetit.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
           "data": {
             "source_entity_id": "Lähde-entiteetti",
             "power_threshold": "Tehoraja",
@@ -113,7 +113,7 @@
         },
         "reconfigure": {
           "title": "Muokkaa käyttötuntiseurantaa",
-          "description": "Valitse käyntiajan tunnistustapa. Seuraavaksi valitaan siihen sopiva lähde-entiteetti. Seurattava fyysinen laite ei muutu.",
+          "description": "Valitse käyntiajan tunnistustapa. Seuraavaksi valitaan siihen sopiva lähde-entiteetti. Seurattava fyysinen laite ei muutu.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
           "data": {
             "runtime_mode": "Seurantatapa"
           },
@@ -123,7 +123,7 @@
         },
         "reconfigure_source": {
           "title": "Määritä käyntiajan lähde",
-          "description": "Lähdelista suodatetaan valitun seurantatavan mukaan. Tehoraja ja hystereesi näytetään vain tehotilassa.",
+          "description": "Lähdelista suodatetaan valitun seurantatavan mukaan. Tehoraja ja hystereesi näytetään vain tehotilassa.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
           "data": {
             "source_entity_id": "Lähde-entiteetti",
             "power_threshold": "Tehoraja",
@@ -217,9 +217,13 @@
       "replacement_self_reference": "Laite ei voi korvata itseään.",
       "replacement_successor_conflict": "Seuraavalla laitteella on jo aktiivinen edeltäjä.",
       "replacement_target_required": "Valitse laite. Korvaussuhdetta ei kirjata ennen valintaa.",
-      "replacement_void_reason_required": "Anna korvaussuhteen mitätöinnille syy.",
+      "replacement_void_reason_required": "Anna mitätöinnin syy.",
       "manual_warranty_date_required": "Anna manuaalinen takuun päättymispäivä.",
-      "service_device_not_allowed": "Valittu kohde on Home Assistant -palvelu eikä fyysinen laite."
+      "service_device_not_allowed": "Valittu kohde on Home Assistant -palvelu eikä fyysinen laite.",
+      "correction_reason_required": "Anna vanhan suhteen korjaamisen syy.",
+      "void_confirmation_required": "Vahvista suhteen mitätöinti.",
+      "primary_device_required": "Valitse ensisijainen Home Assistant -laite.",
+      "related_device_to_add_required": "Valitse lisättävä Home Assistant -laite."
     },
     "step": {
       "asset_deployment": {
@@ -230,7 +234,7 @@
           "ha_area_id": "Sijainti",
           "installed_date": "Asennuspäivä"
         },
-        "description": "{asset}\n\n{facts}\n\nEi asennettu tarkoittaa, että laite on irrotettu tai varastossa mutta kuuluu edelleen laitekantaasi. Pysyvä käytöstä poisto, hävittäminen tai katoaminen kirjataan kohtaan Elinkaari.",
+        "description": "{asset}\n\n{facts}\n\nEi asennettu tarkoittaa, että laite on irrotettu tai varastossa mutta kuuluu edelleen laitekantaasi. Pysyvä käytöstä poisto, hävittäminen tai katoaminen kirjataan kohtaan Elinkaari.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
         "submit": "Tallenna ja palaa",
         "title": "Asennus ja sijainti"
       },
@@ -244,7 +248,7 @@
           "effective_date": "Valinnainen. Tätä päivää ehdotetaan, ja voit tyhjentää kentän.",
           "notes": "Valinnainen muistiinpano tallennetaan vain tähän muuttumattomaan tilamuutokseen."
         },
-        "description": "{asset}\n\nNykyinen tila: {current_status}\n\nKäytöstä poistettu tarkoittaa pysyvää tai tarkoituksellista käytöstä poistamista.\n\nTilapäinen irrotus tai varastointi kuuluu kohtaan Asennus ja sijainti → Ei asennettu.",
+        "description": "{asset}\n\nNykyinen tila: {current_status}\n\nKäytöstä poistettu tarkoittaa pysyvää tai tarkoituksellista käytöstä poistamista.\n\nTilapäinen irrotus tai varastointi kuuluu kohtaan Asennus ja sijainti → Ei asennettu.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
         "submit": "Tallenna ja palaa",
         "title": "Elinkaari"
       },
@@ -261,7 +265,7 @@
         "data": {
           "purchase_uuid": "Ostos"
         },
-        "description": "{asset}\n\nNykyinen ostos: {current_purchase}\n\nTällä lomakkeella muutetaan vain ostoslinkitystä. Takuu on laitteen oma tieto: ostoslinkityksen muuttaminen ei muuta takuuta.",
+        "description": "{asset}\n\nNykyinen ostos: {current_purchase}\n\nTällä lomakkeella muutetaan vain ostoslinkitystä. Takuu on laitteen oma tieto: ostoslinkityksen muuttaminen ei muuta takuuta.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
         "submit": "Tallenna ja palaa",
         "title": "Ostoslinkitys"
       },
@@ -279,12 +283,12 @@
         "data_description": {
           "device_id": "Valitse toisen Home Assistant -integraation omistama fyysinen laite."
         },
-        "description": "Valitse Home Assistant -laite muokattavien fyysisten tietojen esitäyttöä varten. Ulkoinen laite säilyy oman integraationsa omistuksessa.",
+        "description": "Valitse Home Assistant -laite muokattavien fyysisten tietojen esitäyttöä varten. Ulkoinen laite säilyy oman integraationsa omistuksessa.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
         "submit": "Jatka",
         "title": "Lisää Home Assistantista"
       },
       "quick_add_details": {
-        "description": "Tarkista fyysisen laitteen tiedot ennen pysyvän identiteetin luomista. Ehdotettuja arvoja voi muokata, eikä mitään tallenneta ennen lopullista vahvistusta.",
+        "description": "Tarkista fyysisen laitteen tiedot ennen pysyvän identiteetin luomista. Ehdotettuja arvoja voi muokata, eikä mitään tallenneta ennen lopullista vahvistusta.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
         "submit": "Jatka",
         "sections": {
           "identity": {
@@ -357,7 +361,7 @@
           "effective_date": "Valinnainen. Samaa päivää käytetään edeltävän laitteen eläkkeelle siirtämiseen, jos valittu.",
           "notes": "Tallennetaan vain muuttumattomaan korvaustietueeseen."
         },
-        "description": "Tarkista, miten {predecessor_name} korvataan. Hävitettyä tai kadonnutta edeltäjää ei siirretä automaattisesti eläkkeelle, ja käyttöönottopäivä säilyy.",
+        "description": "Tarkista, miten {predecessor_name} korvataan. Hävitettyä tai kadonnutta edeltäjää ei siirretä automaattisesti eläkkeelle, ja käyttöönottopäivä säilyy.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
         "submit": "Jatka",
         "title": "Korvauksen tiedot"
       },
@@ -365,7 +369,7 @@
         "data": {
           "confirm_quick_add": "Vahvista ja lisää laite"
         },
-        "description": "**Uusi laite**\n\nNimi: {asset_name}\n\nValmistaja / malli: {manufacturer_model}\n\nElinkaari: {lifecycle}\n\nElinkaaren voimaantulopäivä: {lifecycle_date}\n\nKäyttötila: {deployment}\n\nKäyttöönottopäivä: {installed_date}\n\nAlue: {area}\n\nOstos: {purchase}\n\nTakuu: {warranty}\n\nHome Assistant -laite: {ha_device}\n\n{disposed_warning}\n\n**Korvauksen tarkistus**\n\nVanha laite: {predecessor_name}\n\nElinkaari: {predecessor_lifecycle}\n\nKäyttötila: {predecessor_deployment}\n\nAlue: {predecessor_area}\n\nSyy: {replacement_reason}\n\nVoimaantulopäivä: {replacement_date}\n\nMitään ei tallenneta ennen vahvistusta.",
+        "description": "**Uusi laite**\n\nNimi: {asset_name}\n\nValmistaja / malli: {manufacturer_model}\n\nElinkaari: {lifecycle}\n\nElinkaaren voimaantulopäivä: {lifecycle_date}\n\nKäyttötila: {deployment}\n\nKäyttöönottopäivä: {installed_date}\n\nAlue: {area}\n\nOstos: {purchase}\n\nTakuu: {warranty}\n\nHome Assistant -laite: {ha_device}\n\n{disposed_warning}\n\n**Korvauksen tarkistus**\n\nVanha laite: {predecessor_name}\n\nElinkaari: {predecessor_lifecycle}\n\nKäyttötila: {predecessor_deployment}\n\nAlue: {predecessor_area}\n\nSyy: {replacement_reason}\n\nVoimaantulopäivä: {replacement_date}\n\nMitään ei tallenneta ennen vahvistusta.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
         "submit": "Lisää laite",
         "title": "Vahvista laite"
       },
@@ -373,7 +377,7 @@
         "data": {
           "confirm_area_clear": "Vahvista sijainnin poistaminen"
         },
-        "description": "{asset}\n\nPoistettava sijainti: {current_area}\n\nKun laite merkitään tilaan Ei asennettu, sen sijainti poistetaan. Asennuspäivä säilyy, ellet muuttanut sitä edellisellä lomakkeella.",
+        "description": "{asset}\n\nPoistettava sijainti: {current_area}\n\nKun laite merkitään tilaan Ei asennettu, sen sijainti poistetaan. Asennuspäivä säilyy, ellet muuttanut sitä edellisellä lomakkeella.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
         "submit": "Tallenna ja palaa",
         "title": "Poistetaanko sijainti?"
       },
@@ -381,7 +385,7 @@
         "data": {
           "confirm_disposed": "Vahvista hävitetty-tila"
         },
-        "description": "{asset}\n\nMerkitäänkö laite hävitetyksi?\n\nLaitetta tai sen historiaa ei poisteta, ja tilan voi korjata myöhemmällä elinkaarimuutoksella.",
+        "description": "{asset}\n\nMerkitäänkö laite hävitetyksi?\n\nLaitetta tai sen historiaa ei poisteta, ja tilan voi korjata myöhemmällä elinkaarimuutoksella.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
         "submit": "Tallenna ja palaa",
         "title": "Vahvista hävitetty-tila"
       },
@@ -390,7 +394,7 @@
           "confirm_void": "Vahvista mitätöinti",
           "void_reason": "Mitätöinnin syy"
         },
-        "description": "{asset}\n\nMitätöitävä suhde: {relationship}\n\nSuhde ei ole enää voimassa, mutta sen historiatieto säilyy.",
+        "description": "{asset}\n\nMitätöitävä suhde: {relationship}\n\nSuhde ei ole enää voimassa, mutta sen historiatieto säilyy.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
         "submit": "Mitätöi ja palaa",
         "title": "Mitätöi korvaussuhde"
       },
@@ -403,7 +407,7 @@
           "successor_asset_uuid": "Seuraava laite",
           "void_reason": "Vanhan suhteen korjaamisen syy"
         },
-        "description": "{asset}\n\nKorjattava suhde: {relationship}\n\nVanha suhde mitätöidään ja korjattu suhde tallennetaan samalla kertaa.",
+        "description": "{asset}\n\nKorjattava suhde: {relationship}\n\nVanha suhde mitätöidään ja korjattu suhde tallennetaan samalla kertaa.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
         "submit": "Tallenna ja palaa",
         "title": "Korjaa korvaussuhde"
       },
@@ -419,7 +423,7 @@
           "serial_number": "Sarjanumero",
           "sw_version": "Ohjelmistoversio"
         },
-        "description": "{asset}\n\nMuokkaa laitteen perustietoja.",
+        "description": "{asset}\n\nMuokkaa laitteen perustietoja.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
         "submit": "Tallenna ja palaa",
         "title": "Perustiedot"
       },
@@ -438,7 +442,7 @@
           "device_id": "Home Assistant -laite",
           "ha_relationship_action": "Toiminto"
         },
-        "description": "{asset}\n\nNykyinen ensisijainen Home Assistant -laite: {current_device}\n\nMuutos ei vaikuta laitteen tunnukseen eikä itse Home Assistant -laitteeseen.",
+        "description": "{asset}\n\nNykyinen ensisijainen Home Assistant -laite: {current_device}\n\nMuutos ei vaikuta laitteen tunnukseen eikä itse Home Assistant -laitteeseen.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
         "submit": "Tallenna ja palaa",
         "title": "Hallitse ensisijaista Home Assistant -laitetta"
       },
@@ -446,7 +450,7 @@
         "data": {
           "device_id": "Home Assistant -laite"
         },
-        "description": "{asset}\n\nEnsisijainen: {current_primary}\nLiittyvät: {related_devices}\n\nLiittyvä Home Assistant -laite on vain viite: se ei muuta laitteen tietoja eikä itse Home Assistant -laitetta.",
+        "description": "{asset}\n\nEnsisijainen: {current_primary}\nLiittyvät: {related_devices}\n\nValitse lisättävä Home Assistant -laite. Se on vain viite: se ei muuta laitteen tietoja eikä itse Home Assistant -laitetta.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
         "submit": "Lisää ja palaa",
         "title": "Lisää liittyvä Home Assistant -laite"
       },
@@ -454,7 +458,7 @@
         "data": {
           "device_id": "Liittyvä Home Assistant -laite"
         },
-        "description": "{asset}\n\nLiittyvät: {related_devices}\n\nMyös Home Assistantista jo poistuneet viitteet voi valita.",
+        "description": "{asset}\n\nLiittyvät: {related_devices}\n\nValitse poistettava Home Assistant -laite. Myös Home Assistantista jo poistuneet viitteet voi valita.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
         "submit": "Poista ja palaa",
         "title": "Poista liittyvä Home Assistant -laite"
       },
@@ -521,7 +525,7 @@
           "replacement_action": "Toiminto",
           "replacement_uuid": "Aktiivinen suhde"
         },
-        "description": "{asset}\n\nValitse korjattava tai mitätöitävä aktiivinen suhde.",
+        "description": "{asset}\n\nValitse korjattava tai mitätöitävä aktiivinen suhde.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
         "submit": "Jatka",
         "title": "Hallitse korvaussuhdetta"
       },
@@ -532,7 +536,7 @@
           "replacement_reason": "Korvauksen syy",
           "replacement_target_asset_uuid": "Edeltävä laite"
         },
-        "description": "{asset}\n\nValitse vanha laite, jonka tämä laite korvaa.",
+        "description": "{asset}\n\nValitse vanha laite, jonka tämä laite korvaa.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
         "submit": "Tallenna ja palaa",
         "title": "Tämä laite korvaa…"
       }

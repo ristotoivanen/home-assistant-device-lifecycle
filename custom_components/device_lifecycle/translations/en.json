@@ -16,7 +16,7 @@
       "step": {
         "user": {
           "title": "Add purchase",
-          "description": "Record a Purchase even if no devices have arrived or been added to Home Assistant yet. You can link physical devices now or attach Assets to this Purchase later.",
+          "description": "Record a Purchase even if no devices have arrived or been added to Home Assistant yet. You can link physical devices now or attach Assets to this Purchase later.\n\nClose the window without saving by using the X button in the upper-left corner.",
           "data": {
             "device_ids": "Home Assistant devices (optional)",
             "purchase_name": "Purchase name",
@@ -42,7 +42,7 @@
         },
         "reconfigure": {
           "title": "Edit purchase",
-          "description": "Device Lifecycle Assets linked to this Purchase:\n\n{linked_assets}\n\nThe list above is read-only here. Edit Purchase details or Home Assistant Device Registry devices below. A Purchase remains valid with no devices. Removing a registry device removes its Lifecycle entity from this Purchase but preserves its Asset and Asset ID. Change a manually managed Asset's Purchase from Manage Asset → Link to Purchase.",
+          "description": "Device Lifecycle Assets linked to this Purchase:\n\n{linked_assets}\n\nThe list above is read-only here. Edit Purchase details or Home Assistant Device Registry devices below. A Purchase remains valid with no devices. Removing a registry device removes its Lifecycle entity from this Purchase but preserves its Asset and Asset ID. Change a manually managed Asset's Purchase from Manage Asset → Link to Purchase.\n\nClose the window without saving by using the X button in the upper-left corner.",
           "data": {
             "device_ids": "Home Assistant devices (optional)",
             "purchase_name": "Purchase name",
@@ -87,7 +87,7 @@
       "step": {
         "user": {
           "title": "Add runtime tracking",
-          "description": "First choose the physical device and runtime detection method. Next, select a source entity suitable for that method.",
+          "description": "First choose the physical device and runtime detection method. Next, select a source entity suitable for that method.\n\nClose the window without saving by using the X button in the upper-left corner.",
           "data": {
             "device_id": "Tracked device",
             "runtime_mode": "Tracking method"
@@ -99,7 +99,7 @@
         },
         "runtime_source": {
           "title": "Configure runtime source",
-          "description": "The source list is filtered for the selected tracking method. Power mode shows only actual power sensors; on-state mode shows sensible on/off entities.",
+          "description": "The source list is filtered for the selected tracking method. Power mode shows only actual power sensors; on-state mode shows sensible on/off entities.\n\nClose the window without saving by using the X button in the upper-left corner.",
           "data": {
             "source_entity_id": "Source entity",
             "power_threshold": "Power threshold",
@@ -113,7 +113,7 @@
         },
         "reconfigure": {
           "title": "Edit runtime tracking",
-          "description": "Choose the runtime detection method. Next, select a source entity suitable for that method. The tracked physical device is unchanged.",
+          "description": "Choose the runtime detection method. Next, select a source entity suitable for that method. The tracked physical device is unchanged.\n\nClose the window without saving by using the X button in the upper-left corner.",
           "data": {
             "runtime_mode": "Tracking method"
           },
@@ -123,7 +123,7 @@
         },
         "reconfigure_source": {
           "title": "Configure runtime source",
-          "description": "The source list is filtered for the selected tracking method. Power threshold and hysteresis are shown only in power mode.",
+          "description": "The source list is filtered for the selected tracking method. Power threshold and hysteresis are shown only in power mode.\n\nClose the window without saving by using the X button in the upper-left corner.",
           "data": {
             "source_entity_id": "Source entity",
             "power_threshold": "Power threshold",
@@ -217,9 +217,13 @@
       "replacement_self_reference": "An Asset cannot replace itself.",
       "replacement_successor_conflict": "The successor Asset already has an active predecessor.",
       "replacement_target_required": "Select a device. No replacement is recorded until you choose one.",
-      "replacement_void_reason_required": "Enter a non-empty reason for voiding the relationship.",
+      "replacement_void_reason_required": "Enter the reason for voiding the relationship.",
       "manual_warranty_date_required": "Enter a manual warranty end date.",
-      "service_device_not_allowed": "The selected item is a Home Assistant service rather than a physical device."
+      "service_device_not_allowed": "The selected item is a Home Assistant service rather than a physical device.",
+      "correction_reason_required": "Enter the reason for correcting the previous relationship.",
+      "void_confirmation_required": "Confirm that the relationship should be voided.",
+      "primary_device_required": "Select the primary Home Assistant device.",
+      "related_device_to_add_required": "Select the Home Assistant device to add."
     },
     "step": {
       "asset_deployment": {
@@ -230,7 +234,7 @@
           "ha_area_id": "Location",
           "installed_date": "Installation date"
         },
-        "description": "{asset}\n\n{facts}\n\nNot installed means the Asset is disconnected or in storage but still part of your inventory. Permanent removal, disposal or loss is recorded under Lifecycle.",
+        "description": "{asset}\n\n{facts}\n\nNot installed means the Asset is disconnected or in storage but still part of your inventory. Permanent removal, disposal or loss is recorded under Lifecycle.\n\nClose the window without saving by using the X button in the upper-left corner.",
         "submit": "Save and return",
         "title": "Installation & location"
       },
@@ -244,7 +248,7 @@
           "effective_date": "Optional. Today is suggested, and you can clear it.",
           "notes": "Optional note recorded only on this immutable transition."
         },
-        "description": "{asset}\n\nCurrent status: {current_status}\n\nRetired means permanent or deliberate removal from use.\n\nTemporary disconnection or storage belongs under Installation & location → Not installed.",
+        "description": "{asset}\n\nCurrent status: {current_status}\n\nRetired means permanent or deliberate removal from use.\n\nTemporary disconnection or storage belongs under Installation & location → Not installed.\n\nClose the window without saving by using the X button in the upper-left corner.",
         "submit": "Save and return",
         "title": "Lifecycle"
       },
@@ -261,7 +265,7 @@
         "data": {
           "purchase_uuid": "Purchase"
         },
-        "description": "{asset}\n\nCurrent Purchase: {current_purchase}\n\nThis form changes the Purchase link only. The warranty is the Asset's own detail: changing the Purchase link does not change the warranty.",
+        "description": "{asset}\n\nCurrent Purchase: {current_purchase}\n\nThis form changes the Purchase link only. The warranty is the Asset's own detail: changing the Purchase link does not change the warranty.\n\nClose the window without saving by using the X button in the upper-left corner.",
         "submit": "Save and return",
         "title": "Linked purchase"
       },
@@ -279,12 +283,12 @@
         "data_description": {
           "device_id": "Select one physical device owned by another Home Assistant integration."
         },
-        "description": "Choose a Home Assistant device to prefill editable physical details. The external device remains independently owned.",
+        "description": "Choose a Home Assistant device to prefill editable physical details. The external device remains independently owned.\n\nClose the window without saving by using the X button in the upper-left corner.",
         "submit": "Continue",
         "title": "Add from Home Assistant"
       },
       "quick_add_details": {
-        "description": "Review the physical Asset before permanent identity is created. Suggested values remain editable, and no data is stored until final confirmation.",
+        "description": "Review the physical Asset before permanent identity is created. Suggested values remain editable, and no data is stored until final confirmation.\n\nClose the window without saving by using the X button in the upper-left corner.",
         "submit": "Continue",
         "sections": {
           "identity": {
@@ -357,7 +361,7 @@
           "effective_date": "Optional. The same date is used for predecessor retirement if selected.",
           "notes": "Stored only on the immutable replacement record."
         },
-        "description": "Review how {predecessor_name} is replaced. Disposed and lost predecessors are never automatically retired; installation date is preserved.",
+        "description": "Review how {predecessor_name} is replaced. Disposed and lost predecessors are never automatically retired; installation date is preserved.\n\nClose the window without saving by using the X button in the upper-left corner.",
         "submit": "Continue",
         "title": "Replacement details"
       },
@@ -365,7 +369,7 @@
         "data": {
           "confirm_quick_add": "Confirm and add device"
         },
-        "description": "**New device**\n\nName: {asset_name}\n\nManufacturer / model: {manufacturer_model}\n\nLifecycle: {lifecycle}\n\nLifecycle effective date: {lifecycle_date}\n\nDeployment: {deployment}\n\nInstallation date: {installed_date}\n\nArea: {area}\n\nPurchase: {purchase}\n\nWarranty: {warranty}\n\nHome Assistant device: {ha_device}\n\n{disposed_warning}\n\n**Replacement review**\n\nOld device: {predecessor_name}\n\nLifecycle: {predecessor_lifecycle}\n\nDeployment: {predecessor_deployment}\n\nArea: {predecessor_area}\n\nReason: {replacement_reason}\n\nEffective date: {replacement_date}\n\nNothing is stored until you confirm.",
+        "description": "**New device**\n\nName: {asset_name}\n\nManufacturer / model: {manufacturer_model}\n\nLifecycle: {lifecycle}\n\nLifecycle effective date: {lifecycle_date}\n\nDeployment: {deployment}\n\nInstallation date: {installed_date}\n\nArea: {area}\n\nPurchase: {purchase}\n\nWarranty: {warranty}\n\nHome Assistant device: {ha_device}\n\n{disposed_warning}\n\n**Replacement review**\n\nOld device: {predecessor_name}\n\nLifecycle: {predecessor_lifecycle}\n\nDeployment: {predecessor_deployment}\n\nArea: {predecessor_area}\n\nReason: {replacement_reason}\n\nEffective date: {replacement_date}\n\nNothing is stored until you confirm.\n\nClose the window without saving by using the X button in the upper-left corner.",
         "submit": "Add device",
         "title": "Confirm device"
       },
@@ -373,7 +377,7 @@
         "data": {
           "confirm_area_clear": "Confirm clearing the location"
         },
-        "description": "{asset}\n\nLocation to clear: {current_area}\n\nMarking the Asset Not installed clears its location. The installation date is kept unless you changed it on the previous form.",
+        "description": "{asset}\n\nLocation to clear: {current_area}\n\nMarking the Asset Not installed clears its location. The installation date is kept unless you changed it on the previous form.\n\nClose the window without saving by using the X button in the upper-left corner.",
         "submit": "Save and return",
         "title": "Clear the location?"
       },
@@ -381,7 +385,7 @@
         "data": {
           "confirm_disposed": "Confirm disposed status"
         },
-        "description": "{asset}\n\nRecord this Asset as disposed?\n\nNeither the Asset nor its history is deleted, and a later lifecycle change can correct the status.",
+        "description": "{asset}\n\nRecord this Asset as disposed?\n\nNeither the Asset nor its history is deleted, and a later lifecycle change can correct the status.\n\nClose the window without saving by using the X button in the upper-left corner.",
         "submit": "Save and return",
         "title": "Confirm disposed status"
       },
@@ -390,7 +394,7 @@
           "confirm_void": "Confirm voiding",
           "void_reason": "Void reason"
         },
-        "description": "{asset}\n\nRelationship to void: {relationship}\n\nThe relationship stops being current; its history is kept.",
+        "description": "{asset}\n\nRelationship to void: {relationship}\n\nThe relationship stops being current; its history is kept.\n\nClose the window without saving by using the X button in the upper-left corner.",
         "submit": "Void and return",
         "title": "Void replacement relationship"
       },
@@ -403,7 +407,7 @@
           "successor_asset_uuid": "Successor Asset",
           "void_reason": "Reason for correcting the old relationship"
         },
-        "description": "{asset}\n\nRelationship to correct: {relationship}\n\nThe old relationship is voided and the corrected one saved in the same step.",
+        "description": "{asset}\n\nRelationship to correct: {relationship}\n\nThe old relationship is voided and the corrected one saved in the same step.\n\nClose the window without saving by using the X button in the upper-left corner.",
         "submit": "Save and return",
         "title": "Correct replacement relationship"
       },
@@ -419,7 +423,7 @@
           "serial_number": "Serial number",
           "sw_version": "Software version"
         },
-        "description": "{asset}\n\nEdit the Asset's details.",
+        "description": "{asset}\n\nEdit the Asset's details.\n\nClose the window without saving by using the X button in the upper-left corner.",
         "submit": "Save and return",
         "title": "Asset details"
       },
@@ -438,7 +442,7 @@
           "device_id": "Home Assistant device",
           "ha_relationship_action": "Action"
         },
-        "description": "{asset}\n\nCurrent primary Home Assistant device: {current_device}\n\nChanging it does not change the Asset ID or the Home Assistant device itself.",
+        "description": "{asset}\n\nCurrent primary Home Assistant device: {current_device}\n\nChanging it does not change the Asset ID or the Home Assistant device itself.\n\nClose the window without saving by using the X button in the upper-left corner.",
         "submit": "Save and return",
         "title": "Manage primary Home Assistant device"
       },
@@ -446,7 +450,7 @@
         "data": {
           "device_id": "Home Assistant device"
         },
-        "description": "{asset}\n\nPrimary: {current_primary}\nRelated: {related_devices}\n\nA related Home Assistant device is a reference only: it changes neither the Asset's details nor the Home Assistant device itself.",
+        "description": "{asset}\n\nPrimary: {current_primary}\nRelated: {related_devices}\n\nSelect the Home Assistant device to add. It is a reference only: it changes neither the Asset's details nor the Home Assistant device itself.\n\nClose the window without saving by using the X button in the upper-left corner.",
         "submit": "Add and return",
         "title": "Add related Home Assistant device"
       },
@@ -454,7 +458,7 @@
         "data": {
           "device_id": "Related Home Assistant device"
         },
-        "description": "{asset}\n\nRelated: {related_devices}\n\nReferences to devices that have left Home Assistant can be selected too.",
+        "description": "{asset}\n\nRelated: {related_devices}\n\nSelect the Home Assistant device to remove. References to devices that have left Home Assistant can be selected too.\n\nClose the window without saving by using the X button in the upper-left corner.",
         "submit": "Remove and return",
         "title": "Remove related Home Assistant device"
       },
@@ -521,7 +525,7 @@
           "replacement_action": "Action",
           "replacement_uuid": "Active relationship"
         },
-        "description": "{asset}\n\nSelect an active relationship to correct or void.",
+        "description": "{asset}\n\nSelect an active relationship to correct or void.\n\nClose the window without saving by using the X button in the upper-left corner.",
         "submit": "Continue",
         "title": "Manage replacement relationship"
       },
@@ -532,7 +536,7 @@
           "replacement_reason": "Replacement reason",
           "replacement_target_asset_uuid": "Predecessor Asset"
         },
-        "description": "{asset}\n\nSelect the old Asset that this Asset replaces.",
+        "description": "{asset}\n\nSelect the old Asset that this Asset replaces.\n\nClose the window without saving by using the X button in the upper-left corner.",
         "submit": "Save and return",
         "title": "This Asset replaces…"
       }

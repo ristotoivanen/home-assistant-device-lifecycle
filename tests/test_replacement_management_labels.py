@@ -387,7 +387,6 @@ async def test_void_needs_confirmation_and_a_reason_then_returns(
         unconfirmed = await hass.config_entries.options.async_configure(
             flow_id, {CONF_VOID_REASON: "Recorded in error", CONF_CONFIRM_VOID: False}
         )
-        await hass.config_entries.options.async_configure(flow_id, choose_void)
         unexplained = await hass.config_entries.options.async_configure(
             flow_id, {CONF_VOID_REASON: "  ", CONF_CONFIRM_VOID: True}
         )
@@ -400,10 +399,13 @@ async def test_void_needs_confirmation_and_a_reason_then_returns(
         )
 
     assert confirm["step_id"] == VOID
-    # Declining returns to the choice it came from, with nothing voided.
-    assert unconfirmed["step_id"] == MANAGE
+    # Each missing part is named on its own field, and nothing is voided.
+    assert unconfirmed["step_id"] == VOID
+    assert unconfirmed["errors"] == {CONF_CONFIRM_VOID: "void_confirmation_required"}
     assert unexplained["step_id"] == VOID
-    assert unexplained["errors"] == {"base": "replacement_void_reason_required"}
+    assert unexplained["errors"] == {
+        CONF_VOID_REASON: "replacement_void_reason_required"
+    }
     assert voided["type"] is FlowResultType.MENU
     assert voided["step_id"] == SUBMENU
     assert voided["description_placeholders"]["result"] == "Replacement updated."
