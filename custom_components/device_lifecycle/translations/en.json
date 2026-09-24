@@ -410,6 +410,7 @@
           "sw_version": "Software version"
         },
         "description": "Edit the details for {asset}. Its Asset ID, installation status, warranty, Purchase and Home Assistant devices are managed separately.",
+        "submit": "Save",
         "title": "Asset details"
       },
       "ha_relationship": {

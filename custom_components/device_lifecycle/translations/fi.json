@@ -410,6 +410,7 @@
           "sw_version": "Ohjelmistoversio"
         },
         "description": "Muokkaa laitteen {asset} perustietoja. Elinkaaritunnusta, asennustilaa, takuuta, ostosta ja Home Assistant -laitteita hallitaan erikseen.",
+        "submit": "Tallenna",
         "title": "Perustiedot"
       },
       "ha_relationship": {

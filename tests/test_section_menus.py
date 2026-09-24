@@ -12,7 +12,9 @@ and that the editors themselves are exactly the forms they were before.
 
 from __future__ import annotations
 
+import json
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -48,12 +50,38 @@ SECTIONS = {
 }
 # The longest a section may grow: one line naming the Asset, then its facts.
 MAX_FACT_LINES = {
-    "asset_details_menu": 4,
+    "asset_details_menu": 8,
     "asset_purchase_menu": 4,
     "asset_installation_menu": 3,
     "asset_lifecycle_menu": 2,
 }
 SUMMARY_MAX_LENGTH = 60
+# Asset details keep technical values nearly whole: the longest label
+# ("Software version: ", "Ohjelmistoversio: ") plus a 64-character value.
+DETAIL_VALUE_MAX_LENGTH = 64
+MAX_LINE_LENGTH = {
+    "asset_details_menu": len("Ohjelmistoversio: ") + DETAIL_VALUE_MAX_LENGTH,
+    "asset_purchase_menu": SUMMARY_MAX_LENGTH,
+    "asset_installation_menu": SUMMARY_MAX_LENGTH,
+    "asset_lifecycle_menu": SUMMARY_MAX_LENGTH,
+}
+# Detail line label -> the editor field it describes.
+DETAIL_FIELDS = {
+    "manufacturer": ("Manufacturer", "Valmistaja"),
+    "model": ("Model", "Malli"),
+    "model_id": ("Model ID", "Mallitunnus"),
+    "serial_number": ("Serial number", "Sarjanumero"),
+    "sw_version": ("Software version", "Ohjelmistoversio"),
+    "hw_version": ("Hardware version", "Laitteistoversio"),
+    "category": ("Category", "Luokka"),
+    "notes": ("Notes", "Muistiinpanot"),
+}
+TRANSLATIONS = (
+    Path(__file__).parents[1]
+    / "custom_components"
+    / "device_lifecycle"
+    / "translations"
+)
 LONG = "Very long user supplied text that keeps going well past any summary"
 
 
@@ -259,41 +287,125 @@ async def test_a_vanished_asset_falls_back_to_the_picker(
     assert result["errors"] == {"base": "asset_missing"}
 
 
-async def test_asset_details_show_what_it_is_but_not_its_notes(
+async def test_asset_details_show_every_recorded_detail_but_not_the_notes(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
 ) -> None:
-    """Identity, category and serial number; notes only as a yes."""
+    """Every physical detail on its own labelled line; notes only as a yes."""
     manager = _manager(hass, asset_store_data)
     flow, _hub = await _hub_flow(hass, manager)
 
     result = await _section(flow, "asset_details_menu")
 
     assert _lines(result) == [
-        "Example manufacturer · Example model",
-        "Category: Tool",
+        "Manufacturer: Example manufacturer",
+        "Model: Example model",
+        "Model ID: MODEL-1",
         "Serial number: SERIAL-1",
+        "Software version: 1.2.3",
+        "Hardware version: A",
+        "Category: Tool",
         "Notes: yes",
     ]
     assert "Existing asset notes" not in _shown(result)
 
 
-async def test_asset_details_with_little_recorded_stay_short(
+async def test_unrecorded_details_are_left_out_consistently(
     hass: HomeAssistant,
 ) -> None:
-    """Missing facts are left out, and a category never appears twice."""
+    """Missing values are omitted, never dashed; the notes line always says."""
     manager = _manager(hass)
     bare = await manager.async_create_manual_asset(name="Bare unit")
-    categorized = await manager.async_create_manual_asset(
-        name="Categorized unit", category="Heater"
+    partial = await manager.async_create_manual_asset(
+        name="Partial unit", manufacturer="Signify", sw_version="1.116.3"
     )
     flow, _hub = await _hub_flow(hass, manager, bare["asset_uuid"])
     bare_result = await _section(flow, "asset_details_menu")
-    await flow.async_step_manage_asset({CONF_ASSET_UUID: categorized["asset_uuid"]})
-    categorized_result = await _section(flow, "asset_details_menu")
+    await flow.async_step_manage_asset({CONF_ASSET_UUID: partial["asset_uuid"]})
+    partial_result = await _section(flow, "asset_details_menu")
 
-    assert _lines(bare_result) == ["No manufacturer or model recorded"]
-    assert _lines(categorized_result) == ["Heater"]
+    assert _lines(bare_result) == ["No other details recorded", "Notes: no"]
+    assert _lines(partial_result) == [
+        "Manufacturer: Signify",
+        "Software version: 1.116.3",
+        "Notes: no",
+    ]
+    for result in (bare_result, partial_result):
+        assert "—" not in _shown(result)
+        assert "None" not in _shown(result)
+
+
+async def test_notes_text_never_reaches_asset_details(
+    hass: HomeAssistant,
+) -> None:
+    """However long or multi-line, notes only ever read as yes."""
+    manager = _manager(hass)
+    asset = await manager.async_create_manual_asset(
+        name="Noted unit",
+        notes="First private line\nSecond private line " + LONG,
+    )
+    flow, _hub = await _hub_flow(hass, manager, asset["asset_uuid"])
+
+    result = await _section(flow, "asset_details_menu")
+
+    assert _lines(result)[-1] == "Notes: yes"
+    for hidden in ("First private line", "Second private line", LONG):
+        assert hidden not in _shown(result)
+
+
+async def test_technical_details_stay_useful_when_long(
+    hass: HomeAssistant,
+) -> None:
+    """Model ID, serial and versions keep 64 characters; names still shorten."""
+    manager = _manager(hass)
+    serial = "SN-" + "0123456789" * 6 + "X"  # exactly 64 characters
+    model_id = "MODEL-" + "ABCDEFGHIJ" * 8  # 86 characters
+    asset = await manager.async_create_manual_asset(
+        name="Technical unit",
+        manufacturer="Manufacturer with a rather long legal name Oy",
+        model="Hue White and Color Ambiance A19 E26/E27 Smart Bulb",
+        model_id=model_id,
+        serial_number=serial,
+        sw_version="  1.122.8\n(build 2026-08-01)  ",
+        hw_version="Rev C",
+    )
+    flow, _hub = await _hub_flow(hass, manager, asset["asset_uuid"])
+
+    lines = _lines(await _section(flow, "asset_details_menu"))
+
+    assert len(serial) == DETAIL_VALUE_MAX_LENGTH
+    assert f"Serial number: {serial}" in lines
+    assert f"Model ID: {model_id[:63]}…" in lines
+    assert "Model: Hue White and Color Ambiance A19 E26/E27 Smart Bulb" in lines
+    # A value with line breaks stays one fact on one line.
+    assert "Software version: 1.122.8 (build 2026-08-01)" in lines
+    assert "Hardware version: Rev C" in lines
+    # Long names still follow the summary rule.
+    assert "Manufacturer: Manufacturer with a rat…" in lines
+    assert all(
+        len(line) <= MAX_LINE_LENGTH["asset_details_menu"] for line in lines
+    )
+
+
+@pytest.mark.parametrize("language", ["en", "fi"])
+def test_detail_labels_match_the_editor_fields(language: str) -> None:
+    """The view and the editor call each detail by the same name."""
+    fields = json.loads(
+        (TRANSLATIONS / f"{language}.json").read_text(encoding="utf-8")
+    )["options"]["step"]["edit_asset_metadata"]["data"]
+
+    for field, (english, finnish) in DETAIL_FIELDS.items():
+        assert fields[field] == (english if language == "en" else finnish), field
+
+
+@pytest.mark.parametrize(("language", "label"), [("en", "Save"), ("fi", "Tallenna")])
+def test_the_details_editor_button_saves(language: str, label: str) -> None:
+    """Reached through an explicit edit row, the editor's button says Save."""
+    step = json.loads(
+        (TRANSLATIONS / f"{language}.json").read_text(encoding="utf-8")
+    )["options"]["step"]["edit_asset_metadata"]
+
+    assert step["submit"] == label
 
 
 async def test_purchase_and_warranty_are_separate_facts(
@@ -495,9 +607,13 @@ async def test_sections_read_in_finnish(
     lifecycle = await _section(flow, "asset_lifecycle_menu")
 
     assert _lines(details) == [
-        "Example manufacturer · Example model",
-        "Luokka: Tool",
+        "Valmistaja: Example manufacturer",
+        "Malli: Example model",
+        "Mallitunnus: MODEL-1",
         "Sarjanumero: SERIAL-1",
+        "Ohjelmistoversio: 1.2.3",
+        "Laitteistoversio: A",
+        "Luokka: Tool",
         "Muistiinpanot: on",
     ]
     assert _lines(purchase) == [
@@ -614,7 +730,7 @@ async def test_long_values_stay_within_the_summary_budget(
         "name Very long user sup… · DL0007"
     )
     assert 1 <= len(lines) <= MAX_FACT_LINES[section]
-    assert all(len(line) <= SUMMARY_MAX_LENGTH for line in lines), lines
+    assert all(len(line) <= MAX_LINE_LENGTH[section] for line in lines), lines
     assert LONG not in _shown(result)
 
 

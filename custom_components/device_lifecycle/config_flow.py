@@ -599,6 +599,9 @@ def _compact_title(text: str, max_length: int = 52) -> str:
 SUMMARY_SEPARATOR = " · "
 SUMMARY_MAX_LENGTH = 60
 SUMMARY_NAME_MAX_LENGTH = 24
+# Model, model ID, serial number and versions are looked up, not skimmed, so
+# a section shows them nearly whole instead of at summary length.
+DETAIL_VALUE_MAX_LENGTH = 64
 
 _EN_MONTHS = (
     "Jan",
@@ -616,12 +619,12 @@ _EN_MONTHS = (
 )
 
 
-def _short_name(text: str | None) -> str:
+def _short_name(text: str | None, max_length: int = SUMMARY_NAME_MAX_LENGTH) -> str:
     """Shorten one display name so it can share a summary line."""
     text = str(text or "").strip()
-    if len(text) <= SUMMARY_NAME_MAX_LENGTH:
+    if len(text) <= max_length:
         return text
-    return text[: SUMMARY_NAME_MAX_LENGTH - 1].rstrip() + "…"
+    return text[: max_length - 1].rstrip() + "…"
 
 
 def _summary_line(*parts: str | None) -> str:
@@ -2841,23 +2844,42 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         )
 
     def _details_facts(self, asset: AssetData) -> list[str]:
-        """Say what the Asset physically is, without its notes."""
-        facts = [self._summary_metadata(asset)]
-        category = _short_name(asset.get(CONF_CATEGORY))
-        if category and category != facts[0]:
+        """List the physical details people look up, one labelled line each.
+
+        A value that is not recorded is left out rather than shown as a
+        dash, so a sparsely documented Asset stays a short screen. Names
+        shorten like hub summaries; technical values keep up to
+        DETAIL_VALUE_MAX_LENGTH characters. Notes only say whether there
+        are any: their text stays in the editor.
+        """
+        fields = (
+            (CONF_MANUFACTURER, "Manufacturer", "Valmistaja", SUMMARY_NAME_MAX_LENGTH),
+            (CONF_MODEL, "Model", "Malli", DETAIL_VALUE_MAX_LENGTH),
+            (CONF_MODEL_ID, "Model ID", "Mallitunnus", DETAIL_VALUE_MAX_LENGTH),
+            (CONF_SERIAL_NUMBER, "Serial number", "Sarjanumero", DETAIL_VALUE_MAX_LENGTH),
+            (CONF_SW_VERSION, "Software version", "Ohjelmistoversio", DETAIL_VALUE_MAX_LENGTH),
+            (CONF_HW_VERSION, "Hardware version", "Laitteistoversio", DETAIL_VALUE_MAX_LENGTH),
+            (CONF_CATEGORY, "Category", "Luokka", SUMMARY_NAME_MAX_LENGTH),
+        )
+        facts = []
+        for field, english, finnish, max_length in fields:
+            # One fact per line, even if a value arrived with line breaks.
+            value = _short_name(" ".join(str(asset.get(field) or "").split()), max_length)
+            if value:
+                facts.append(
+                    self._localized_label(f"{english}: {value}", f"{finnish}: {value}")
+                )
+        if not facts:
             facts.append(
-                self._localized_label(f"Category: {category}", f"Luokka: {category}")
-            )
-        if serial := str(asset.get(CONF_SERIAL_NUMBER) or "").strip():
-            facts.append(
-                _summary_line(
-                    self._localized_label(
-                        f"Serial number: {serial}", f"Sarjanumero: {serial}"
-                    )
+                self._localized_label(
+                    "No other details recorded",
+                    "Muita perustietoja ei ole tallennettu",
                 )
             )
         if str(asset.get(CONF_NOTES) or "").strip():
             facts.append(self._localized_label("Notes: yes", "Muistiinpanot: on"))
+        else:
+            facts.append(self._localized_label("Notes: no", "Muistiinpanot: ei"))
         return facts
 
     def _purchase_facts(self, asset: AssetData) -> list[str]:
