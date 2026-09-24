@@ -84,10 +84,10 @@ async def test_deployment_action_and_migrated_unknown_are_visible(
 
     assert menu["type"] is FlowResultType.MENU
     assert menu["menu_options"] == [
-        "edit_asset_metadata",
-        "change_asset_purchase",
-        "asset_deployment",
-        "asset_lifecycle",
+        "asset_details_menu",
+        "asset_purchase_menu",
+        "asset_installation_menu",
+        "asset_lifecycle_menu",
         "asset_replacement",
         "ha_relationship",
         "manage_asset",

@@ -133,6 +133,12 @@ async def test_options_flow_survives_the_real_reload_it_triggers(
 
         # And the next Asset-management step opens normally against the new
         # manager, which is exactly what the pre-0.7.4 scheduled reload raced.
+        section = await hass.config_entries.options.async_configure(
+            flow_id,
+            {"next_step_id": "asset_installation_menu"},
+        )
+        assert section["type"] is FlowResultType.MENU
+        assert section["step_id"] == "asset_installation_menu"
         next_step = await hass.config_entries.options.async_configure(
             flow_id,
             {"next_step_id": "asset_deployment"},
@@ -322,6 +328,10 @@ async def test_second_mutation_in_the_same_flow_uses_the_reloaded_manager(
         # complete when its own mutation returns.
         managers.append(entry.runtime_data)
 
+        await hass.config_entries.options.async_configure(
+            flow_id,
+            {"next_step_id": "asset_installation_menu"},
+        )
         await hass.config_entries.options.async_configure(
             flow_id,
             {"next_step_id": "asset_deployment"},

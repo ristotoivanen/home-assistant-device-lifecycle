@@ -2805,15 +2805,195 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         return self.async_show_menu(
             step_id="manage_asset_menu",
             menu_options=[
-                "edit_asset_metadata",
-                "change_asset_purchase",
-                "asset_deployment",
-                "asset_lifecycle",
+                "asset_details_menu",
+                "asset_purchase_menu",
+                "asset_installation_menu",
+                "asset_lifecycle_menu",
                 "asset_replacement",
                 "ha_relationship",
                 "manage_asset",
             ],
             description_placeholders=placeholders,
+        )
+
+    def _show_section_menu(
+        self,
+        step_id: str,
+        action: str,
+        facts: Callable[[AssetData], list[str]],
+    ) -> ConfigFlowResult:
+        """Show one hub section's current state, its editor, and Back.
+
+        Read-only like the hub: the facts are read from the current manager
+        on every render and nothing is kept in the flow, so Back to the hub
+        writes nothing, reloads nothing and carries no result.
+        """
+        asset = self._manager.asset(getattr(self, "_selected_asset_uuid", None))
+        if asset is None:
+            return self._show_asset_selection(errors={"base": "asset_missing"})
+        return self.async_show_menu(
+            step_id=step_id,
+            menu_options=[action, "manage_asset_menu"],
+            description_placeholders={
+                "asset": _summary_line(_short_name(asset["name"]), asset["asset_id"]),
+                "facts": "\n".join(facts(asset)),
+            },
+        )
+
+    def _details_facts(self, asset: AssetData) -> list[str]:
+        """Say what the Asset physically is, without its notes."""
+        facts = [self._summary_metadata(asset)]
+        category = _short_name(asset.get(CONF_CATEGORY))
+        if category and category != facts[0]:
+            facts.append(
+                self._localized_label(f"Category: {category}", f"Luokka: {category}")
+            )
+        if serial := str(asset.get(CONF_SERIAL_NUMBER) or "").strip():
+            facts.append(
+                _summary_line(
+                    self._localized_label(
+                        f"Serial number: {serial}", f"Sarjanumero: {serial}"
+                    )
+                )
+            )
+        if str(asset.get(CONF_NOTES) or "").strip():
+            facts.append(self._localized_label("Notes: yes", "Muistiinpanot: on"))
+        return facts
+
+    def _purchase_facts(self, asset: AssetData) -> list[str]:
+        """Name the Purchase, and the Asset's own warranty beside it."""
+        purchase_uuid = asset.get("purchase_uuid")
+        purchase = (
+            None if purchase_uuid is None else self._manager.purchase(purchase_uuid)
+        )
+        if purchase_uuid is None:
+            label = self._localized_label("No Purchase", "Ei ostosta")
+        elif purchase is None:
+            label = self._localized_label("Unavailable Purchase", "Osto ei saatavilla")
+        else:
+            # The date gets its own line, so an unnamed Purchase is named by
+            # its seller alone, and never by its UUID.
+            label = _short_name(
+                purchase.get("name") or purchase.get("seller")
+            ) or self._localized_label("Unnamed Purchase", "Nimetön ostos")
+            if not purchase.get("configured"):
+                label = self._localized_label(
+                    f"Historical — {label}", f"Historiallinen — {label}"
+                )
+        facts = [
+            _summary_line(self._localized_label(f"Purchase: {label}", f"Ostos: {label}"))
+        ]
+        if purchase is not None:
+            if purchased := self._localized_date(purchase.get("purchase_date")):
+                facts.append(
+                    self._localized_label(
+                        f"Purchase date: {purchased}", f"Ostopäivä: {purchased}"
+                    )
+                )
+            # An unnamed Purchase is already named by its seller.
+            seller = _short_name(purchase.get("seller"))
+            if seller and purchase.get("name"):
+                facts.append(
+                    self._localized_label(f"Seller: {seller}", f"Myyjä: {seller}")
+                )
+        warranty = self._summary_warranty(asset)
+        facts.append(
+            self._localized_label(f"Warranty: {warranty}", f"Takuu: {warranty}")
+        )
+        return facts
+
+    def _installation_facts(self, asset: AssetData) -> list[str]:
+        """Say whether the Asset is installed, since when, and where."""
+        state = str(asset.get(CONF_DEPLOYMENT_STATE) or DEPLOYMENT_STATE_UNKNOWN)
+        english, finnish = {
+            DEPLOYMENT_STATE_DEPLOYED: ("Installed", "Asennettu"),
+            DEPLOYMENT_STATE_NOT_DEPLOYED: ("Not installed", "Ei asennettu"),
+        }.get(state, ("Unknown", "Ei tiedossa"))
+        status = self._localized_label(english, finnish)
+        area_id = asset.get(CONF_HA_AREA_ID)
+        # Canonically a not-installed Asset has no Area; say so rather than
+        # presenting the leftover location as current, and change nothing.
+        inconsistent = (
+            self._localized_label(
+                "inconsistent location data", "sijaintitieto epäkonsistentti"
+            )
+            if state == DEPLOYMENT_STATE_NOT_DEPLOYED and area_id is not None
+            else None
+        )
+        facts = [
+            _summary_line(
+                self._localized_label(
+                    f"Installation: {status}", f"Asennustila: {status}"
+                ),
+                inconsistent,
+            )
+        ]
+        if installed := self._localized_date(asset.get(CONF_INSTALLED_DATE)):
+            facts.append(
+                self._localized_label(
+                    f"Installation date: {installed}", f"Asennuspäivä: {installed}"
+                )
+            )
+        location = self._area_label(area_id)
+        if area_id is not None and ar.async_get(self.hass).async_get_area(area_id):
+            location = _short_name(location)
+        facts.append(
+            self._localized_label(f"Location: {location}", f"Sijainti: {location}")
+        )
+        return facts
+
+    def _lifecycle_facts(self, asset: AssetData) -> list[str]:
+        """Say where the Asset stands in its life now, not its history."""
+        lifecycle = asset.get("lifecycle") or {}
+        status = self._lifecycle_status_label(
+            str(lifecycle.get("status") or LIFECYCLE_STATUS_UNKNOWN)
+        )
+        facts = [self._localized_label(f"Status: {status}", f"Tila: {status}")]
+        event = self._manager.lifecycle_event(lifecycle.get("current_event_uuid"))
+        if effective := self._localized_date(
+            None if event is None else event.get("effective_date")
+        ):
+            facts.append(
+                self._localized_label(
+                    f"Effective from: {effective}", f"Voimassa alkaen: {effective}"
+                )
+            )
+        return facts
+
+    async def async_step_asset_details_menu(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Show the Asset details section of the hub."""
+        return self._show_section_menu(
+            "asset_details_menu", "edit_asset_metadata", self._details_facts
+        )
+
+    async def async_step_asset_purchase_menu(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Show the Purchase & warranty section of the hub."""
+        return self._show_section_menu(
+            "asset_purchase_menu", "change_asset_purchase", self._purchase_facts
+        )
+
+    async def async_step_asset_installation_menu(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Show the Installation & location section of the hub."""
+        return self._show_section_menu(
+            "asset_installation_menu", "asset_deployment", self._installation_facts
+        )
+
+    async def async_step_asset_lifecycle_menu(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Show the Lifecycle section of the hub."""
+        return self._show_section_menu(
+            "asset_lifecycle_menu", "asset_lifecycle", self._lifecycle_facts
         )
 
     async def async_step_edit_asset_metadata(

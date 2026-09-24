@@ -141,6 +141,14 @@ async def _setup_loaded_entry(
     return entry
 
 
+SECTION_MENUS = {
+    "edit_asset_metadata": "asset_details_menu",
+    "change_asset_purchase": "asset_purchase_menu",
+    "asset_deployment": "asset_installation_menu",
+    "asset_lifecycle": "asset_lifecycle_menu",
+}
+
+
 async def _start_asset_action(
     hass: HomeAssistant,
     entry: MockConfigEntry,
@@ -160,6 +168,14 @@ async def _start_asset_action(
         {CONF_ASSET_UUID: asset_uuid},
     )
     assert menu["type"] is FlowResultType.MENU
+    # Hub rows 1-4 open their section menu; the editor is its action row.
+    if (section := SECTION_MENUS.get(action)) is not None:
+        section_menu = await hass.config_entries.options.async_configure(
+            flow_id,
+            {"next_step_id": section},
+        )
+        assert section_menu["type"] is FlowResultType.MENU
+        assert section_menu["step_id"] == section
     action_result = await hass.config_entries.options.async_configure(
         flow_id,
         {"next_step_id": action},

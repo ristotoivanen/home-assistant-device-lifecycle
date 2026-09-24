@@ -462,23 +462,55 @@
       "manage_asset_menu": {
         "description": "Valittu laite: {asset}\n\n{result}",
         "menu_option_descriptions": {
-          "asset_deployment": "{deployment}",
-          "asset_lifecycle": "{lifecycle}",
+          "asset_details_menu": "{metadata}",
+          "asset_installation_menu": "{deployment}",
+          "asset_lifecycle_menu": "{lifecycle}",
+          "asset_purchase_menu": "{purchase_warranty}",
           "asset_replacement": "{replacement}",
-          "change_asset_purchase": "{purchase_warranty}",
-          "edit_asset_metadata": "{metadata}",
           "ha_relationship": "{ha_devices}"
         },
         "menu_options": {
-          "asset_deployment": "Asennus ja sijainti",
-          "asset_lifecycle": "Elinkaari",
+          "asset_details_menu": "Perustiedot",
+          "asset_installation_menu": "Asennus ja sijainti",
+          "asset_lifecycle_menu": "Elinkaari",
+          "asset_purchase_menu": "Osto ja takuu",
           "asset_replacement": "Korvaaminen",
-          "change_asset_purchase": "Osto ja takuu",
-          "edit_asset_metadata": "Perustiedot",
           "ha_relationship": "Home Assistant -laitteet",
           "manage_asset": "Valitse toinen laite"
         },
         "title": "Hallitse laitetta"
+      },
+      "asset_details_menu": {
+        "description": "{asset}\n\n{facts}",
+        "menu_options": {
+          "edit_asset_metadata": "Muokkaa perustietoja",
+          "manage_asset_menu": "← Takaisin laitteen hallintaan"
+        },
+        "title": "Perustiedot"
+      },
+      "asset_purchase_menu": {
+        "description": "{asset}\n\n{facts}",
+        "menu_options": {
+          "change_asset_purchase": "Vaihda ostos",
+          "manage_asset_menu": "← Takaisin laitteen hallintaan"
+        },
+        "title": "Osto ja takuu"
+      },
+      "asset_installation_menu": {
+        "description": "{asset}\n\n{facts}",
+        "menu_options": {
+          "asset_deployment": "Muokkaa asennusta ja sijaintia",
+          "manage_asset_menu": "← Takaisin laitteen hallintaan"
+        },
+        "title": "Asennus ja sijainti"
+      },
+      "asset_lifecycle_menu": {
+        "description": "{asset}\n\n{facts}",
+        "menu_options": {
+          "asset_lifecycle": "Kirjaa elinkaaren muutos",
+          "manage_asset_menu": "← Takaisin laitteen hallintaan"
+        },
+        "title": "Elinkaari"
       },
       "manage_asset_replacement": {
         "data": {

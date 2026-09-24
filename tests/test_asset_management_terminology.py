@@ -56,6 +56,10 @@ MACHINE_STATES = {state for state in RAW_STATES if "_" in state}
 MANAGEMENT_STEPS = (
     "manage_asset",
     "manage_asset_menu",
+    "asset_details_menu",
+    "asset_purchase_menu",
+    "asset_installation_menu",
+    "asset_lifecycle_menu",
     "edit_asset_metadata",
     "change_asset_purchase",
     "asset_deployment",
@@ -333,20 +337,20 @@ def test_the_hub_rows_carry_the_frozen_names(language: str) -> None:
 
     if language == "en":
         assert rows == {
-            "edit_asset_metadata": "Asset details",
-            "change_asset_purchase": "Purchase & warranty",
-            "asset_deployment": "Installation & location",
-            "asset_lifecycle": "Lifecycle",
+            "asset_details_menu": "Asset details",
+            "asset_purchase_menu": "Purchase & warranty",
+            "asset_installation_menu": "Installation & location",
+            "asset_lifecycle_menu": "Lifecycle",
             "asset_replacement": "Replacement",
             "ha_relationship": "Home Assistant devices",
             "manage_asset": "Choose another device",
         }
     else:
         assert rows == {
-            "edit_asset_metadata": "Perustiedot",
-            "change_asset_purchase": "Osto ja takuu",
-            "asset_deployment": "Asennus ja sijainti",
-            "asset_lifecycle": "Elinkaari",
+            "asset_details_menu": "Perustiedot",
+            "asset_purchase_menu": "Osto ja takuu",
+            "asset_installation_menu": "Asennus ja sijainti",
+            "asset_lifecycle_menu": "Elinkaari",
             "asset_replacement": "Korvaaminen",
             "ha_relationship": "Home Assistant -laitteet",
             "manage_asset": "Valitse toinen laite",

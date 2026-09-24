@@ -262,14 +262,25 @@ def test_every_menu_action_and_step_has_translation(language: str) -> None:
         "quick_add_manual",
     }
     assert set(steps["manage_asset_menu"]["menu_options"]) == {
-        "asset_deployment",
-        "asset_lifecycle",
+        "asset_details_menu",
+        "asset_installation_menu",
+        "asset_lifecycle_menu",
+        "asset_purchase_menu",
         "asset_replacement",
-        "change_asset_purchase",
-        "edit_asset_metadata",
         "ha_relationship",
         "manage_asset",
     }
+    section_menus = {
+        "asset_details_menu": "edit_asset_metadata",
+        "asset_purchase_menu": "change_asset_purchase",
+        "asset_installation_menu": "asset_deployment",
+        "asset_lifecycle_menu": "asset_lifecycle",
+    }
+    for section, editor in section_menus.items():
+        assert set(steps[section]["menu_options"]) == {
+            editor,
+            "manage_asset_menu",
+        }
     assert set(steps["ha_relationship"]["menu_options"]) == {
         "add_related_device",
         "manage_asset_menu",
@@ -286,6 +297,11 @@ def test_every_menu_action_and_step_has_translation(language: str) -> None:
         *steps["init"]["menu_options"],
         *steps["quick_add"]["menu_options"],
         *steps["manage_asset_menu"]["menu_options"],
+        *(
+            option
+            for section in section_menus
+            for option in steps[section]["menu_options"]
+        ),
         *steps["ha_relationship"]["menu_options"],
         *steps["asset_replacement"]["menu_options"],
     }

@@ -462,23 +462,55 @@
       "manage_asset_menu": {
         "description": "Selected Asset: {asset}\n\n{result}",
         "menu_option_descriptions": {
-          "asset_deployment": "{deployment}",
-          "asset_lifecycle": "{lifecycle}",
+          "asset_details_menu": "{metadata}",
+          "asset_installation_menu": "{deployment}",
+          "asset_lifecycle_menu": "{lifecycle}",
+          "asset_purchase_menu": "{purchase_warranty}",
           "asset_replacement": "{replacement}",
-          "change_asset_purchase": "{purchase_warranty}",
-          "edit_asset_metadata": "{metadata}",
           "ha_relationship": "{ha_devices}"
         },
         "menu_options": {
-          "asset_deployment": "Installation & location",
-          "asset_lifecycle": "Lifecycle",
+          "asset_details_menu": "Asset details",
+          "asset_installation_menu": "Installation & location",
+          "asset_lifecycle_menu": "Lifecycle",
+          "asset_purchase_menu": "Purchase & warranty",
           "asset_replacement": "Replacement",
-          "change_asset_purchase": "Purchase & warranty",
-          "edit_asset_metadata": "Asset details",
           "ha_relationship": "Home Assistant devices",
           "manage_asset": "Choose another device"
         },
         "title": "Manage Asset"
+      },
+      "asset_details_menu": {
+        "description": "{asset}\n\n{facts}",
+        "menu_options": {
+          "edit_asset_metadata": "Edit asset details",
+          "manage_asset_menu": "← Back to asset management"
+        },
+        "title": "Asset details"
+      },
+      "asset_purchase_menu": {
+        "description": "{asset}\n\n{facts}",
+        "menu_options": {
+          "change_asset_purchase": "Change linked purchase",
+          "manage_asset_menu": "← Back to asset management"
+        },
+        "title": "Purchase & warranty"
+      },
+      "asset_installation_menu": {
+        "description": "{asset}\n\n{facts}",
+        "menu_options": {
+          "asset_deployment": "Edit installation and location",
+          "manage_asset_menu": "← Back to asset management"
+        },
+        "title": "Installation & location"
+      },
+      "asset_lifecycle_menu": {
+        "description": "{asset}\n\n{facts}",
+        "menu_options": {
+          "asset_lifecycle": "Record a lifecycle change",
+          "manage_asset_menu": "← Back to asset management"
+        },
+        "title": "Lifecycle"
       },
       "manage_asset_replacement": {
         "data": {

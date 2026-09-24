@@ -615,10 +615,10 @@ def test_each_hub_row_carries_its_own_summary(language: str) -> None:
     step = _hub_step(language)
 
     assert step["menu_option_descriptions"] == {
-        "edit_asset_metadata": "{metadata}",
-        "change_asset_purchase": "{purchase_warranty}",
-        "asset_deployment": "{deployment}",
-        "asset_lifecycle": "{lifecycle}",
+        "asset_details_menu": "{metadata}",
+        "asset_purchase_menu": "{purchase_warranty}",
+        "asset_installation_menu": "{deployment}",
+        "asset_lifecycle_menu": "{lifecycle}",
         "asset_replacement": "{replacement}",
         "ha_relationship": "{ha_devices}",
     }

@@ -179,7 +179,14 @@ async def test_a_user_purchase_choice_survives_the_reload_it_triggers(
         assert asset["installed_date"] == before["installed_date"]
         assert asset["asset_id"] == before["asset_id"]
 
-        # The person keeps working: the editor reopens on the new state.
+        # The person keeps working: the section and then the editor reopen
+        # on the new state.
+        section = await hass.config_entries.options.async_configure(
+            flow_id,
+            {"next_step_id": "asset_purchase_menu"},
+        )
+        assert section["type"] is FlowResultType.MENU
+        assert section["step_id"] == "asset_purchase_menu"
         editor = await hass.config_entries.options.async_configure(
             flow_id,
             {"next_step_id": "change_asset_purchase"},
@@ -271,7 +278,10 @@ async def test_a_finnish_management_session_end_to_end(
         )
         assert hub["description_placeholders"]["result"] == ""
 
-        # Direct editor → same Asset's hub, rendered from the new manager.
+        # Section menu → editor → same Asset's hub, from the new manager.
+        section = await step({"next_step_id": "asset_details_menu"})
+        assert section["step_id"] == "asset_details_menu"
+        assert section["menu_options"] == ["edit_asset_metadata", HUB]
         await step({"next_step_id": "edit_asset_metadata"})
         edit = _identical_metadata_input(managers[-1].asset(ASSET_UUID))
         edit[CONF_ASSET_NAME] = "Työpajan laite"

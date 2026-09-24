@@ -34,10 +34,10 @@ from .test_options_flow import (
 )
 
 HUB_ROWS = [
-    "edit_asset_metadata",
-    "change_asset_purchase",
-    "asset_deployment",
-    "asset_lifecycle",
+    "asset_details_menu",
+    "asset_purchase_menu",
+    "asset_installation_menu",
+    "asset_lifecycle_menu",
     "asset_replacement",
     "ha_relationship",
     "manage_asset",
@@ -94,10 +94,10 @@ async def test_hub_offers_exactly_the_seven_rows_in_order(
 @pytest.mark.parametrize(
     ("row", "step_id", "result_type"),
     [
-        ("edit_asset_metadata", "edit_asset_metadata", FlowResultType.FORM),
-        ("change_asset_purchase", "change_asset_purchase", FlowResultType.FORM),
-        ("asset_deployment", "asset_deployment", FlowResultType.FORM),
-        ("asset_lifecycle", "asset_lifecycle", FlowResultType.FORM),
+        ("asset_details_menu", "asset_details_menu", FlowResultType.MENU),
+        ("asset_purchase_menu", "asset_purchase_menu", FlowResultType.MENU),
+        ("asset_installation_menu", "asset_installation_menu", FlowResultType.MENU),
+        ("asset_lifecycle_menu", "asset_lifecycle_menu", FlowResultType.MENU),
         ("asset_replacement", "asset_replacement", FlowResultType.MENU),
         ("ha_relationship", "ha_relationship", FlowResultType.MENU),
         ("manage_asset", "manage_asset", FlowResultType.FORM),
@@ -110,7 +110,7 @@ async def test_every_hub_row_opens_its_own_step(
     step_id: str,
     result_type: FlowResultType,
 ) -> None:
-    """Single actions open a form, multi-action areas open their submenu."""
+    """Every section opens a menu; only choosing another Asset is a form."""
     manager = _manager(hass, asset_store_data)
     flow, _opened = await _hub(hass, manager)
 
