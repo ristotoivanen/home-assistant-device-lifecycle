@@ -118,7 +118,7 @@ If the repository is not already available in your HACS instance, add it manuall
 
 Copy `custom_components/device_lifecycle/` into `/config/custom_components/device_lifecycle/`, restart Home Assistant, and add the integration from **Settings > Devices & services**.
 
-Device Lifecycle 0.7.4 requires Home Assistant 2026.8.0 or newer. Review the [upgrade notes](#upgrade-notes) and create a Home Assistant backup before any upgrade that changes the Store schema.
+Device Lifecycle 0.7.5 requires Home Assistant 2026.8.0 or newer. Review the [upgrade notes](#upgrade-notes) and create a Home Assistant backup before any upgrade that changes the Store schema.
 
 ## Optional dashboard
 
@@ -434,7 +434,7 @@ Existing relationships to historical or no-longer-configured Purchases are prese
 
 ## Storage and migration impact
 
-0.7.4 continues to use Store 3.1 and ConfigEntry version 4, with no schema migration. Store 3.1 contains `asset.lifecycle`, top-level `lifecycle_events`, and top-level `replacement_records`. It does not persist Asset Device IDs, Entity Registry IDs, exposure state, workflow drafts, or alternate identities.
+0.7.5 continues to use Store 3.1 and ConfigEntry version 4, with no schema migration. Store 3.1 contains `asset.lifecycle`, top-level `lifecycle_events`, and top-level `replacement_records`. It does not persist Asset Device IDs, Entity Registry IDs, exposure state, workflow drafts, or alternate identities.
 
 ## Warranty
 

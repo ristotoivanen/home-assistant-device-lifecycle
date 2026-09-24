@@ -1,6 +1,6 @@
 # Device Lifecycle architecture
 
-This document defines the Asset Core and Asset Exposure invariants through Device Lifecycle 0.7.4. Future releases must extend the model through explicit migrations instead of replacing Asset identity.
+This document defines the Asset Core and Asset Exposure invariants through Device Lifecycle 0.7.5. Future releases must extend the model through explicit migrations instead of replacing Asset identity.
 
 ## Core concepts
 
@@ -43,7 +43,7 @@ Asset Core uses one private, atomic, versioned Home Assistant Store:
 device_lifecycle.assets
 ```
 
-Device Lifecycle 0.7.4 uses Store major version `3`, minor version `1`, and parent ConfigEntry version `4`. Asset Exposure remains derived and adds no stored projection IDs, exposure state, workflow drafts, or alternate Asset identity. Versions 0.7.1 through 0.7.4 require no Store or ConfigEntry migration.
+Device Lifecycle 0.7.5 uses Store major version `3`, minor version `1`, and parent ConfigEntry version `4`. Asset Exposure remains derived and adds no stored projection IDs, exposure state, workflow drafts, or alternate Asset identity. Versions 0.7.1 through 0.7.5 require no Store or ConfigEntry migration.
 
 Conceptual payload:
 
