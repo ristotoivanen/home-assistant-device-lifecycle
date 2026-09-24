@@ -310,6 +310,8 @@ Voiding requires a non-empty reason. Correction is one serialized mutation: mark
 
 Replacement never changes Lifecycle, Deployment, Installation Date, Area, Purchase, warranty, external Home Assistant relationships, Runtime, maintenance, or documents. In particular, a `warranty_rma` successor does not inherit the predecessor's acquisition Purchase or warranty.
 
+Since 0.7.5 the Asset management UI creates a relationship only from the successor: the selected Asset is always the new Asset and the chosen target is always its predecessor (`replacement_replaces`). The predecessor shows the relationship read-only, and there is no user-facing action that creates it from the predecessor. This is a UI rule, not a schema change: the manager API, the record fields, the predecessor → successor direction, graph validation, and every record created before 0.7.5, including chains, are unchanged. Correction and voiding remain available from either endpoint.
+
 ## Home Assistant relationships
 
 `ha_device_refs` stores relationships from an Asset to Home Assistant Device Registry devices. In 0.5.7, related relationships became explicitly user-managed. Primary relationships may be established through Asset management or the existing Purchase and Runtime reconciliation paths. The relationship representation remains unchanged in Store 3.1:
@@ -335,6 +337,7 @@ Relationship invariants:
 6. Linking the same primary or related device to the same Asset is idempotent.
 7. A primary collision with another Asset is rejected; Assets are never merged automatically.
 8. Missing primary and related device IDs remain stored until the user explicitly removes, unlinks, or replaces them.
+9. A Device Registry ID is an external, non-authoritative reference. Its absence from the registry never invalidates Device Lifecycle's own stored data and never fails setup (see [Stale external device references at setup](#stale-external-device-references-at-setup)).
 
 Device Lifecycle does not match or merge Assets by name, manufacturer, model, serial number, identifiers, connections, network address, or Area.
 
@@ -453,7 +456,7 @@ The 0.6.0 registry migration is deliberately separate from Asset Store migration
 2. Reconcile Purchase subentries.
 3. Reconcile Runtime subentries.
 4. Validate the complete canonical Store snapshot and persist reconciliation before publishing it.
-5. Complete the logically separate legacy entity unique-ID migration.
+5. Complete the logically separate legacy entity unique-ID migration. A Purchase- or Runtime-listed device that Home Assistant will no longer attach an entity to is skipped for the device link only (since 0.7.5).
 6. Build the complete read-only 0.6.0 exposure plan.
 7. Ensure deterministic Asset Devices.
 8. Reparent existing Lifecycle entities to the parent ConfigEntry and Asset Device.
@@ -526,7 +529,7 @@ Current setup and legacy normalization follow this order:
 4. Validate all identity, provenance, membership, lifecycle-chain, and replacement-graph invariants.
 5. Atomically save Asset Store.
 6. Only after Store persistence succeeds, add generated stable references back to config subentries.
-7. Migrate Entity Registry unique IDs while preserving `entity_id`.
+7. Migrate Entity Registry unique IDs while preserving `entity_id`, without linking an entity to an external device that is no longer in the Device Registry.
 8. Build and validate the complete exposure migration plan without mutation.
 9. Ensure/reconcile owned Asset Devices and existing entity placement with compensating rollback.
 10. Set `runtime_data` and set up entity platforms.
@@ -550,7 +553,69 @@ Growing histories do not belong in ConfigSubentries. ConfigSubentries remain sui
 
 These boundaries reserve 0.8.x for Maintenance, 0.9.x for Portability & Hardening, and a later release for Documents. None is represented by placeholder 3.1 records.
 
+## 0.7.5 Asset management flow and setup resilience
+
+Device Lifecycle 0.7.5 changes the Asset management OptionsFlow and one setup rule: the legacy entity relink in `migration.py` no longer fails setup on an external device that has left the Device Registry. It changes no canonical schema, identity, or invariant. Store remains 3.1, ConfigEntry remains version 4, no migration runs, and Asset UUIDs, `DLxxxx` Asset IDs, Asset Device identity, entity unique IDs, entity IDs, entity translations, and Recorder continuity are unchanged. `storage.py`, `models.py`, `sensor.py`, `exposure.py`, and `const.py` are untouched.
+
+### Hub, views, and editors
+
+The hub (`manage_asset_menu`) has five rows in this order: Details & warranty, Installation & location, Lifecycle & replacement, Home Assistant devices, Choose another device. Rows 1–4 carry the one-line summaries described under 0.7.4.
+
+Rows 1–3 open read-only section menus (`asset_details_warranty_menu`, `asset_installation_menu`, `asset_lifecycle_replacement_menu`). A section renders the Asset's current facts through `description_placeholders` and lists the editors for its area as menu options, followed by a Back row. Rendering a section, the hub, a submenu, or the selector performs no Store write and no reload. The editors are the existing forms, unchanged in what they write:
+
+| Section | Actions |
+|---|---|
+| Details & warranty | `edit_asset_metadata`, `change_asset_purchase` |
+| Installation & location | `asset_deployment` |
+| Lifecycle & replacement | `asset_lifecycle`, the `asset_replacement` submenu |
+| Replacement submenu | `replacement_replaces`, `manage_asset_replacement` |
+| Home Assistant devices | `manage_primary_device`, `add_related_device`, `remove_related_device` |
+
+Details & warranty renders the Purchase link and the warranty as separate facts, because the warranty is Asset-owned. Lifecycle & replacement presents both domains in one view while they stay separate internally: a lifecycle mutation never creates or changes a replacement record, and a replacement mutation never changes Lifecycle.
+
+### Navigation contract
+
+A successful mutation, including a canonical no-op, returns to the immediate logical parent of the form it was started from:
+
+| Form | Returns to |
+|---|---|
+| Asset details, Linked purchase | Details & warranty |
+| Installation & location, and its location-clearing confirmation | Installation & location |
+| Lifecycle, its Disposed confirmation, and a same-status no-op | Lifecycle & replacement |
+| This Asset replaces…, correct, void | Replacement submenu |
+| Primary, add related, remove related | Home Assistant devices |
+
+Each section's and submenu's Back row goes exactly one level up as real menu navigation: sections and the Home Assistant devices submenu return to the hub, and the Replacement submenu returns to Lifecycle & replacement. Returning is navigation only: the same `asset_uuid` stays selected, and no extra Store write, reload, or flow restart happens. Sections consume a pending result the same way submenus do, so a result appears once where the person lands and never follows Back to the hub.
+
+### Forms: actions, cancellation, and validation
+
+Every Asset management form step has a semantic `submit` label in its translations: Save and return, Add and return, Remove and return, Void and return, Continue for a step that leads to another form, Open for the Asset selector, and Add device for the Quick Add confirmation. The Purchase and Runtime subentry forms keep Home Assistant's default Submit label. Home Assistant forms have no Back control; the top-left X closes the form and ends the flow without saving, which the flow manager handles, not the integration. Every edit, mutation, or action form, including the Purchase and Runtime subentry forms, therefore ends its description with one line saying so. Menus, section views, the hub, and the Asset selector have a Back row or nothing to discard and never carry that line. A test inventory requires every form step to be classified, so a new form cannot appear without the decision being made.
+
+A mutation target is never preselected. Select-based targets (the replacement target, the relationship to correct or void, the related device to remove) start on the `NOT_SELECTED` placeholder. The primary and add-related Home Assistant device pickers are optional in the schema only and have no default, so an empty submit reaches the flow instead of being stopped by the frontend. The device picker shows no required marker in either schema form on Home Assistant 2026.8.0 and 2026.9.3. A missing choice, reason, or confirmation is reported on its own field, the form stays open, and the flow performs no Store write, no reload, and no mutation.
+
+Required text fields keep `vol.Required` and their required marker. Home Assistant's frontend rejects an empty required field client-side with its generic message before the flow runs, so the integration cannot word that case; a whitespace-only value reaches the flow and is reported on its field.
+
+Voiding a replacement requires both a non-empty reason and the confirmation on the Void form. An unconfirmed or reasonless submit stays on that form with the reason preserved and the missing field named, instead of returning as if something had been done. The location-clearing and Disposed confirmations keep their 0.7.4 decline semantics.
+
+### Stale external device references at setup
+
+Device Lifecycle stores Device Registry IDs it does not own: primary and related `ha_device_refs`, Purchase subentry `device_ids`, and a Runtime subentry's `device_id`. Another integration can remove any of those devices at any time. Every resolution site treats a missing device as an unresolved reference:
+
+| Site | Missing device |
+|---|---|
+| Purchase and Runtime reconciliation (`storage.py`) | resolved to `None`; no metadata refresh, no write |
+| Exposure preflight and Asset Device projection (`exposure.py`) | compares stored IDs only; never resolves external devices |
+| Relationships entity (`sensor.py`) | reports `missing` for that reference only |
+| Asset management UI (`config_flow.py`) | named as an unavailable Home Assistant device; new selections must exist |
+| Legacy entity relink (`migration.py`) | skips the device link only (since 0.7.5) |
+
+Before 0.7.5 the legacy relink asked the Entity Registry to attach the Asset's Lifecycle or Runtime entity to every device a Purchase or Runtime subentry lists. Home Assistant refuses an unknown device with `ValueError`, so one removed device left the whole entry in `SETUP_ERROR` on every later setup. The relink now asks first whether Home Assistant will attach an entity to that ID, using the same test Home Assistant's own validation applies: exact ID membership in the device mapping on 2026.8, and `async_get(device_id, include_composite_devices=False)` on 2026.9+, which also excludes pre-migration composite IDs. If it will not, the relink leaves the entity's device link alone, still performs any unique-ID or subentry move, and logs one warning per stale reference and setup naming the Asset ID and the configuration that lists it. Exposure then places the entity on its Asset Device as before. No broad exception handler is involved, so unrelated errors still fail setup.
+
+The stored reference is preserved exactly: no Store write, no subentry rewrite, no migration, no automatic cleanup, and no automatic selection of another device. Entity unique IDs, entity IDs, and registry entries are unchanged. Repair is an explicit user action through the existing flows: remove the device from the Purchase configuration (whose form rejects a missing device until it is deselected) or delete the Runtime configuration, then replace or unlink the primary device. Home Assistant Repairs integration is not part of 0.7.5.
+
 ## 0.7.4 Asset management flow
+
+This section describes the 0.7.4 contracts. The hub layout, return destinations, and void confirmation semantics were revised in 0.7.5 (see [0.7.5 Asset management flow and setup resilience](#075-asset-management-flow-and-setup-resilience)); reload continuity, result messages, summaries, and identifier safety still apply as written.
 
 Device Lifecycle 0.7.4 changes the Asset management OptionsFlow and one reconciliation rule (see [Purchase creation and reconciliation](#purchase-creation-and-reconciliation)). It changes no canonical schema, identity, or invariant. Store remains 3.1, ConfigEntry remains version 4, no migration runs, and Asset UUIDs, `DLxxxx` Asset IDs, Asset Device identity, entity unique IDs, entity IDs, entity translations, and Recorder continuity are unchanged. `sensor.py`, `exposure.py`, and `migration.py` are untouched.
 
@@ -613,7 +678,7 @@ Declining performs no Store write, no reload, and stores no result, and it keeps
 
 ### Known pre-existing issue
 
-`async_migrate_entity_registry` relinks an Asset's Lifecycle entity to each device listed in a Purchase subentry's `device_ids`. If such a device has since been removed from the Device Registry, `EntityRegistry.async_update_entity(device_id=...)` raises `ValueError` and setup ends in `SETUP_ERROR` on every later setup, once that entity exists in the Entity Registry. The defect exists unchanged in 0.7.3 and is not fixed in 0.7.4, because 0.7.4 does not change migration behavior. Under 0.7.4, an Asset mutation in an affected installation reports `entry_not_loaded`, because its awaited reload cannot return the entry to `LOADED`. The reload continuity contract surfaces the failure instead of hiding it.
+`async_migrate_entity_registry` relinks an Asset's Lifecycle entity to each device listed in a Purchase subentry's `device_ids`. If such a device has since been removed from the Device Registry, `EntityRegistry.async_update_entity(device_id=...)` raises `ValueError` and setup ends in `SETUP_ERROR` on every later setup, once that entity exists in the Entity Registry. The defect exists unchanged in 0.7.3 and is not fixed in 0.7.4, because 0.7.4 does not change migration behavior. Under 0.7.4, an Asset mutation in an affected installation reports `entry_not_loaded`, because its awaited reload cannot return the entry to `LOADED`. The reload continuity contract surfaces the failure instead of hiding it. Fixed in 0.7.5; see [Stale external device references at setup](#stale-external-device-references-at-setup).
 
 ## 0.7.3 compatibility impact
 
@@ -634,7 +699,7 @@ Device Lifecycle 0.7.2 added no schema and no user feature. It tightened three e
 
 ### Canonical no-op
 
-A request that leaves canonical Store data unchanged is a canonical no-op: the manager performs no Store write and publishes nothing, and the OptionsFlow performs no ConfigEntry reload. In 0.7.2 and 0.7.3 the flow then finished; since 0.7.4 it returns to the Asset hub (see [0.7.4 Asset management flow](#074-asset-management-flow)). This covers resubmitting unchanged Asset metadata, the current Purchase, the current Deployment state and Area, the current Lifecycle status, and the current primary Home Assistant device, as well as adding an already-related device. Selecting an Asset's current Lifecycle status is a neutral confirmation, not an error. Metadata fields the user did not change keep their existing provenance instead of becoming user-owned. Quick Add is the deliberate exception: a confirmed Quick Add always schedules one reload, so exposure completes even after an ambiguous Store write.
+A request that leaves canonical Store data unchanged is a canonical no-op: the manager performs no Store write and publishes nothing, and the OptionsFlow performs no ConfigEntry reload. In 0.7.2 and 0.7.3 the flow then finished; in 0.7.4 it returned to the Asset hub, and since 0.7.5 it returns to the form's parent view (see [0.7.5 Asset management flow and setup resilience](#075-asset-management-flow-and-setup-resilience)). This covers resubmitting unchanged Asset metadata, the current Purchase, the current Deployment state and Area, the current Lifecycle status, and the current primary Home Assistant device, as well as adding an already-related device. Selecting an Asset's current Lifecycle status is a neutral confirmation, not an error. Metadata fields the user did not change keep their existing provenance instead of becoming user-owned. Quick Add is the deliberate exception: a confirmed Quick Add always schedules one reload, so exposure completes even after an ambiguous Store write.
 
 ### Persisted effective dates and clock rollback
 

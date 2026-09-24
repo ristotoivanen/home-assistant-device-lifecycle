@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <a href="#whats-new-in-074">What's new</a> ·
+  <a href="#whats-new-in-075">What's new</a> ·
   <a href="#installation">Installation</a> ·
   <a href="#quick-add">Quick Add</a> ·
   <a href="#optional-dashboard">Dashboard</a> ·
@@ -39,6 +39,19 @@ Asset IDs are allocated monotonically and never recycled. The UUID and Asset ID 
 
 Asset Core uses Home Assistant's private, atomic, versioned storage. Its invariants and Store 3.1 schema are documented in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
+## What's new in 0.7.5
+
+Device Lifecycle 0.7.5 reorganizes Asset management into fewer, clearer views and makes relationship changes harder to get wrong. Store remains **3.1**, ConfigEntry remains version **4**, and no migration runs. Asset identity, entity unique IDs, entity IDs, entity names and states, and Recorder continuity are unchanged.
+
+- **Five-row Asset hub.** The hub now has Details & warranty, Installation & location, Lifecycle & replacement, Home Assistant devices, and Choose another device. See [Asset management](#asset-management).
+- **Look before you edit.** Details & warranty, Installation & location, and Lifecycle & replacement open a read-only view of the Asset's current information with the edit actions for that area. Opening a view never changes anything.
+- **Replacement is recorded from the new Asset.** Open the new Asset and choose **This Asset replaces…**, then pick the old Asset. The old Asset shows the relationship read-only. Existing relationships and chains keep working, and correcting or voiding a relationship works as before. See [Physical Asset replacement](#physical-asset-replacement).
+- **No accidental first choice.** The replacement target, the relationship to correct or void, and the related device to remove start on a "Select…" placeholder, and no Home Assistant device is preselected. Saving without a choice changes nothing and names what is missing.
+- **Buttons say what they do.** Forms use Save and return, Add and return, Remove and return, Void and return, Continue, or Open instead of a generic Submit. A successful save returns to the view it was started from, and each **←** Back row goes one level up.
+- **Closing without saving.** Home Assistant forms have no Back button, so every form now ends with one line saying that the X in the upper-left corner closes it without saving.
+- **Clearer validation.** A missing correction reason, void reason, void confirmation, primary Home Assistant device, or related device to add is named on that field.
+- **Fix: a removed Home Assistant device no longer stops setup.** If a device that a Purchase or Runtime configuration lists was removed from Home Assistant, Device Lifecycle failed to set up on the next restart or reload. This was the known issue in 0.7.3 and 0.7.4. Setup now continues, every other Asset keeps working, and the stored reference is kept for you to repair. See [Home Assistant device relationships](#home-assistant-device-relationships).
+
 ## What's new in 0.7.4
 
 Device Lifecycle 0.7.4 reworks the Asset management UI. Store remains **3.1**, ConfigEntry remains version **4**, and no migration runs. Asset identity, entity unique IDs, entity IDs, entity names and states, and Recorder continuity are unchanged; the changes are limited to the **Configure** Asset management flow.
@@ -54,7 +67,7 @@ Device Lifecycle 0.7.4 reworks the Asset management UI. Store remains **3.1**, C
 - **Purchase link fix.** If you had changed or cleared an Asset's Purchase yourself while a Purchase configuration still listed the Asset's Home Assistant device, the next restart or reload made the integration fail to set up. Your choice is now kept and setup continues normally.
 - **Terminology.** English and Finnish management terms have been aligned, for example Installation status / Asennustila and Home Assistant devices / Home Assistant -laitteet. Entity names and states keep their earlier wording, so the Deployment entity still reads `Deployment` / `Käyttöönotto`.
 
-A pre-existing setup failure, unrelated to these changes, remains in this release. See [Known issue in 0.7.4](#known-issue-in-074).
+A pre-existing setup failure, unrelated to these changes, remains in this release. See [Known issue in 0.7.4](#known-issue-in-074). It is fixed in 0.7.5.
 
 ## What's new in 0.7.3
 
@@ -236,40 +249,68 @@ Open the existing Device Lifecycle integration and choose **Configure** to acces
 
 ### Choosing an Asset
 
-Assets are listed by display name followed by their permanent Asset ID, for example `Workshop router · DL0032`. The list is sorted by name; Assets with the same name are ordered by Asset ID. Choosing an Asset opens its hub.
+Assets are listed by display name followed by their permanent Asset ID, for example `Workshop router · DL0032`. The list is sorted by name; Assets with the same name are ordered by Asset ID. **Open** / **Avaa** opens the Asset's hub.
 
 ### The Asset hub
 
-The hub is the working menu for one Asset. Its header shows the selected Asset as `Name · DLxxxx`, and it always has these seven rows in this order:
+The hub is the working menu for one Asset. Its header shows the selected Asset as `Name · DLxxxx`, and it always has these five rows in this order:
 
 | # | Finnish | English | Opens |
 |---|---|---|---|
-| 1 | Perustiedot | Asset details | a form for name, category, manufacturer, model, model ID, serial number, software and hardware version, and notes |
-| 2 | Osto ja takuu | Purchase & warranty | a form to link the Asset to a configured Purchase or to No Purchase |
-| 3 | Asennus ja sijainti | Installation & location | a form for installation status, Installation date, and location |
-| 4 | Elinkaari | Lifecycle | a form to record a Lifecycle status change with an optional effective date and notes |
-| 5 | Korvaaminen | Replacement | a submenu for replacement relationships |
-| 6 | Home Assistant -laitteet | Home Assistant devices | a submenu for the primary and related Home Assistant devices |
-| 7 | Valitse toinen laite | Choose another device | the Asset list again |
+| 1 | Tiedot ja takuu | Details & warranty | a view of the Asset details, the linked Purchase, and the warranty |
+| 2 | Asennus ja sijainti | Installation & location | a view of the installation status, Installation date, and location |
+| 3 | Elinkaari ja korvaaminen | Lifecycle & replacement | a view of the Lifecycle status and the Asset's replacement relationships |
+| 4 | Home Assistant -laitteet | Home Assistant devices | the primary and related Home Assistant devices |
+| 5 | Valitse toinen laite | Choose another device | the Asset list again |
 
-Rows 1–6 each show a short summary under the row name, for example the installation status and location, or the primary Home Assistant device and the number of related devices. Summaries are built from the stored Asset data each time the hub is shown. Opening the hub or reading a summary never changes anything.
+Rows 1–4 each show a short summary under the row name, for example the installation status and location, or the primary Home Assistant device and the number of related devices. Summaries are built from the stored Asset data each time the hub is shown. Opening the hub, a view, or a summary never changes anything.
+
+### Views and their actions
+
+Each view shows the current information for its area and lists the actions for it:
+
+| View | Actions |
+|---|---|
+| Details & warranty / Tiedot ja takuu | **Edit asset details** / *Muokkaa perustietoja* (name, category, manufacturer, model, model ID, serial number, software and hardware version, notes); **Change linked purchase** / *Vaihda ostoslinkitystä* |
+| Installation & location / Asennus ja sijainti | **Edit installation and location** / *Muokkaa asennusta ja sijaintia* |
+| Lifecycle & replacement / Elinkaari ja korvaaminen | **Record a lifecycle change** / *Kirjaa elinkaaren muutos*; **Manage replacement** / *Hallitse korvaamista*, which opens the Replacement submenu |
+| Replacement / Korvaaminen | **This Asset replaces…** / *Tämä laite korvaa…*; **Manage existing replacement** / *Hallitse nykyistä korvaussuhdetta* (correct or void an active relationship) |
+| Home Assistant devices / Home Assistant -laitteet | **Manage primary Home Assistant device** (link, unlink, replace, or promote a related device); **Add related Home Assistant device**; **Remove related Home Assistant device** |
+
+Details & warranty shows the Purchase link and the warranty as two separate facts, because the warranty is the Asset's own information. Lifecycle & replacement shows both areas together, but they stay separate: recording a lifecycle change never records or changes a replacement, and recording a replacement never changes Lifecycle.
+
+### Navigation
 
 Navigation follows the same rules everywhere:
 
-- **Forms (rows 1–4).** Saving returns to the same Asset's hub. This also applies when nothing changed, in which case nothing is written.
-- **Submenus (rows 5 and 6).** An operation started from a submenu returns to that submenu, so several replacements or device links can be recorded in a row. The last submenu row, **← Back to asset management** / **← Takaisin laitteen hallintaan**, returns to the hub without changing anything.
+- **Views and submenus** only show information and offer actions. Their last row goes one level up without changing anything: **← Back to asset management** / **← Takaisin laitteen hallintaan** returns to the hub, and the Replacement submenu's **← Back to lifecycle & replacement** / **← Takaisin elinkaareen ja korvaamiseen** returns to Lifecycle & replacement.
+- **Forms** return to the view or submenu they were opened from after a successful save. Asset details and Linked purchase return to Details & warranty, Installation & location to its view, Lifecycle to Lifecycle & replacement, the replacement forms to Replacement, and the Home Assistant device forms to Home Assistant devices. This also applies when nothing changed, in which case nothing is written.
+- **Closing a form.** Home Assistant forms have no Back button, so every form ends with "Close the window without saving by using the X button in the upper-left corner." / "Sulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta." Closing with X saves nothing and closes Asset management; open **Configure** again to continue. Views and menus have their Back row instead and do not show this line.
+- **Buttons** name what they do: **Save and return** / *Tallenna ja palaa*, **Add and return** / *Lisää ja palaa*, **Remove and return** / *Poista ja palaa*, and **Void and return** / *Mitätöi ja palaa*. A form that leads to another form uses **Continue** / *Jatka*.
 - **Choose another device** switches the hub to another Asset without changing anything.
 
-The **Replacement** submenu offers *This Asset replaces…*, *This Asset was replaced by…*, and *Manage existing replacement* (correct or void an active relationship). The **Home Assistant devices** submenu offers *Manage primary Home Assistant device* (link, unlink, replace, or promote a related device), *Add related Home Assistant device*, and *Remove related Home Assistant device*.
+After a change, the view you return to shows once what was done, for example "Asset details updated." / "Perustiedot päivitettiin." The message is gone the next time that view is shown, and it never follows you to another Asset or back to the hub.
 
-After a change, the screen you return to shows once what was done, for example "Asset details updated." / "Perustiedot päivitettiin." The message is gone the next time that screen is shown, and it never follows you to another Asset or from a submenu back to the hub.
+### Explicit choices and validation
+
+A change is recorded only for what you chose. The replacement target, the relationship to correct or void, and the related device to remove start on a "Select…" placeholder, and no Home Assistant device is preselected. Submitting a form without a required choice, reason, or confirmation keeps the form open, names what is missing on that field, and changes nothing. For example: "Select the primary Home Assistant device." / "Valitse ensisijainen Home Assistant -laite."
+
+Required text fields, such as the reason for correcting or voiding a relationship, keep Home Assistant's required marker. If one is left completely empty, Home Assistant itself stops the form with its generic message about required fields before Device Lifecycle sees it; a reason that contains only spaces is named on its field.
+
+### Names instead of IDs
 
 Home Assistant devices, Areas, Purchases, and replacement relationships are shown by name. Internal UUIDs, Home Assistant device IDs, and Area IDs are not shown in the management UI; the `DLxxxx` Asset ID is the identifier you see. A stored reference that no longer exists is not repaired automatically:
 
 - a missing Home Assistant device reads as **Home Assistant device unavailable** / **Home Assistant -laite ei saatavilla**. When several are missing they are numbered in stored order so each one can still be told apart and removed.
 - a deleted Area reads as **Unavailable Home Assistant Area** / **Alue ei ole enää käytettävissä** and is kept until you clear or replace it.
 
-Some changes need a separate confirmation: clearing a location when changing to Not installed, recording Disposed, and voiding a replacement. To decline, submit the confirmation form without ticking its confirmation box. You return to the form the confirmation came from (Installation & location, Lifecycle, or the replacement management form, respectively), with the same Asset selected. Declining saves nothing and shows no result message. Values entered on the form before the confirmation are not kept, so the form shows the Asset's current stored values again.
+### Confirmations
+
+Clearing a location when changing to Not installed and recording Disposed need a separate confirmation. To decline, submit the confirmation form without ticking its confirmation box. You return to the form the confirmation came from (Installation & location or Lifecycle), with the same Asset selected. Declining saves nothing and shows no result message. Values entered on the form before the confirmation are not kept, so the form shows the Asset's current stored values again.
+
+Voiding a replacement relationship needs both a reason and the confirmation on the **Void replacement relationship** form. If either is missing, the form stays open with the reason you entered and names what is missing; nothing is voided. To leave without voiding, close the form with X.
+
+### Saving and reloading
 
 Each saved change reloads the integration so that entities reflect it. The flow waits for that reload to finish and then continues. If the integration does not load again, the flow stops with "Device Lifecycle is not currently loaded. Reload the integration and try again." The change itself has already been saved at that point.
 
@@ -301,7 +342,7 @@ Device Lifecycle does not store installation history.
 
 ## Lifecycle status
 
-Lifecycle status (**Lifecycle** / **Elinkaari** in the Asset hub) describes whether the physical Asset belongs to actively managed inventory. The values are:
+Lifecycle status (**Lifecycle & replacement → Record a lifecycle change** / **Elinkaari ja korvaaminen → Kirjaa elinkaaren muutos** in Asset management) describes whether the physical Asset belongs to actively managed inventory. The values are:
 
 | Lifecycle status (UI) | Elinkaaritila (UI) | Stored value | Meaning |
 |---|---|---|---|
@@ -319,7 +360,11 @@ The Lifecycle Status entity keeps its existing name and state wording, so its Fi
 
 ## Physical Asset replacement
 
-A replacement means one physical Asset replaces another physical Asset. An active relationship is directed from predecessor to successor, for example `DL0001 → DL0008`. A valid chain may continue through later replacements. In 0.7.0 each Asset can have at most one active predecessor and one active successor, and the complete active graph must be acyclic.
+A replacement means one physical Asset replaces another physical Asset. An active relationship is directed from predecessor to successor, for example `DL0001 → DL0008`. A valid chain may continue through later replacements, for example `DL0001 → DL0008 → DL0012`. In 0.7.0 each Asset can have at most one active predecessor and one active successor, and the complete active graph must be acyclic.
+
+Since 0.7.5 a replacement is recorded from the new Asset: open it, choose **Lifecycle & replacement → Manage replacement → This Asset replaces…** / **Elinkaari ja korvaaminen → Hallitse korvaamista → Tämä laite korvaa…**, and pick the old Asset. The stored direction is unchanged: the old Asset is the predecessor and the new one the successor. The old Asset shows the relationship read-only, as replaced by the new Asset; there is no separate action for recording it from the old Asset. Relationships recorded before 0.7.5, including chains, are unchanged and remain fully supported. Recording a relationship moves nothing else between the two Assets.
+
+Correcting or voiding an active relationship starts from **Manage existing replacement** / **Hallitse nykyistä korvaussuhdetta** on either Asset, where the relationship is shown by the two Assets' names and IDs.
 
 Replacement reasons are Unknown, Planned refresh, Upgrade, Failure, Warranty RMA, and Other. **Warranty RMA is only a reason label in 0.7.0**; it does not create an RMA case or transfer the predecessor's Purchase or warranty. A successor never automatically inherits Purchase, warranty, Deployment, Installation Date, Area, Home Assistant relationships, Runtime, maintenance data, or documents.
 
@@ -364,18 +409,24 @@ Device Lifecycle does not automatically match devices by name, model, serial num
 
 A missing stored device is shown in the management UI as **Home Assistant device unavailable** (numbered when several are missing) and is not silently replaced. Its stored reference is kept until you remove it. A stale primary can be unlinked or replaced when dependency checks allow it. A stale related reference remains available under **Remove related Home Assistant device**.
 
+A Home Assistant device that has been removed from Home Assistant, for example because its own integration was removed, never stops Device Lifecycle from setting up. Since 0.7.5 this includes a device that a Purchase or Runtime configuration still lists, which made setup fail in 0.7.3 and 0.7.4. Setup continues and logs one warning naming the Asset ID, every other Asset and entity works normally, the Asset's entities keep their identities, and the Relationships entity reports the reference as `missing`. Nothing is written, cleaned up, or replaced on your behalf: the stored reference stays in the Asset and in the configuration. To repair it:
+
+1. If a Purchase configuration still lists the device, open that Purchase, remove the device from its Home Assistant devices, and save. The form reports "One of the selected devices no longer exists in Home Assistant." until the device is removed; Home Assistant shows it there as an unknown device.
+2. If a Runtime configuration tracks the device, delete that Runtime configuration. The Asset keeps its Runtime total.
+3. Then replace or unlink the primary Home Assistant device in **Home Assistant devices → Manage primary Home Assistant device**.
+
 Unlinking or replacing the primary device is blocked while an active:
 
 - Purchase configuration still includes that device, or
 - Runtime configuration still tracks that device
 
-Remove the active dependency first. Device Lifecycle does not rewrite dependent configurations automatically in 0.6.0. Related add/remove operations do not rewrite or depend on Purchase and Runtime subentries.
+Remove the active dependency first. Device Lifecycle does not rewrite dependent configurations automatically. Related add/remove operations do not rewrite or depend on Purchase and Runtime subentries.
 
 Device Lifecycle validates new relationship targets using the Home Assistant 2026.8 single-config-entry Device Registry model. It never attaches its config entry to an external device or changes external identifiers, connections, names, Area, config-entry ownership, or device topology. Its separately owned Asset Device is only a projection of canonical Asset data.
 
 ## Purchase relationships
 
-An Asset may have no Purchase. In **Purchase & warranty** / **Osto ja takuu**, a manual or existing eligible Asset can be linked to any currently configured Purchase, moved to another one, or set to **No Purchase**, without recreating the Asset. That choice is yours: later reloads keep it even if a Purchase configuration still lists the Asset's Home Assistant device.
+An Asset may have no Purchase. In **Details & warranty → Change linked purchase** / **Tiedot ja takuu → Vaihda ostoslinkitystä**, a manual or existing eligible Asset can be linked to any currently configured Purchase, moved to another one, or set to **No Purchase**, without recreating the Asset. That choice is yours: later reloads keep it even if a Purchase configuration still lists the Asset's Home Assistant device.
 
 Changing or clearing the Purchase link does not change the Asset's warranty. See [Warranty](#warranty).
 
@@ -387,7 +438,7 @@ Existing relationships to historical or no-longer-configured Purchases are prese
 
 ## Warranty
 
-A warranty is the Asset's own information. It is stored on the Asset, not on the Purchase the Asset is currently linked to, and it does not follow that link: linking the Asset to another Purchase, or to No Purchase, leaves the warranty exactly as it was. The **Purchase & warranty** summary shows the Purchase link and the warranty side by side as two separate facts.
+A warranty is the Asset's own information. It is stored on the Asset, not on the Purchase the Asset is currently linked to, and it does not follow that link: linking the Asset to another Purchase, or to No Purchase, leaves the warranty exactly as it was. **Details & warranty** shows the Purchase link and the warranty as two separate facts.
 
 Existing Purchase workflows can set a warranty with these modes:
 
@@ -396,7 +447,7 @@ Existing Purchase workflows can set a warranty with these modes:
 - 2 years
 - Manual
 
-For 1- and 2-year warranties, the warranty end date is calculated from the Purchase date with calendar-year and leap-day handling. Quick Add can apply those modes only when a configured Purchase with a valid Purchase date is selected, or use a manual warranty date without a Purchase. It revalidates the Purchase date immediately before commit. There is no separate warranty editor in 0.7.4: the **Purchase & warranty** form changes only the Purchase link.
+For 1- and 2-year warranties, the warranty end date is calculated from the Purchase date with calendar-year and leap-day handling. Quick Add can apply those modes only when a configured Purchase with a valid Purchase date is selected, or use a manual warranty date without a Purchase. It revalidates the Purchase date immediately before commit. There is no separate warranty editor in 0.7.5: the **Linked purchase** / **Ostoslinkitys** form changes only the Purchase link.
 
 ## Runtime tracking
 
@@ -417,6 +468,14 @@ Runtime configuration remains owned by its Runtime subentry, and the external pr
 
 ## Upgrade notes
 
+### Upgrading from 0.7.4 to 0.7.5
+
+No Home Assistant upgrade is required; 0.7.5 keeps the Home Assistant 2026.8.0 minimum. No Store or ConfigEntry migration runs. Store remains 3.1 and ConfigEntry remains version 4. Existing Assets, Purchases, lifecycle and replacement history, Asset Devices, entity unique IDs, entity IDs, entity names and states, and Recorder continuity remain unchanged.
+
+The Asset management UI under **Configure** is reorganized into the five-row hub described in [Asset management](#asset-management). Its rows now open read-only views, and the edit forms are one step further in, for example **Details & warranty → Edit asset details**. A replacement is now recorded from the new Asset with **This Asset replaces…**; relationships recorded earlier are unchanged.
+
+If Device Lifecycle failed to set up because a Home Assistant device that a Purchase or Runtime configuration lists had been removed from Home Assistant, it sets up again after the upgrade without any action. The stored reference is kept; repair it as described in [Home Assistant device relationships](#home-assistant-device-relationships).
+
 ### Upgrading from 0.7.3 to 0.7.4
 
 No Home Assistant upgrade is required; 0.7.4 keeps the Home Assistant 2026.8.0 minimum. No Store or ConfigEntry migration runs. Store remains 3.1 and ConfigEntry remains version 4. Existing Assets, Purchases, lifecycle and replacement history, Asset Devices, entity unique IDs, entity IDs, and Recorder continuity remain unchanged.
@@ -427,7 +486,7 @@ Asset management no longer closes after each change. If you are used to reopenin
 
 #### Known issue in 0.7.4
 
-This issue already exists in 0.7.3 and is not caused by 0.7.4. It is not fixed in 0.7.4.
+This issue already exists in 0.7.3 and is not caused by 0.7.4. It is not fixed in 0.7.4. It is fixed in 0.7.5; see [Upgrading from 0.7.4 to 0.7.5](#upgrading-from-074-to-075).
 
 A Purchase configuration can list a Home Assistant device, for example one selected when the Purchase was created. If that device is later removed from Home Assistant, for instance because its own integration was removed, Device Lifecycle can fail to set up on the next restart or reload, and the integration is then shown as failed to set up. If the device is removed while Device Lifecycle is running, the next change saved in Asset management ends with "Device Lifecycle is not currently loaded", because the reload that follows the save cannot set the integration up again. The setup failure does not itself remove the stored Asset data.
 
@@ -526,7 +585,7 @@ Removing a Runtime tracking entry removes only that Runtime sensor and active co
 
 Removing a Device Lifecycle Asset Device from Home Assistant does not delete or purge its canonical Asset. The projection can be recreated on reload.
 
-Device Lifecycle 0.7.4 does not provide a warranty editor, a searchable Asset list, a guided replacement wizard, preservation of values entered on a form when its confirmation is declined, Asset deletion/purge/merge, Runtime reset/manual editing, bulk Asset creation, automatic discovery or stale-device rematching, Purchase creation inside Quick Add, Maintenance, RMA cases, Documents, export/import, future replacement scheduling, automatic inheritance/transfer between replacement Assets, a lifecycle-history UI, or full replacement-history attributes. Lifecycle and replacement history remain canonical in Store 3.1 even though Home Assistant exposes only current state.
+Device Lifecycle 0.7.5 does not provide a warranty editor, a searchable Asset list, a guided replacement wizard, preservation of values entered on a form when its location-clearing or Disposed confirmation is declined, Home Assistant Repairs for stale references, Asset deletion/purge/merge, Runtime reset/manual editing, bulk Asset creation, automatic discovery or stale-device rematching, Purchase creation inside Quick Add, Maintenance, RMA cases, Documents, export/import, future replacement scheduling, automatic inheritance/transfer between replacement Assets, a lifecycle-history UI, or full replacement-history attributes. Lifecycle and replacement history remain canonical in Store 3.1 even though Home Assistant exposes only current state.
 
 ## Documentation
 
@@ -553,6 +612,7 @@ For reproducible problems, open a [GitHub issue](https://github.com/ristotoivane
 - **0.7.2 — Reliability, correctness & CI hardening**
 - **0.7.3 — Compatibility & Release Hygiene**
 - **0.7.4 — Asset Management UX**
+- **0.7.5 — Asset Management UX & safety**
 - **0.8.x — Maintenance**
 - **0.9.x — Portability & Hardening**
 - **Future — Documents**
