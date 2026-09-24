@@ -1,10 +1,12 @@
 """Hub rows 1-3 open a read-only section menu before any editor.
 
-Details & warranty, Installation & location and Lifecycle each show the
-Asset's current state in a few short lines, offer their existing editors as
-rows, and go back to the hub with a real menu row. Details & warranty
-groups three separate facts, the Asset's details, its linked Purchase and
-its own warranty, and keeps one editor for each thing that can be changed.
+Details & warranty, Installation & location and Lifecycle & replacement
+each show the Asset's current state in a few short lines, offer their
+existing operations as rows, and go back to the hub with a real menu row.
+A section that groups several facts keeps them apart: Details & warranty
+shows the Asset's details, its linked Purchase and its own warranty, and
+Lifecycle & replacement shows the Lifecycle state beside the replacement
+relationships in both directions. Each keeps its own operations.
 Somebody who only wants to look never has to open a form or use its Submit
 button as a way back.
 
@@ -24,12 +26,19 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import area_registry as ar
 
+from custom_components.device_lifecycle.config_flow import (
+    NOT_SELECTED,
+    SUMMARY_NAME_MAX_LENGTH,
+)
 from custom_components.device_lifecycle.const import (
     CONF_ASSET_UUID,
     CONF_DEPLOYMENT_STATE,
+    CONF_EFFECTIVE_DATE,
     CONF_HA_AREA_ID,
     CONF_LIFECYCLE_STATUS,
     CONF_PURCHASE_UUID,
+    CONF_REPLACEMENT_REASON,
+    CONF_REPLACEMENT_TARGET_ASSET_UUID,
     DEPLOYMENT_STATE_DEPLOYED,
     DEPLOYMENT_STATE_NOT_DEPLOYED,
     DEPLOYMENT_STATE_UNKNOWN,
@@ -52,13 +61,17 @@ from .test_purchase_reconciliation import (
 HUB_STEP = "manage_asset_menu"
 BACK = "manage_asset_menu"
 DETAILS_WARRANTY = "asset_details_warranty_menu"
-# Section menu -> the editors it opens, in hub row order.
+LIFECYCLE_REPLACEMENT = "asset_lifecycle_replacement_menu"
+REPLACEMENT_SUBMENU = "asset_replacement"
+# Section menu -> the operations it opens, in hub row order.
 SECTIONS = {
     DETAILS_WARRANTY: ["edit_asset_metadata", "change_asset_purchase"],
     "asset_installation_menu": ["asset_deployment"],
-    "asset_lifecycle_menu": ["asset_lifecycle"],
+    LIFECYCLE_REPLACEMENT: ["asset_lifecycle", REPLACEMENT_SUBMENU],
 }
 EDITORS = [(section, editor) for section, editors in SECTIONS.items() for editor in editors]
+# Replacement keeps its own submenu; every other operation is a form.
+SUBMENUS = {REPLACEMENT_SUBMENU}
 SUMMARY_MAX_LENGTH = 60
 # Asset details keep technical values nearly whole: the longest label
 # ("Software version: ", "Ohjelmistoversio: ") plus a 64-character value.
@@ -72,7 +85,16 @@ GROUPS = {
         "warranty": (2, SUMMARY_MAX_LENGTH),
     },
     "asset_installation_menu": {"facts": (3, SUMMARY_MAX_LENGTH)},
-    "asset_lifecycle_menu": {"facts": (2, SUMMARY_MAX_LENGTH)},
+    LIFECYCLE_REPLACEMENT: {
+        "lifecycle": (2, SUMMARY_MAX_LENGTH),
+        # One direction per line: the longest lead-in, then "Name · DLxxxx".
+        "replacement": (
+            2,
+            len("This Asset was replaced by: ")
+            + SUMMARY_NAME_MAX_LENGTH
+            + len(" · DL0007"),
+        ),
+    },
 }
 # Detail line label -> the editor field it describes.
 DETAIL_FIELDS = {
@@ -152,6 +174,41 @@ async def _rich_asset(
     return manager, workshop
 
 
+async def _chain(
+    manager: AssetStoreManager,
+    *,
+    predecessor_name: str = "Smoke test 0.7.1",
+    successor_name: str = "Uusi lämmitin",
+    replaces: bool = True,
+    replaced_by: bool = True,
+):
+    """Put the fixture Asset in the middle of an active replacement chain."""
+    predecessor = await manager.async_create_manual_asset(name=predecessor_name)
+    successor = await manager.async_create_manual_asset(name=successor_name)
+    records = []
+    if replaces:
+        records.append(
+            await manager.async_create_asset_replacement(
+                predecessor["asset_uuid"],
+                ASSET_UUID,
+                reason="failure",
+                effective_date="2026-08-11",
+                notes="Replacement note that must stay hidden",
+            )
+        )
+    if replaced_by:
+        records.append(
+            await manager.async_create_asset_replacement(
+                ASSET_UUID,
+                successor["asset_uuid"],
+                reason="upgrade",
+                effective_date="2026-09-12",
+                notes="Replacement note that must stay hidden",
+            )
+        )
+    return predecessor, successor, records
+
+
 @pytest.mark.parametrize(("section", "editors"), SECTIONS.items())
 async def test_each_hub_row_opens_its_section_menu(
     hass: HomeAssistant,
@@ -187,6 +244,80 @@ async def test_details_and_purchase_no_longer_have_sections_of_their_own(
         assert not hasattr(flow, f"async_step_{retired}")
         for language in ("en", "fi"):
             assert retired not in _translations(language)
+
+
+async def test_lifecycle_and_replacement_share_one_hub_row(
+    hass: HomeAssistant,
+    asset_store_data: AssetStoreData,
+) -> None:
+    """One row replaces Lifecycle and Replacement; the submenu stays."""
+    manager = _manager(hass, asset_store_data)
+    flow, hub = await _hub_flow(hass, manager)
+
+    assert hub["menu_options"][2] == LIFECYCLE_REPLACEMENT
+    for retired in ("asset_lifecycle_menu", REPLACEMENT_SUBMENU):
+        assert retired not in hub["menu_options"]
+    assert not hasattr(flow, "async_step_asset_lifecycle_menu")
+    for language in ("en", "fi"):
+        assert "asset_lifecycle_menu" not in _translations(language)
+    # Replacement operations are only reached through their own submenu.
+    for operation in (
+        "replacement_replaces",
+        "replacement_replaced_by",
+        "manage_asset_replacement",
+    ):
+        assert operation not in hub["menu_options"]
+        assert operation not in SECTIONS[LIFECYCLE_REPLACEMENT]
+
+
+@pytest.mark.parametrize(
+    ("language", "headings", "actions", "title"),
+    [
+        (
+            "en",
+            ["**Lifecycle**", "**Replacement**"],
+            {
+                "asset_lifecycle": "Record a lifecycle change",
+                REPLACEMENT_SUBMENU: "Manage replacement",
+                BACK: "← Back to asset management",
+            },
+            "Lifecycle & replacement",
+        ),
+        (
+            "fi",
+            ["**Elinkaari**", "**Korvaaminen**"],
+            {
+                "asset_lifecycle": "Kirjaa elinkaaren muutos",
+                REPLACEMENT_SUBMENU: "Hallitse korvaamista",
+                BACK: "← Takaisin laitteen hallintaan",
+            },
+            "Elinkaari ja korvaaminen",
+        ),
+    ],
+)
+def test_lifecycle_and_replacement_labels_each_group_and_action(
+    language: str,
+    headings: list[str],
+    actions: dict[str, str],
+    title: str,
+) -> None:
+    """Two headed groups in a fixed order, then the two operations and Back."""
+    step = _translations(language)[LIFECYCLE_REPLACEMENT]
+    description = step["description"]
+    positions = [
+        description.index(f"{heading}\n{{{group}}}")
+        for heading, group in zip(
+            headings, GROUPS[LIFECYCLE_REPLACEMENT], strict=True
+        )
+    ]
+
+    assert description.startswith("{asset}\n\n")
+    assert positions == sorted(positions)
+    assert step["menu_options"] == actions
+    assert step["title"] == title
+    assert _translations(language)["manage_asset_menu"]["menu_options"][
+        LIFECYCLE_REPLACEMENT
+    ] == title
 
 
 @pytest.mark.parametrize(
@@ -240,7 +371,7 @@ async def test_every_action_row_opens_the_existing_editor(
     section: str,
     editor: str,
 ) -> None:
-    """End to end: hub row, then the action row, then the same form as before."""
+    """End to end: hub row, then the action row, then the same step as before."""
     manager = _manager(hass, asset_store_data)
     flow_id = await _flow_manager_on_asset(hass, manager, ASSET_UUID)
 
@@ -253,7 +384,9 @@ async def test_every_action_row_opens_the_existing_editor(
 
     assert opened["type"] is FlowResultType.MENU
     assert opened["step_id"] == section
-    assert form["type"] is FlowResultType.FORM
+    assert form["type"] is (
+        FlowResultType.MENU if editor in SUBMENUS else FlowResultType.FORM
+    )
     assert form["step_id"] == editor
 
 
@@ -768,6 +901,296 @@ async def test_installation_without_a_date_leaves_the_date_out(
     assert _lines(result) == ["Installation: Not installed", "Location: No Area"]
 
 
+NO_RELATIONSHIP = "No active relationship"
+
+
+async def _lifecycle_state(manager: AssetStoreManager, state: str) -> None:
+    """Record the fixture Asset's Lifecycle through the canonical operation."""
+    status, date = {
+        "active": ("active", "2026-08-11"),
+        "retired": ("retired", "2026-09-12"),
+    }[state]
+    await manager.async_set_asset_lifecycle(
+        ASSET_UUID, status, effective_date=date, notes="Lifecycle note hidden"
+    )
+
+
+@pytest.mark.parametrize(
+    ("state", "replaces", "replaced_by", "stale", "lifecycle", "replacement"),
+    [
+        pytest.param(
+            "active", False, False, False,
+            ["Status: Active", "Effective from: 11 Aug 2026"],
+            [NO_RELATIONSHIP, NO_RELATIONSHIP],
+            id="A-active-no-replacement",
+        ),
+        pytest.param(
+            "active", True, False, False,
+            ["Status: Active", "Effective from: 11 Aug 2026"],
+            ["Smoke test 0.7.1 · DL0008", NO_RELATIONSHIP],
+            id="B-active-replaces-predecessor",
+        ),
+        pytest.param(
+            "active", False, True, False,
+            ["Status: Active", "Effective from: 11 Aug 2026"],
+            [NO_RELATIONSHIP, "Uusi lämmitin · DL0009"],
+            id="C-active-replaced-by-successor",
+        ),
+        pytest.param(
+            "active", True, True, False,
+            ["Status: Active", "Effective from: 11 Aug 2026"],
+            ["Smoke test 0.7.1 · DL0008", "Uusi lämmitin · DL0009"],
+            id="D-active-both-directions",
+        ),
+        pytest.param(
+            "retired", False, False, False,
+            ["Status: Retired", "Effective from: 12 Sep 2026"],
+            [NO_RELATIONSHIP, NO_RELATIONSHIP],
+            id="E-retired-no-replacement",
+        ),
+        pytest.param(
+            "retired", False, True, False,
+            ["Status: Retired", "Effective from: 12 Sep 2026"],
+            [NO_RELATIONSHIP, "Uusi lämmitin · DL0009"],
+            id="F-retired-replaced-by-successor",
+        ),
+        pytest.param(
+            "active", True, True, True,
+            ["Status: Active", "Effective from: 11 Aug 2026"],
+            ["Unavailable Asset", "Unavailable Asset"],
+            id="G-stale-references",
+        ),
+    ],
+)
+async def test_lifecycle_and_replacement_states_read_in_words(
+    hass: HomeAssistant,
+    asset_store_data: AssetStoreData,
+    state: str,
+    replaces: bool,
+    replaced_by: bool,
+    stale: bool,
+    lifecycle: list[str],
+    replacement: list[str],
+) -> None:
+    """The state and both directions, each named for people, never by UUID."""
+    manager = _manager(hass, asset_store_data)
+    await _lifecycle_state(manager, state)
+    predecessor, successor, records = await _chain(
+        manager, replaces=replaces, replaced_by=replaced_by
+    )
+    if stale:
+        # A validated Store cannot hold this; the view must still not leak.
+        for partner in (predecessor, successor):
+            manager._data["assets"].pop(partner["asset_uuid"])
+    flow, _hub = await _hub_flow(hass, manager)
+
+    result = await _section(flow, LIFECYCLE_REPLACEMENT)
+    shown = _shown(result)
+
+    assert _lines(result, "lifecycle") == lifecycle
+    assert _lines(result, "replacement") == [
+        f"This Asset replaces: {replacement[0]}",
+        f"This Asset was replaced by: {replacement[1]}",
+    ]
+    for hidden in (
+        ASSET_UUID,
+        predecessor["asset_uuid"],
+        successor["asset_uuid"],
+        *(record["replacement_uuid"] for record in records),
+        "→",
+        "Lifecycle note",
+        "Replacement note",
+    ):
+        assert hidden not in shown, hidden
+
+
+async def test_a_voided_relationship_is_history_not_a_current_fact(
+    hass: HomeAssistant,
+    asset_store_data: AssetStoreData,
+) -> None:
+    """Only active records show, the same way the submenu reads them."""
+    manager = _manager(hass, asset_store_data)
+    _predecessor, _successor, records = await _chain(manager, replaces=False)
+    flow, _hub = await _hub_flow(hass, manager)
+    before = await _section(flow, LIFECYCLE_REPLACEMENT)
+
+    await manager.async_void_asset_replacement(
+        records[0]["replacement_uuid"], void_reason="Recorded in error"
+    )
+    after = await _section(flow, LIFECYCLE_REPLACEMENT)
+
+    assert _lines(before, "replacement")[1] == (
+        "This Asset was replaced by: Uusi lämmitin · DL0009"
+    )
+    assert _lines(after, "replacement") == [
+        f"This Asset replaces: {NO_RELATIONSHIP}",
+        f"This Asset was replaced by: {NO_RELATIONSHIP}",
+    ]
+    assert _lines(after, "lifecycle") == _lines(before, "lifecycle")
+
+
+async def test_lifecycle_and_replacement_read_in_finnish(
+    hass: HomeAssistant,
+    asset_store_data: AssetStoreData,
+) -> None:
+    """Both directions are whole Finnish sentences, as the submenu words them."""
+    hass.config.language = "fi"
+    manager = _manager(hass, asset_store_data)
+    await _lifecycle_state(manager, "retired")
+    predecessor, _successor, _records = await _chain(manager)
+    flow, _hub = await _hub_flow(hass, manager)
+
+    both = await _section(flow, LIFECYCLE_REPLACEMENT)
+    manager._data["assets"].pop(predecessor["asset_uuid"])
+    stale = await _section(flow, LIFECYCLE_REPLACEMENT)
+
+    assert _lines(both, "lifecycle") == [
+        "Tila: Käytöstä poistettu",
+        "Voimassa alkaen: 12.9.2026",
+    ]
+    assert _lines(both, "replacement") == [
+        "Tämä laite korvaa: Smoke test 0.7.1 · DL0008",
+        "Tämän laitteen korvasi: Uusi lämmitin · DL0009",
+    ]
+    assert _lines(stale, "replacement")[0] == (
+        "Tämä laite korvaa: Laite ei ole enää käytettävissä"
+    )
+
+
+async def test_manage_replacement_opens_the_unchanged_submenu(
+    hass: HomeAssistant,
+    asset_store_data: AssetStoreData,
+) -> None:
+    """End to end: the same operations, and its own Back to the hub."""
+    manager = _manager(hass, asset_store_data)
+    await _chain(manager, replaces=False)
+    flow_id = await _flow_manager_on_asset(hass, manager, ASSET_UUID)
+    await hass.config_entries.options.async_configure(
+        flow_id, {"next_step_id": LIFECYCLE_REPLACEMENT}
+    )
+    before = deepcopy(manager._data)
+    manager._store.async_save.reset_mock()
+
+    with capture_reloads(hass) as reload:
+        submenu = await hass.config_entries.options.async_configure(
+            flow_id, {"next_step_id": REPLACEMENT_SUBMENU}
+        )
+        hub = await hass.config_entries.options.async_configure(
+            flow_id, {"next_step_id": BACK}
+        )
+
+    assert submenu["type"] is FlowResultType.MENU
+    assert submenu["step_id"] == REPLACEMENT_SUBMENU
+    assert submenu["menu_options"] == [
+        "replacement_replaces",
+        "replacement_replaced_by",
+        "manage_asset_replacement",
+        BACK,
+    ]
+    assert submenu["description_placeholders"]["result"] == ""
+    assert hub["step_id"] == HUB_STEP
+    assert hub["description_placeholders"]["result"] == ""
+    manager._store.async_save.assert_not_awaited()
+    reload.assert_not_called()
+    assert manager._data == before
+
+
+async def test_recording_a_replacement_leaves_the_lifecycle_alone(
+    hass: HomeAssistant,
+    area_registry: ar.AreaRegistry,
+    asset_store_data: AssetStoreData,
+) -> None:
+    """End to end: a relationship recorded from the section changes only itself."""
+    manager, _workshop = await _rich_asset(hass, area_registry, asset_store_data)
+    await manager.async_add_related_device(ASSET_UUID, "related-device-id")
+    predecessor = await manager.async_create_manual_asset(name="Smoke test 0.7.1")
+    flow_id = await _flow_manager_on_asset(hass, manager, ASSET_UUID)
+    before_asset = deepcopy(manager.asset(ASSET_UUID))
+    before_events = manager.lifecycle_events_for_asset(ASSET_UUID)
+    before_predecessor = deepcopy(manager.asset(predecessor["asset_uuid"]))
+
+    section = await hass.config_entries.options.async_configure(
+        flow_id, {"next_step_id": LIFECYCLE_REPLACEMENT}
+    )
+    await hass.config_entries.options.async_configure(
+        flow_id, {"next_step_id": REPLACEMENT_SUBMENU}
+    )
+    form = await hass.config_entries.options.async_configure(
+        flow_id, {"next_step_id": "replacement_replaces"}
+    )
+    with capture_reloads(hass):
+        submenu = await hass.config_entries.options.async_configure(
+            flow_id,
+            {
+                CONF_REPLACEMENT_TARGET_ASSET_UUID: predecessor["asset_uuid"],
+                CONF_REPLACEMENT_REASON: "failure",
+                CONF_EFFECTIVE_DATE: "2026-08-11",
+            },
+        )
+    await hass.config_entries.options.async_configure(
+        flow_id, {"next_step_id": BACK}
+    )
+    after = await hass.config_entries.options.async_configure(
+        flow_id, {"next_step_id": LIFECYCLE_REPLACEMENT}
+    )
+
+    # Phase 1: the form still starts on the placeholder, not on an Asset.
+    assert form["step_id"] == "replacement_replaces"
+    target = next(
+        marker
+        for marker in form["data_schema"].schema
+        if marker == CONF_REPLACEMENT_TARGET_ASSET_UUID
+    )
+    assert target.default() == NOT_SELECTED
+    # Recording a relationship keeps the result in the replacement submenu.
+    assert submenu["step_id"] == REPLACEMENT_SUBMENU
+    assert submenu["description_placeholders"]["result"] == "Replacement updated."
+    # Neither Asset's Lifecycle, installation, Area, Purchase, warranty or
+    # Home Assistant devices moved.
+    assert manager.asset(ASSET_UUID) == before_asset
+    assert manager.asset(predecessor["asset_uuid"]) == before_predecessor
+    assert manager.lifecycle_events_for_asset(ASSET_UUID) == before_events
+    assert _lines(after, "lifecycle") == _lines(section, "lifecycle")
+    assert _lines(after, "replacement")[0] == (
+        "This Asset replaces: Smoke test 0.7.1 · DL0008"
+    )
+
+
+async def test_recording_a_lifecycle_change_leaves_replacement_alone(
+    hass: HomeAssistant,
+    asset_store_data: AssetStoreData,
+) -> None:
+    """End to end: retiring from the section keeps every relationship."""
+    manager = _manager(hass, asset_store_data)
+    await _chain(manager)
+    records = deepcopy(manager._data["replacement_records"])
+    flow_id = await _flow_manager_on_asset(hass, manager, ASSET_UUID)
+
+    section = await hass.config_entries.options.async_configure(
+        flow_id, {"next_step_id": LIFECYCLE_REPLACEMENT}
+    )
+    await hass.config_entries.options.async_configure(
+        flow_id, {"next_step_id": "asset_lifecycle"}
+    )
+    with capture_reloads(hass):
+        hub = await hass.config_entries.options.async_configure(
+            flow_id,
+            {CONF_LIFECYCLE_STATUS: "retired", CONF_EFFECTIVE_DATE: "2026-09-12"},
+        )
+    after = await hass.config_entries.options.async_configure(
+        flow_id, {"next_step_id": LIFECYCLE_REPLACEMENT}
+    )
+
+    assert hub["step_id"] == HUB_STEP
+    assert hub["description_placeholders"]["result"] == "Lifecycle updated."
+    assert manager._data["replacement_records"] == records
+    assert _lines(after, "lifecycle") == [
+        "Status: Retired",
+        "Effective from: 12 Sep 2026",
+    ]
+    assert _lines(after, "replacement") == _lines(section, "replacement")
+
+
 async def test_lifecycle_shows_the_current_state_not_its_history(
     hass: HomeAssistant,
     area_registry: ar.AreaRegistry,
@@ -778,9 +1201,12 @@ async def test_lifecycle_shows_the_current_state_not_its_history(
     flow, _hub = await _hub_flow(hass, manager)
     event_uuid = manager.asset(ASSET_UUID)["lifecycle"]["current_event_uuid"]
 
-    result = await _section(flow, "asset_lifecycle_menu")
+    result = await _section(flow, LIFECYCLE_REPLACEMENT)
 
-    assert _lines(result) == ["Status: Active", "Effective from: 2 Jan 2026"]
+    assert _lines(result, "lifecycle") == [
+        "Status: Active",
+        "Effective from: 2 Jan 2026",
+    ]
     assert "Lifecycle note" not in _shown(result)
     assert event_uuid not in _shown(result)
 
@@ -793,9 +1219,9 @@ async def test_lifecycle_without_an_effective_date_is_one_line(
     manager = _manager(hass, asset_store_data)
     flow, _hub = await _hub_flow(hass, manager)
 
-    result = await _section(flow, "asset_lifecycle_menu")
+    result = await _section(flow, LIFECYCLE_REPLACEMENT)
 
-    assert _lines(result) == ["Status: Unknown"]
+    assert _lines(result, "lifecycle") == ["Status: Unknown"]
 
 
 async def test_sections_read_in_finnish(
@@ -812,7 +1238,7 @@ async def test_sections_read_in_finnish(
 
     details_warranty = await _section(flow, DETAILS_WARRANTY)
     installation = await _section(flow, "asset_installation_menu")
-    lifecycle = await _section(flow, "asset_lifecycle_menu")
+    lifecycle_replacement = await _section(flow, LIFECYCLE_REPLACEMENT)
 
     assert _lines(details_warranty, "details") == [
         "Valmistaja: Example manufacturer",
@@ -838,7 +1264,14 @@ async def test_sections_read_in_finnish(
         "Asennuspäivä: 20.1.2026",
         "Sijainti: Workshop",
     ]
-    assert _lines(lifecycle) == ["Tila: Aktiivinen", "Voimassa alkaen: 2.1.2026"]
+    assert _lines(lifecycle_replacement, "lifecycle") == [
+        "Tila: Aktiivinen",
+        "Voimassa alkaen: 2.1.2026",
+    ]
+    assert _lines(lifecycle_replacement, "replacement") == [
+        "Tämä laite korvaa: Ei aktiivista suhdetta",
+        "Tämän laitteen korvasi: Ei aktiivista suhdetta",
+    ]
 
 
 async def test_finnish_edge_states_are_named_in_finnish(
@@ -888,6 +1321,7 @@ async def test_no_section_shows_a_technical_identifier(
     """UUIDs, registry IDs, receipts and notes never reach a section."""
     manager, workshop = await _rich_asset(hass, area_registry, asset_store_data)
     await manager.async_add_related_device(ASSET_UUID, "related-device-id")
+    predecessor, successor, records = await _chain(manager)
     flow, _hub = await _hub_flow(hass, manager)
     asset = manager.asset(ASSET_UUID)
 
@@ -896,6 +1330,10 @@ async def test_no_section_shows_a_technical_identifier(
 
     for hidden in (
         ASSET_UUID,
+        predecessor["asset_uuid"],
+        successor["asset_uuid"],
+        *(record["replacement_uuid"] for record in records),
+        "Replacement note",
         PURCHASE_UUID,
         DEVICE_ID,
         "related-device-id",
@@ -948,6 +1386,11 @@ async def test_long_values_stay_within_the_summary_budget(
         deployment_state=DEPLOYMENT_STATE_DEPLOYED,
         ha_area_id=area.id,
     )
+    await _chain(
+        manager,
+        predecessor_name=f"Predecessor {LONG}",
+        successor_name=f"Successor {LONG}",
+    )
     flow, _hub = await _hub_flow(hass, manager)
 
     result = await _section(flow, section)
@@ -986,7 +1429,7 @@ async def test_saving_from_a_section_still_lands_on_the_hub(
             {CONF_DEPLOYMENT_STATE: DEPLOYMENT_STATE_UNKNOWN},
         ),
         (
-            "asset_lifecycle_menu",
+            LIFECYCLE_REPLACEMENT,
             "asset_lifecycle",
             {CONF_LIFECYCLE_STATUS: "unknown"},
         ),

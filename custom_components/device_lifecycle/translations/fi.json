@@ -466,15 +466,13 @@
         "menu_option_descriptions": {
           "asset_details_warranty_menu": "{details_warranty}",
           "asset_installation_menu": "{deployment}",
-          "asset_lifecycle_menu": "{lifecycle}",
-          "asset_replacement": "{replacement}",
+          "asset_lifecycle_replacement_menu": "{lifecycle_replacement}",
           "ha_relationship": "{ha_devices}"
         },
         "menu_options": {
           "asset_details_warranty_menu": "Tiedot ja takuu",
           "asset_installation_menu": "Asennus ja sijainti",
-          "asset_lifecycle_menu": "Elinkaari",
-          "asset_replacement": "Korvaaminen",
+          "asset_lifecycle_replacement_menu": "Elinkaari ja korvaaminen",
           "ha_relationship": "Home Assistant -laitteet",
           "manage_asset": "Valitse toinen laite"
         },
@@ -497,13 +495,14 @@
         },
         "title": "Asennus ja sijainti"
       },
-      "asset_lifecycle_menu": {
-        "description": "{asset}\n\n{facts}",
+      "asset_lifecycle_replacement_menu": {
+        "description": "{asset}\n\n**Elinkaari**\n{lifecycle}\n\n**Korvaaminen**\n{replacement}",
         "menu_options": {
           "asset_lifecycle": "Kirjaa elinkaaren muutos",
+          "asset_replacement": "Hallitse korvaamista",
           "manage_asset_menu": "← Takaisin laitteen hallintaan"
         },
-        "title": "Elinkaari"
+        "title": "Elinkaari ja korvaaminen"
       },
       "manage_asset_replacement": {
         "data": {

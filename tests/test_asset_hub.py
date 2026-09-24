@@ -35,8 +35,7 @@ from .test_options_flow import (
 HUB_ROWS = [
     "asset_details_warranty_menu",
     "asset_installation_menu",
-    "asset_lifecycle_menu",
-    "asset_replacement",
+    "asset_lifecycle_replacement_menu",
     "ha_relationship",
     "manage_asset",
 ]
@@ -44,8 +43,7 @@ HUB_ROWS = [
 SUMMARY_PLACEHOLDERS = [
     "details_warranty",
     "deployment",
-    "lifecycle",
-    "replacement",
+    "lifecycle_replacement",
     "ha_devices",
 ]
 
@@ -76,11 +74,11 @@ async def test_selecting_an_asset_opens_its_hub(
     assert hub["description_placeholders"]["asset"] == "Workshop device · DL0007"
 
 
-async def test_hub_offers_exactly_the_six_rows_in_order(
+async def test_hub_offers_exactly_the_five_rows_in_order(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
 ) -> None:
-    """The hub's shape is fixed: five sections, then choosing another Asset."""
+    """The hub's shape is fixed: four sections, then choosing another Asset."""
     manager = _manager(hass, asset_store_data)
 
     _flow, hub = await _hub(hass, manager)
@@ -97,8 +95,11 @@ async def test_hub_offers_exactly_the_six_rows_in_order(
             FlowResultType.MENU,
         ),
         ("asset_installation_menu", "asset_installation_menu", FlowResultType.MENU),
-        ("asset_lifecycle_menu", "asset_lifecycle_menu", FlowResultType.MENU),
-        ("asset_replacement", "asset_replacement", FlowResultType.MENU),
+        (
+            "asset_lifecycle_replacement_menu",
+            "asset_lifecycle_replacement_menu",
+            FlowResultType.MENU,
+        ),
         ("ha_relationship", "ha_relationship", FlowResultType.MENU),
         ("manage_asset", "manage_asset", FlowResultType.FORM),
     ],

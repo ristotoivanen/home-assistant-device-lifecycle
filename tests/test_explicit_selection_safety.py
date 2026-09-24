@@ -50,6 +50,8 @@ from .test_ha_relationship_options_flow import _external_device
 from .test_options_flow import _manager, _options_flow
 
 HUB_STEP = "manage_asset_menu"
+# The replacement submenu opens from the Lifecycle & replacement section.
+SECTION_STEP = "asset_lifecycle_replacement_menu"
 REPLACEMENT_STEP = "asset_replacement"
 HA_STEP = "ha_relationship"
 PLACEHOLDER = {"value": NOT_SELECTED, "label": "Select a device…"}
@@ -400,9 +402,10 @@ async def test_an_untouched_submit_through_home_assistant_records_nothing(
     manager = _manager(hass)
     current, first, _second = await _three_assets(manager)
     flow_id = await _flow_manager_on_asset(hass, manager, current["asset_uuid"])
-    await hass.config_entries.options.async_configure(
-        flow_id, {"next_step_id": REPLACEMENT_STEP}
-    )
+    for hop in (SECTION_STEP, REPLACEMENT_STEP):
+        await hass.config_entries.options.async_configure(
+            flow_id, {"next_step_id": hop}
+        )
     form = await hass.config_entries.options.async_configure(
         flow_id, {"next_step_id": step_id}
     )

@@ -264,8 +264,7 @@ def test_every_menu_action_and_step_has_translation(language: str) -> None:
     assert set(steps["manage_asset_menu"]["menu_options"]) == {
         "asset_details_warranty_menu",
         "asset_installation_menu",
-        "asset_lifecycle_menu",
-        "asset_replacement",
+        "asset_lifecycle_replacement_menu",
         "ha_relationship",
         "manage_asset",
     }
@@ -275,7 +274,7 @@ def test_every_menu_action_and_step_has_translation(language: str) -> None:
             "change_asset_purchase",
         },
         "asset_installation_menu": {"asset_deployment"},
-        "asset_lifecycle_menu": {"asset_lifecycle"},
+        "asset_lifecycle_replacement_menu": {"asset_lifecycle", "asset_replacement"},
     }
     for section, editors in section_menus.items():
         assert set(steps[section]["menu_options"]) == {

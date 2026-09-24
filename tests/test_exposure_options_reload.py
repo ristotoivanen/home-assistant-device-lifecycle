@@ -145,7 +145,8 @@ SECTION_MENUS = {
     "edit_asset_metadata": "asset_details_warranty_menu",
     "change_asset_purchase": "asset_details_warranty_menu",
     "asset_deployment": "asset_installation_menu",
-    "asset_lifecycle": "asset_lifecycle_menu",
+    "asset_lifecycle": "asset_lifecycle_replacement_menu",
+    "asset_replacement": "asset_lifecycle_replacement_menu",
 }
 
 
@@ -168,7 +169,7 @@ async def _start_asset_action(
         {CONF_ASSET_UUID: asset_uuid},
     )
     assert menu["type"] is FlowResultType.MENU
-    # Hub rows 1-4 open their section menu; the editor is its action row.
+    # Hub rows 1-3 open their section menu; the editor is its action row.
     if (section := SECTION_MENUS.get(action)) is not None:
         section_menu = await hass.config_entries.options.async_configure(
             flow_id,

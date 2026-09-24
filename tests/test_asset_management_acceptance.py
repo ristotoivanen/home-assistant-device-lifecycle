@@ -299,7 +299,9 @@ async def test_a_finnish_management_session_end_to_end(
             "Perustiedot päivitettiin."
         )
 
-        # Replacement submenu: the operation stays in the submenu.
+        # Replacement submenu, reached through Lifecycle & replacement: the
+        # operation stays in the submenu.
+        await step({"next_step_id": "asset_lifecycle_replacement_menu"})
         submenu = await step({"next_step_id": "asset_replacement"})
         assert submenu["step_id"] == REPLACEMENT
         assert submenu["description_placeholders"]["result"] == ""
@@ -320,8 +322,8 @@ async def test_a_finnish_management_session_end_to_end(
         hub = await step({"next_step_id": HUB})
         assert hub["step_id"] == HUB
         assert hub["description_placeholders"]["result"] == ""
-        assert hub["description_placeholders"]["replacement"] == (
-            f"Korvaa: Vanha mittari · {other['asset_id']}"
+        assert hub["description_placeholders"]["lifecycle_replacement"] == (
+            "Ei tiedossa · korvaa: Vanha mittari"
         )
 
         # HA devices submenu: same shape, its own result, its own Back.
@@ -345,8 +347,8 @@ async def test_a_finnish_management_session_end_to_end(
             f"Vanha mittari · {other['asset_id']}"
         )
         assert other_hub["description_placeholders"]["result"] == ""
-        assert other_hub["description_placeholders"]["replacement"] == (
-            "Korvattu: Työpajan laite · DL0007"
+        assert other_hub["description_placeholders"]["lifecycle_replacement"] == (
+            "Aktiivinen · korvattu: Työpajan laite"
         )
 
         await hass.async_block_till_done()

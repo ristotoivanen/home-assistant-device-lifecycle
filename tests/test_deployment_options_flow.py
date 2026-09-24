@@ -86,8 +86,7 @@ async def test_deployment_action_and_migrated_unknown_are_visible(
     assert menu["menu_options"] == [
         "asset_details_warranty_menu",
         "asset_installation_menu",
-        "asset_lifecycle_menu",
-        "asset_replacement",
+        "asset_lifecycle_replacement_menu",
         "ha_relationship",
         "manage_asset",
     ]

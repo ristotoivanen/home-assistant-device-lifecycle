@@ -58,7 +58,7 @@ MANAGEMENT_STEPS = (
     "manage_asset_menu",
     "asset_details_warranty_menu",
     "asset_installation_menu",
-    "asset_lifecycle_menu",
+    "asset_lifecycle_replacement_menu",
     "edit_asset_metadata",
     "change_asset_purchase",
     "asset_deployment",
@@ -329,7 +329,7 @@ def test_home_assistant_devices_are_always_named_in_full(
 
 @pytest.mark.parametrize("language", ["en", "fi"])
 def test_the_hub_rows_carry_the_frozen_names(language: str) -> None:
-    """The six hub rows are the frozen vocabulary, in order."""
+    """The five hub rows are the frozen vocabulary, in order."""
     rows = _translation(language)["options"]["step"]["manage_asset_menu"][
         "menu_options"
     ]
@@ -338,8 +338,7 @@ def test_the_hub_rows_carry_the_frozen_names(language: str) -> None:
         assert rows == {
             "asset_details_warranty_menu": "Details & warranty",
             "asset_installation_menu": "Installation & location",
-            "asset_lifecycle_menu": "Lifecycle",
-            "asset_replacement": "Replacement",
+            "asset_lifecycle_replacement_menu": "Lifecycle & replacement",
             "ha_relationship": "Home Assistant devices",
             "manage_asset": "Choose another device",
         }
@@ -347,8 +346,7 @@ def test_the_hub_rows_carry_the_frozen_names(language: str) -> None:
         assert rows == {
             "asset_details_warranty_menu": "Tiedot ja takuu",
             "asset_installation_menu": "Asennus ja sijainti",
-            "asset_lifecycle_menu": "Elinkaari",
-            "asset_replacement": "Korvaaminen",
+            "asset_lifecycle_replacement_menu": "Elinkaari ja korvaaminen",
             "ha_relationship": "Home Assistant -laitteet",
             "manage_asset": "Valitse toinen laite",
         }

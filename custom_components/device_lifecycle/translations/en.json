@@ -466,15 +466,13 @@
         "menu_option_descriptions": {
           "asset_details_warranty_menu": "{details_warranty}",
           "asset_installation_menu": "{deployment}",
-          "asset_lifecycle_menu": "{lifecycle}",
-          "asset_replacement": "{replacement}",
+          "asset_lifecycle_replacement_menu": "{lifecycle_replacement}",
           "ha_relationship": "{ha_devices}"
         },
         "menu_options": {
           "asset_details_warranty_menu": "Details & warranty",
           "asset_installation_menu": "Installation & location",
-          "asset_lifecycle_menu": "Lifecycle",
-          "asset_replacement": "Replacement",
+          "asset_lifecycle_replacement_menu": "Lifecycle & replacement",
           "ha_relationship": "Home Assistant devices",
           "manage_asset": "Choose another device"
         },
@@ -497,13 +495,14 @@
         },
         "title": "Installation & location"
       },
-      "asset_lifecycle_menu": {
-        "description": "{asset}\n\n{facts}",
+      "asset_lifecycle_replacement_menu": {
+        "description": "{asset}\n\n**Lifecycle**\n{lifecycle}\n\n**Replacement**\n{replacement}",
         "menu_options": {
           "asset_lifecycle": "Record a lifecycle change",
+          "asset_replacement": "Manage replacement",
           "manage_asset_menu": "← Back to asset management"
         },
-        "title": "Lifecycle"
+        "title": "Lifecycle & replacement"
       },
       "manage_asset_replacement": {
         "data": {

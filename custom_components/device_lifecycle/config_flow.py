@@ -2703,15 +2703,34 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             self._localized_date(asset.get(CONF_INSTALLED_DATE)),
         )
 
-    def _summary_lifecycle(self, asset: AssetData) -> str:
-        """Say where the Asset stands in its life, and since when."""
+    def _summary_lifecycle_replacement(self, asset: AssetData) -> str:
+        """Lead with the lifecycle state, then name any active replacement.
+
+        Two separate facts on one line: the state is the Asset's own
+        Lifecycle, and a relationship never implies it changed. Names only,
+        so a DLxxxx never reads as a third fact; the section names both.
+        """
         lifecycle = asset.get("lifecycle") or {}
-        status = str(lifecycle.get("status") or LIFECYCLE_STATUS_UNKNOWN)
-        event = self._manager.lifecycle_event(lifecycle.get("current_event_uuid"))
-        return _summary_line(
-            self._lifecycle_status_label(status),
-            self._localized_date(None if event is None else event.get("effective_date")),
-        )
+        parts = [
+            self._lifecycle_status_label(
+                str(lifecycle.get("status") or LIFECYCLE_STATUS_UNKNOWN)
+            )
+        ]
+        partners = self._active_replacement_partners(asset)
+        unavailable = self._localized_label("unavailable", "ei saatavilla")
+        if "replaces" in partners:
+            partner = partners["replaces"]
+            name = unavailable if partner is None else _short_name(partner["name"])
+            parts.append(
+                self._localized_label(f"replaces: {name}", f"korvaa: {name}")
+            )
+        if "replaced_by" in partners:
+            partner = partners["replaced_by"]
+            name = unavailable if partner is None else _short_name(partner["name"])
+            parts.append(
+                self._localized_label(f"replaced by: {name}", f"korvattu: {name}")
+            )
+        return _summary_line(*parts)
 
     def _lifecycle_status_label(self, status: str) -> str:
         """Translate one canonical lifecycle status for people."""
@@ -2782,8 +2801,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             "asset": _asset_label(asset),
             "details_warranty": self._summary_details_warranty(asset),
             "deployment": self._summary_deployment(asset),
-            "lifecycle": self._summary_lifecycle(asset),
-            "replacement": self._summary_replacement(asset),
+            "lifecycle_replacement": self._summary_lifecycle_replacement(asset),
             "ha_devices": self._summary_ha_devices(asset),
         }
 
@@ -2811,8 +2829,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             menu_options=[
                 "asset_details_warranty_menu",
                 "asset_installation_menu",
-                "asset_lifecycle_menu",
-                "asset_replacement",
+                "asset_lifecycle_replacement_menu",
                 "ha_relationship",
                 "manage_asset",
             ],
@@ -3022,6 +3039,71 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             )
         return facts
 
+    def _active_replacement_partners(
+        self, asset: AssetData
+    ) -> dict[str, AssetData | None]:
+        """Return the other Asset of each active relationship, by direction.
+
+        A direction is present only while an active record exists for it:
+        "replaces" names the predecessor, "replaced_by" the successor. The
+        value is None when that other Asset is no longer available, so a
+        record is never hidden and never shown by its UUID.
+        """
+        asset_uuid = asset["asset_uuid"]
+        partners: dict[str, AssetData | None] = {}
+        for record in self._manager.replacement_records_for_asset(asset_uuid):
+            if record["successor_asset_uuid"] == asset_uuid:
+                partners.setdefault(
+                    "replaces",
+                    self._manager.asset(record["predecessor_asset_uuid"]),
+                )
+            if record["predecessor_asset_uuid"] == asset_uuid:
+                partners.setdefault(
+                    "replaced_by",
+                    self._manager.asset(record["successor_asset_uuid"]),
+                )
+        return partners
+
+    def _replacement_facts(self, asset: AssetData) -> list[str]:
+        """Say what this Asset replaces, and what replaced it, a line each."""
+        partners = self._active_replacement_partners(asset)
+
+        def partner_label(direction: str) -> str:
+            if direction not in partners:
+                return self._localized_label(
+                    "No active relationship", "Ei aktiivista suhdetta"
+                )
+            partner = partners[direction]
+            if partner is None:
+                return self._localized_label(
+                    "Unavailable Asset", "Laite ei ole enää käytettävissä"
+                )
+            return f"{_short_name(partner['name'])} · {partner['asset_id']}"
+
+        replaces = partner_label("replaces")
+        replaced_by = partner_label("replaced_by")
+        return [
+            self._localized_label(
+                f"This Asset replaces: {replaces}", f"Tämä laite korvaa: {replaces}"
+            ),
+            self._localized_label(
+                f"This Asset was replaced by: {replaced_by}",
+                f"Tämän laitteen korvasi: {replaced_by}",
+            ),
+        ]
+
+    def _lifecycle_replacement_facts(
+        self, asset: AssetData
+    ) -> dict[str, list[str]]:
+        """Group the Asset's Lifecycle and its replacement relationships.
+
+        Two independent facts shown together; each keeps its own operations.
+        """
+        return {
+            "lifecycle": self._lifecycle_facts(asset),
+            "replacement": self._replacement_facts(asset),
+        }
+
     async def async_step_asset_details_warranty_menu(
         self,
         user_input: dict[str, Any] | None = None,
@@ -3044,15 +3126,15 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             lambda asset: {"facts": self._installation_facts(asset)},
         )
 
-    async def async_step_asset_lifecycle_menu(
+    async def async_step_asset_lifecycle_replacement_menu(
         self,
         user_input: dict[str, Any] | None = None,
     ) -> ConfigFlowResult:
-        """Show the Lifecycle section of the hub."""
+        """Show the Lifecycle & replacement section of the hub."""
         return self._show_section_menu(
-            "asset_lifecycle_menu",
-            ["asset_lifecycle"],
-            lambda asset: {"facts": self._lifecycle_facts(asset)},
+            "asset_lifecycle_replacement_menu",
+            ["asset_lifecycle", "asset_replacement"],
+            self._lifecycle_replacement_facts,
         )
 
     async def async_step_edit_asset_metadata(

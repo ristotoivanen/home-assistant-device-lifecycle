@@ -401,13 +401,13 @@ async def test_unknown_deployment_summary_is_localized(
         (LIFECYCLE_STATUS_LOST, "Lost"),
     ],
 )
-async def test_lifecycle_summary_names_the_status_and_its_date(
+async def test_lifecycle_replacement_summary_leads_with_the_status(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
     status: str,
     expected: str,
 ) -> None:
-    """Each status reads as words, followed by when it took effect."""
+    """Each status reads as words; its date waits in the section."""
     manager = _manager(hass, asset_store_data)
     await manager.async_set_asset_lifecycle(
         ASSET_UUID,
@@ -417,12 +417,12 @@ async def test_lifecycle_summary_names_the_status_and_its_date(
     )
     flow = await _flow(hass, manager)
 
-    assert flow._summary_lifecycle(manager.asset(ASSET_UUID)) == (
-        f"{expected} · 12 Sep 2026"
+    assert flow._summary_lifecycle_replacement(manager.asset(ASSET_UUID)) == (
+        expected
     )
 
 
-async def test_lifecycle_summary_is_a_status_not_a_history(
+async def test_lifecycle_replacement_summary_is_a_status_not_a_history(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
 ) -> None:
@@ -430,7 +430,9 @@ async def test_lifecycle_summary_is_a_status_not_a_history(
     manager = _manager(hass, asset_store_data)
     flow = await _flow(hass, manager)
 
-    assert flow._summary_lifecycle(manager.asset(ASSET_UUID)) == "Unknown"
+    assert flow._summary_lifecycle_replacement(manager.asset(ASSET_UUID)) == (
+        "Unknown"
+    )
 
     for status, date in (
         (LIFECYCLE_STATUS_ACTIVE, "2026-01-20"),
@@ -441,9 +443,9 @@ async def test_lifecycle_summary_is_a_status_not_a_history(
             ASSET_UUID, status, effective_date=date, notes=None
         )
 
-    summary = flow._summary_lifecycle(manager.asset(ASSET_UUID))
+    summary = flow._summary_lifecycle_replacement(manager.asset(ASSET_UUID))
 
-    assert summary == "Disposed · 20 Sep 2026"
+    assert summary == "Disposed"
     assert len(manager.lifecycle_events_for_asset(ASSET_UUID)) == 3
     assert "Active" not in summary
     assert "Retired" not in summary
@@ -486,6 +488,115 @@ async def test_replacement_summary_shows_only_active_relationships(
     assert flow._summary_replacement(manager.asset(ASSET_UUID)) == (
         "No active replacement"
     )
+
+
+async def test_lifecycle_replacement_summary_names_each_active_direction(
+    hass: HomeAssistant,
+    asset_store_data: AssetStoreData,
+) -> None:
+    """The state first, then what it replaces and what replaced it, by name."""
+    manager = _manager(hass, asset_store_data)
+    await manager.async_set_asset_lifecycle(
+        ASSET_UUID, LIFECYCLE_STATUS_ACTIVE, effective_date="2026-08-11", notes=None
+    )
+    predecessor = await manager.async_create_manual_asset(name="Smoke test 0.7.1")
+    successor = await manager.async_create_manual_asset(name="Uusi lämmitin")
+    flow = await _flow(hass, manager, "fi")
+
+    def summary() -> str:
+        return flow._summary_lifecycle_replacement(manager.asset(ASSET_UUID))
+
+    assert summary() == "Aktiivinen"
+    replaces = await manager.async_create_asset_replacement(
+        predecessor["asset_uuid"],
+        ASSET_UUID,
+        reason="failure",
+        effective_date=None,
+        notes=None,
+    )
+    assert summary() == "Aktiivinen · korvaa: Smoke test 0.7.1"
+
+    await manager.async_create_asset_replacement(
+        ASSET_UUID,
+        successor["asset_uuid"],
+        reason="upgrade",
+        effective_date=None,
+        notes=None,
+    )
+    both = summary()
+    # Both directions: the line is cut, never the state or the first name.
+    assert both.startswith("Aktiivinen · korvaa: Smoke test 0.7.1 · korvattu: ")
+    assert len(both) <= SUMMARY_MAX_LENGTH
+
+    await manager.async_void_asset_replacement(
+        replaces["replacement_uuid"], void_reason="Recorded in error"
+    )
+    assert summary() == "Aktiivinen · korvattu: Uusi lämmitin"
+
+    await manager.async_set_asset_lifecycle(
+        ASSET_UUID, LIFECYCLE_STATUS_RETIRED, effective_date="2026-09-12", notes=None
+    )
+    assert summary() == "Käytöstä poistettu · korvattu: Uusi lämmitin"
+
+
+async def test_lifecycle_replacement_summary_reads_in_english(
+    hass: HomeAssistant,
+    asset_store_data: AssetStoreData,
+) -> None:
+    """The same two facts, in English."""
+    manager = _manager(hass, asset_store_data)
+    predecessor = await manager.async_create_manual_asset(name="Old meter")
+    successor = await manager.async_create_manual_asset(name="New meter")
+    await manager.async_create_asset_replacement(
+        predecessor["asset_uuid"],
+        ASSET_UUID,
+        reason="failure",
+        effective_date=None,
+        notes=None,
+    )
+    flow = await _flow(hass, manager)
+
+    assert flow._summary_lifecycle_replacement(manager.asset(ASSET_UUID)) == (
+        "Unknown · replaces: Old meter"
+    )
+    assert flow._summary_lifecycle_replacement(
+        manager.asset(predecessor["asset_uuid"])
+    ) == "Active · replaced by: Workshop device"
+    assert flow._summary_lifecycle_replacement(
+        manager.asset(successor["asset_uuid"])
+    ) == "Active"
+
+
+@pytest.mark.parametrize(
+    ("language", "expected"),
+    [
+        ("en", "Unknown · replaced by: unavailable"),
+        ("fi", "Ei tiedossa · korvattu: ei saatavilla"),
+    ],
+)
+async def test_lifecycle_replacement_summary_names_a_missing_asset_in_words(
+    hass: HomeAssistant,
+    asset_store_data: AssetStoreData,
+    language: str,
+    expected: str,
+) -> None:
+    """A record whose other Asset is gone stays visible, and never as a UUID."""
+    manager = _manager(hass, asset_store_data)
+    successor = await manager.async_create_manual_asset(name="Gone unit")
+    await manager.async_create_asset_replacement(
+        ASSET_UUID,
+        successor["asset_uuid"],
+        reason="failure",
+        effective_date=None,
+        notes=None,
+    )
+    manager._data["assets"].pop(successor["asset_uuid"])
+    flow = await _flow(hass, manager, language)
+
+    summary = flow._summary_lifecycle_replacement(manager.asset(ASSET_UUID))
+
+    assert summary == expected
+    assert successor["asset_uuid"] not in summary
 
 
 async def test_ha_devices_summary_names_the_primary_and_counts_the_rest(
@@ -581,8 +692,7 @@ async def test_every_summary_is_localized_in_finnish(
     summaries = {
         "details_warranty": flow._summary_details_warranty(asset),
         "deployment": flow._summary_deployment(asset),
-        "lifecycle": flow._summary_lifecycle(asset),
-        "replacement": flow._summary_replacement(asset),
+        "lifecycle_replacement": flow._summary_lifecycle_replacement(asset),
         "ha_devices": flow._summary_ha_devices(asset),
     }
 
@@ -590,8 +700,7 @@ async def test_every_summary_is_localized_in_finnish(
         "Takuu 15.1.2028 asti · Example manufacturer Example model"
     )
     assert summaries["deployment"] == "Ei asennettu"
-    assert summaries["lifecycle"] == "Käytöstä poistettu · 12.9.2026"
-    assert summaries["replacement"] == "Ei aktiivista korvaussuhdetta"
+    assert summaries["lifecycle_replacement"] == "Käytöstä poistettu"
     assert summaries["ha_devices"].startswith("Ensisijainen: ")
 
     joined = " ".join(summaries.values())
@@ -603,7 +712,7 @@ async def test_the_hub_renders_every_summary_and_writes_nothing(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
 ) -> None:
-    """All five reach the hub, and building them changes no stored data."""
+    """All four reach the hub, and building them changes no stored data."""
     manager = _manager(hass, asset_store_data)
     flow = await _flow(hass, manager)
     before = deepcopy(manager._data)
@@ -616,8 +725,7 @@ async def test_the_hub_renders_every_summary_and_writes_nothing(
     for key in (
         "details_warranty",
         "deployment",
-        "lifecycle",
-        "replacement",
+        "lifecycle_replacement",
         "ha_devices",
     ):
         assert placeholders[key], key
@@ -654,18 +762,17 @@ def test_each_hub_row_carries_its_own_summary(language: str) -> None:
     assert step["menu_option_descriptions"] == {
         "asset_details_warranty_menu": "{details_warranty}",
         "asset_installation_menu": "{deployment}",
-        "asset_lifecycle_menu": "{lifecycle}",
-        "asset_replacement": "{replacement}",
+        "asset_lifecycle_replacement_menu": "{lifecycle_replacement}",
         "ha_relationship": "{ha_devices}",
     }
 
 
 @pytest.mark.parametrize("language", ["en", "fi"])
-def test_only_the_five_section_rows_are_described(language: str) -> None:
+def test_only_the_four_section_rows_are_described(language: str) -> None:
     """Choosing another Asset is navigation, so it summarizes nothing."""
     step = _hub_step(language)
 
-    assert len(step["menu_options"]) == 6
+    assert len(step["menu_options"]) == 5
     assert set(step["menu_option_descriptions"]) == (
         set(step["menu_options"]) - {"manage_asset"}
     )
@@ -683,8 +790,7 @@ def test_the_hub_step_description_stays_general(language: str) -> None:
     for key in (
         "details_warranty",
         "deployment",
-        "lifecycle",
-        "replacement",
+        "lifecycle_replacement",
         "ha_devices",
     ):
         assert f"{{{key}}}" not in description, (language, key)
@@ -727,7 +833,7 @@ async def test_summaries_never_expose_technical_identifiers(
     rendered = " ".join(hub["description_placeholders"].values())
 
     assert asset["asset_id"] in rendered
-    assert successor["asset_id"] in rendered
+    assert "replaced by: Successor" in rendered
     for identifier in (
         asset["asset_uuid"],
         successor["asset_uuid"],
