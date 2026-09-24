@@ -436,7 +436,12 @@ async def test_submenus_show_context_without_technical_identifiers(
     assert old["asset_uuid"] not in replacement["description_placeholders"][
         "replacement"
     ]
-    assert ha_devices["description_placeholders"]["ha_devices"] == (
-        "Primary: Bench controller · Related: 0"
+    assert ha_devices["description_placeholders"]["current_primary"] == (
+        "Bench controller"
     )
-    assert device.id not in ha_devices["description_placeholders"]["ha_devices"]
+    assert ha_devices["description_placeholders"]["related_devices"] == (
+        "No related Home Assistant devices"
+    )
+    assert device.id not in " ".join(
+        ha_devices["description_placeholders"].values()
+    )

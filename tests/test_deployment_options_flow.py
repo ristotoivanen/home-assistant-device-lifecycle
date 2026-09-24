@@ -351,8 +351,8 @@ async def test_stale_area_opens_and_remains_until_explicit_replacement(
     )
 
     assert form["type"] is FlowResultType.FORM
-    assert "Unavailable" in form["description_placeholders"]["current_area"]
-    assert stale_area_id not in form["description_placeholders"]["current_area"]
+    assert "Unavailable" in form["description_placeholders"]["facts"]
+    assert stale_area_id not in form["description_placeholders"]["facts"]
     assert unchanged["type"] is FlowResultType.MENU
     assert manager.asset(ASSET_UUID)[CONF_HA_AREA_ID] == stale_area_id
 

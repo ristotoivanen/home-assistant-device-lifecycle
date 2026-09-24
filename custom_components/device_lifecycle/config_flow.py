@@ -3269,7 +3269,12 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             step_id="asset_lifecycle",
             data_schema=self.add_suggested_values_to_schema(schema, suggested),
             errors=errors or {},
-            description_placeholders={"asset": _asset_label(asset)},
+            description_placeholders={
+                "asset": _asset_label(asset),
+                "current_status": self._lifecycle_status_label(
+                    str(asset["lifecycle"]["status"])
+                ),
+            },
         )
 
     async def async_step_asset_lifecycle(
@@ -3856,7 +3861,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             errors=errors or {},
             description_placeholders={
                 "asset": _asset_label(asset),
-                "current_area": self._area_label(current_area_id),
+                "facts": "\n".join(self._installation_facts(asset)),
             },
         )
 
@@ -4020,11 +4025,8 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             step_id="ha_relationship",
             menu_options=menu_options,
             description_placeholders={
-                "asset": _asset_label(asset),
+                "asset": _view_asset_label(asset),
                 "result": await self._result_message(asset),
-                # Name-only context alongside the repair-oriented labels
-                # below, which deliberately carry the stored device ID.
-                "ha_devices": self._summary_ha_devices(asset),
                 "current_primary": self._ha_device_label(
                     _primary_device_id(asset)
                 ),

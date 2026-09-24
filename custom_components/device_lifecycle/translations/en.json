@@ -230,7 +230,7 @@
           "ha_area_id": "Location",
           "installed_date": "Installation date"
         },
-        "description": "Asset: {asset}. Current location: {current_area}. Not installed means the Asset is not installed right now but still belongs to your inventory. Permanent removal, disposal or loss is recorded under Lifecycle. Installation status is independent of any linked Home Assistant device. A location that is no longer available is kept until you clear or replace it.",
+        "description": "{asset}\n\n{facts}\n\nNot installed means the Asset is disconnected or in storage but still part of your inventory. Permanent removal, disposal or loss is recorded under Lifecycle.",
         "title": "Installation & location"
       },
       "asset_lifecycle": {
@@ -243,7 +243,7 @@
           "effective_date": "Optional. Today is suggested, and you can clear it.",
           "notes": "Optional note recorded only on this immutable transition."
         },
-        "description": "Asset: {asset}. The current status is preselected. Retired means permanent or deliberate removal from use. An Asset that is temporarily disconnected or in storage belongs under Installation & location · Not installed. Lifecycle and installation status are independent.",
+        "description": "{asset}\n\nCurrent status: {current_status}\n\nRetired means permanent or deliberate removal from use.\n\nTemporary disconnection or storage belongs under Installation & location → Not installed.",
         "title": "Lifecycle"
       },
       "asset_replacement": {
@@ -259,7 +259,7 @@
         "data": {
           "purchase_uuid": "Purchase"
         },
-        "description": "Asset: {asset}. Current Purchase: {current_purchase}. This form changes the Purchase link only. The warranty is the Asset's own detail, shown separately elsewhere: changing the Purchase link does not change the warranty. A previous unavailable Purchase is shown only when already linked to this Asset. Select a configured Purchase or No Purchase.",
+        "description": "{asset}\n\nCurrent Purchase: {current_purchase}\n\nThis form changes the Purchase link only. The warranty is the Asset's own detail: changing the Purchase link does not change the warranty.",
         "submit": "Save",
         "title": "Linked purchase"
       },
@@ -367,14 +367,14 @@
         "data": {
           "confirm_area_clear": "Confirm clearing the location"
         },
-        "description": "Changing {asset} to Not installed will clear its current location: {current_area}. Its installation date is preserved unless you changed or cleared it on the previous form.",
+        "description": "{asset}\n\nLocation to clear: {current_area}\n\nMarking the Asset Not installed clears its location. The installation date is kept unless you changed it on the previous form.",
         "title": "Clear the location?"
       },
       "confirm_disposed": {
         "data": {
           "confirm_disposed": "Confirm disposed status"
         },
-        "description": "Record {asset} as disposed? This deletes neither the Asset nor its history, and the status can be corrected by a later lifecycle change.",
+        "description": "{asset}\n\nRecord this Asset as disposed?\n\nNeither the Asset nor its history is deleted, and a later lifecycle change can correct the status.",
         "title": "Confirm disposed status"
       },
       "confirm_void_replacement": {
@@ -382,7 +382,7 @@
           "confirm_void": "Confirm voiding",
           "void_reason": "Void reason"
         },
-        "description": "Void relationship {relationship} for {asset}? The historical record remains stored permanently.",
+        "description": "{asset}\n\nRelationship to void: {relationship}\n\nThe relationship stops being current; its history is kept.",
         "submit": "Void and return",
         "title": "Void replacement relationship"
       },
@@ -395,7 +395,7 @@
           "successor_asset_uuid": "Successor Asset",
           "void_reason": "Reason for correcting the old relationship"
         },
-        "description": "Correct {relationship} for {asset}. The old record is voided and the new relationship is created in one atomic save.",
+        "description": "{asset}\n\nRelationship to correct: {relationship}\n\nThe old relationship is voided and the corrected one saved in the same step.",
         "submit": "Save and return",
         "title": "Correct replacement relationship"
       },
@@ -411,12 +411,12 @@
           "serial_number": "Serial number",
           "sw_version": "Software version"
         },
-        "description": "Edit the details for {asset}. Its Asset ID, installation status, warranty, Purchase and Home Assistant devices are managed separately.",
+        "description": "{asset}\n\nEdit the Asset's details.",
         "submit": "Save",
         "title": "Asset details"
       },
       "ha_relationship": {
-        "description": "{result}\n\nHome Assistant devices: {ha_devices}. Asset: {asset}. Primary Home Assistant device: {current_primary}. Related Home Assistant devices: {related_devices}. The primary Home Assistant device is this Asset's main counterpart in Home Assistant. Related devices are references only and do not affect Asset identity, details, Purchases, Runtime, entity placement, or Home Assistant device ownership.",
+        "description": "{asset}\n\n{result}\n\n**Home Assistant devices**\nPrimary: {current_primary}\nRelated: {related_devices}\n\nThe primary Home Assistant device is this Asset's main counterpart in Home Assistant. Related Home Assistant devices are references only.",
         "menu_options": {
           "add_related_device": "Add related Home Assistant device",
           "manage_asset_menu": "← Back to asset management",
@@ -430,21 +430,21 @@
           "device_id": "Home Assistant device",
           "ha_relationship_action": "Action"
         },
-        "description": "Asset: {asset}. Current primary Home Assistant device: {current_device}. Linking, unlinking, replacing, or promoting a related device does not change the Asset ID or modify the Home Assistant device itself.",
+        "description": "{asset}\n\nCurrent primary Home Assistant device: {current_device}\n\nChanging it does not change the Asset ID or the Home Assistant device itself.",
         "title": "Manage primary Home Assistant device"
       },
       "add_related_device": {
         "data": {
           "device_id": "Home Assistant device"
         },
-        "description": "Asset: {asset}. Primary Home Assistant device: {current_primary}. Current related Home Assistant devices: {related_devices}. Adding a related reference does not refresh Asset details or affect Purchases, Runtime, entity placement, installation status, or the Home Assistant device itself.",
+        "description": "{asset}\n\nPrimary: {current_primary}\nRelated: {related_devices}\n\nA related Home Assistant device is a reference only: it changes neither the Asset's details nor the Home Assistant device itself.",
         "title": "Add related Home Assistant device"
       },
       "remove_related_device": {
         "data": {
           "device_id": "Related Home Assistant device"
         },
-        "description": "Asset: {asset}. Primary Home Assistant device: {current_primary}. Current related Home Assistant devices: {related_devices}. Devices that have left Home Assistant remain selectable here.",
+        "description": "{asset}\n\nRelated: {related_devices}\n\nReferences to devices that have left Home Assistant can be selected too.",
         "title": "Remove related Home Assistant device"
       },
       "init": {
@@ -489,7 +489,7 @@
         "title": "Details & warranty"
       },
       "asset_installation_menu": {
-        "description": "{asset}\n\n{facts}",
+        "description": "{asset}\n\n**Installation & location**\n{facts}",
         "menu_options": {
           "asset_deployment": "Edit installation and location",
           "manage_asset_menu": "← Back to asset management"
@@ -510,7 +510,7 @@
           "replacement_action": "Action",
           "replacement_uuid": "Active relationship"
         },
-        "description": "Asset: {asset}. Select an active relationship to correct or void.",
+        "description": "{asset}\n\nSelect an active relationship to correct or void.",
         "submit": "Continue",
         "title": "Manage replacement relationship"
       },
@@ -521,7 +521,7 @@
           "replacement_reason": "Replacement reason",
           "replacement_target_asset_uuid": "Predecessor Asset"
         },
-        "description": "Asset: {asset}. Select the physical Asset that this Asset replaces.",
+        "description": "{asset}\n\nSelect the old Asset that this Asset replaces.",
         "title": "This Asset replaces…"
       }
     }

@@ -354,4 +354,4 @@ async def test_a_cancelled_editor_reads_the_current_canonical_state(
 
     defaults = declined["data_schema"]({})
     assert defaults[CONF_DEPLOYMENT_STATE] == DEPLOYMENT_STATE_DEPLOYED
-    assert declined["description_placeholders"]["current_area"] == "Office"
+    assert "Location: Office" in declined["description_placeholders"]["facts"]

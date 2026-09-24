@@ -230,7 +230,7 @@
           "ha_area_id": "Sijainti",
           "installed_date": "Asennuspäivä"
         },
-        "description": "Laite: {asset}. Nykyinen sijainti: {current_area}. Ei asennettu tarkoittaa, ettei laite ole tällä hetkellä asennettuna, mutta se kuuluu edelleen laitekantaasi. Pysyvä käytöstä poisto, hävittäminen tai katoaminen määritetään Elinkaari-kohdassa. Asennustila ei riipu linkitetystä Home Assistant -laitteesta. Sijainti, joka ei ole enää käytettävissä, säilyy kunnes poistat tai vaihdat sen.",
+        "description": "{asset}\n\n{facts}\n\nEi asennettu tarkoittaa, että laite on irrotettu tai varastossa mutta kuuluu edelleen laitekantaasi. Pysyvä käytöstä poisto, hävittäminen tai katoaminen kirjataan kohtaan Elinkaari.",
         "title": "Asennus ja sijainti"
       },
       "asset_lifecycle": {
@@ -243,7 +243,7 @@
           "effective_date": "Valinnainen. Tätä päivää ehdotetaan, ja voit tyhjentää kentän.",
           "notes": "Valinnainen muistiinpano tallennetaan vain tähän muuttumattomaan tilamuutokseen."
         },
-        "description": "Laite: {asset}. Nykyinen tila on esivalittu. Käytöstä poistettu tarkoittaa pysyvää tai tarkoituksellista käytöstä poistamista. Tilapäisesti irrotettu tai varastossa oleva laite kuuluu kohtaan Asennus ja sijainti · Ei asennettu. Elinkaari ja asennustila ovat toisistaan riippumattomia.",
+        "description": "{asset}\n\nNykyinen tila: {current_status}\n\nKäytöstä poistettu tarkoittaa pysyvää tai tarkoituksellista käytöstä poistamista.\n\nTilapäinen irrotus tai varastointi kuuluu kohtaan Asennus ja sijainti → Ei asennettu.",
         "title": "Elinkaari"
       },
       "asset_replacement": {
@@ -259,7 +259,7 @@
         "data": {
           "purchase_uuid": "Ostos"
         },
-        "description": "Laite: {asset}. Nykyinen ostos: {current_purchase}. Tällä lomakkeella muutetaan vain ostoslinkitystä. Takuu on laitteen oma tieto, ja se näytetään muualla erikseen: ostoslinkityksen muuttaminen ei muuta takuuta. Aiempi ostos, joka ei ole enää käytettävissä, näytetään vain silloin, kun laite on jo liitetty siihen. Valitse käytettävissä oleva ostos tai Ei ostosta.",
+        "description": "{asset}\n\nNykyinen ostos: {current_purchase}\n\nTällä lomakkeella muutetaan vain ostoslinkitystä. Takuu on laitteen oma tieto: ostoslinkityksen muuttaminen ei muuta takuuta.",
         "submit": "Tallenna",
         "title": "Ostoslinkitys"
       },
@@ -367,14 +367,14 @@
         "data": {
           "confirm_area_clear": "Vahvista sijainnin poistaminen"
         },
-        "description": "Kun laite {asset} merkitään tilaan Ei asennettu, sen nykyinen sijainti poistetaan: {current_area}. Asennuspäivä säilyy, ellet muuttanut tai poistanut sitä edellisellä lomakkeella.",
+        "description": "{asset}\n\nPoistettava sijainti: {current_area}\n\nKun laite merkitään tilaan Ei asennettu, sen sijainti poistetaan. Asennuspäivä säilyy, ellet muuttanut sitä edellisellä lomakkeella.",
         "title": "Poistetaanko sijainti?"
       },
       "confirm_disposed": {
         "data": {
           "confirm_disposed": "Vahvista hävitetty-tila"
         },
-        "description": "Merkitäänkö {asset} hävitetyksi? Laitetta tai sen historiaa ei poisteta, ja tilan voi korjata myöhemmällä elinkaarimuutoksella.",
+        "description": "{asset}\n\nMerkitäänkö laite hävitetyksi?\n\nLaitetta tai sen historiaa ei poisteta, ja tilan voi korjata myöhemmällä elinkaarimuutoksella.",
         "title": "Vahvista hävitetty-tila"
       },
       "confirm_void_replacement": {
@@ -382,7 +382,7 @@
           "confirm_void": "Vahvista mitätöinti",
           "void_reason": "Mitätöinnin syy"
         },
-        "description": "Mitätöidäänkö laitteen {asset} suhde {relationship}? Historiatietue säilyy pysyvästi.",
+        "description": "{asset}\n\nMitätöitävä suhde: {relationship}\n\nSuhde ei ole enää voimassa, mutta sen historiatieto säilyy.",
         "submit": "Mitätöi ja palaa",
         "title": "Mitätöi korvaussuhde"
       },
@@ -395,7 +395,7 @@
           "successor_asset_uuid": "Seuraava laite",
           "void_reason": "Vanhan suhteen korjaamisen syy"
         },
-        "description": "Korjaa laitteen {asset} suhde {relationship}. Vanha tietue mitätöidään ja uusi suhde luodaan yhdellä atomisella tallennuksella.",
+        "description": "{asset}\n\nKorjattava suhde: {relationship}\n\nVanha suhde mitätöidään ja korjattu suhde tallennetaan samalla kertaa.",
         "submit": "Tallenna ja palaa",
         "title": "Korjaa korvaussuhde"
       },
@@ -411,12 +411,12 @@
           "serial_number": "Sarjanumero",
           "sw_version": "Ohjelmistoversio"
         },
-        "description": "Muokkaa laitteen {asset} perustietoja. Elinkaaritunnusta, asennustilaa, takuuta, ostosta ja Home Assistant -laitteita hallitaan erikseen.",
+        "description": "{asset}\n\nMuokkaa laitteen perustietoja.",
         "submit": "Tallenna",
         "title": "Perustiedot"
       },
       "ha_relationship": {
-        "description": "{result}\n\nHome Assistant -laitteet: {ha_devices}. Laite: {asset}. Ensisijainen Home Assistant -laite: {current_primary}. Liittyvät Home Assistant -laitteet: {related_devices}. Ensisijainen Home Assistant -laite on tämän laitteen pääasiallinen vastine Home Assistantissa. Liittyvät laitteet ovat vain viitteitä eivätkä vaikuta laitteen identiteettiin, tietoihin, ostoksiin, käyttötuntiseurantaan, entiteettien sijoitteluun tai Home Assistant -laitteen omistajuuteen.",
+        "description": "{asset}\n\n{result}\n\n**Home Assistant -laitteet**\nEnsisijainen: {current_primary}\nLiittyvät: {related_devices}\n\nEnsisijainen Home Assistant -laite on tämän laitteen vastine Home Assistantissa. Liittyvät Home Assistant -laitteet ovat vain viitteitä.",
         "menu_options": {
           "add_related_device": "Lisää liittyvä Home Assistant -laite",
           "manage_asset_menu": "← Takaisin laitteen hallintaan",
@@ -430,21 +430,21 @@
           "device_id": "Home Assistant -laite",
           "ha_relationship_action": "Toiminto"
         },
-        "description": "Laite: {asset}. Nykyinen ensisijainen Home Assistant -laite: {current_device}. Liittäminen, linkityksen poistaminen, vaihtaminen tai liittyvän laitteen muuttaminen ensisijaiseksi ei muuta elinkaaritunnusta eikä itse Home Assistant -laitetta.",
+        "description": "{asset}\n\nNykyinen ensisijainen Home Assistant -laite: {current_device}\n\nMuutos ei vaikuta laitteen tunnukseen eikä itse Home Assistant -laitteeseen.",
         "title": "Hallitse ensisijaista Home Assistant -laitetta"
       },
       "add_related_device": {
         "data": {
           "device_id": "Home Assistant -laite"
         },
-        "description": "Laite: {asset}. Ensisijainen Home Assistant -laite: {current_primary}. Nykyiset liittyvät Home Assistant -laitteet: {related_devices}. Liittyvän viitteen lisääminen ei päivitä laitteen perustietoja eikä vaikuta ostoksiin, käyttötuntiseurantaan, entiteettien sijoitteluun, asennustilaan tai itse Home Assistant -laitteeseen.",
+        "description": "{asset}\n\nEnsisijainen: {current_primary}\nLiittyvät: {related_devices}\n\nLiittyvä Home Assistant -laite on vain viite: se ei muuta laitteen tietoja eikä itse Home Assistant -laitetta.",
         "title": "Lisää liittyvä Home Assistant -laite"
       },
       "remove_related_device": {
         "data": {
           "device_id": "Liittyvä Home Assistant -laite"
         },
-        "description": "Laite: {asset}. Ensisijainen Home Assistant -laite: {current_primary}. Nykyiset liittyvät Home Assistant -laitteet: {related_devices}. Myös Home Assistantista poistuneet laitteet voi valita tästä.",
+        "description": "{asset}\n\nLiittyvät: {related_devices}\n\nMyös Home Assistantista jo poistuneet viitteet voi valita.",
         "title": "Poista liittyvä Home Assistant -laite"
       },
       "init": {
@@ -489,7 +489,7 @@
         "title": "Tiedot ja takuu"
       },
       "asset_installation_menu": {
-        "description": "{asset}\n\n{facts}",
+        "description": "{asset}\n\n**Asennus ja sijainti**\n{facts}",
         "menu_options": {
           "asset_deployment": "Muokkaa asennusta ja sijaintia",
           "manage_asset_menu": "← Takaisin laitteen hallintaan"
@@ -510,7 +510,7 @@
           "replacement_action": "Toiminto",
           "replacement_uuid": "Aktiivinen suhde"
         },
-        "description": "Laite: {asset}. Valitse korjattava tai mitätöitävä aktiivinen suhde.",
+        "description": "{asset}\n\nValitse korjattava tai mitätöitävä aktiivinen suhde.",
         "submit": "Jatka",
         "title": "Hallitse korvaussuhdetta"
       },
@@ -521,7 +521,7 @@
           "replacement_reason": "Korvauksen syy",
           "replacement_target_asset_uuid": "Edeltävä laite"
         },
-        "description": "Laite: {asset}. Valitse fyysinen laite, jonka tämä laite korvaa.",
+        "description": "{asset}\n\nValitse vanha laite, jonka tämä laite korvaa.",
         "title": "Tämä laite korvaa…"
       }
     }

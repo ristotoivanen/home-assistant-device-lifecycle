@@ -225,15 +225,15 @@ async def test_area_context_is_named_not_identified(
 
     placed = await flow.async_step_asset_deployment()
 
-    assert placed["description_placeholders"]["current_area"] == "Workshop"
+    assert "Location: Workshop" in placed["description_placeholders"]["facts"]
     assert workshop.id not in " ".join(placed["description_placeholders"].values())
 
     manager._data["assets"][asset["asset_uuid"]][CONF_HA_AREA_ID] = "gone-area"
     stale_flow = await _on_asset(hass, manager, asset["asset_uuid"])
     stale = await stale_flow.async_step_asset_deployment()
 
-    assert stale["description_placeholders"]["current_area"] == (
-        "Unavailable Home Assistant Area"
+    assert "Location: Unavailable Home Assistant Area" in (
+        stale["description_placeholders"]["facts"]
     )
     assert "gone-area" not in " ".join(stale["description_placeholders"].values())
     assert manager.asset(asset["asset_uuid"])[CONF_HA_AREA_ID] == "gone-area"
