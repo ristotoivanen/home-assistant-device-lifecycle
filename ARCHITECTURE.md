@@ -456,7 +456,7 @@ The 0.6.0 registry migration is deliberately separate from Asset Store migration
 2. Reconcile Purchase subentries.
 3. Reconcile Runtime subentries.
 4. Validate the complete canonical Store snapshot and persist reconciliation before publishing it.
-5. Complete the logically separate legacy entity unique-ID migration. A Purchase- or Runtime-listed device that Home Assistant will no longer attach an entity to is skipped for the device link only (since 0.7.5).
+5. Complete the logically separate legacy entity unique-ID migration. It changes unique IDs only; since 0.7.7 it moves no entity to a device or config subentry. It still logs one warning for each Purchase- or Runtime-listed device that Home Assistant would not attach an entity to.
 6. Build the complete read-only 0.6.0 exposure plan.
 7. Ensure deterministic Asset Devices.
 8. Reparent existing Lifecycle entities to the parent ConfigEntry and Asset Device.
@@ -466,9 +466,9 @@ The 0.6.0 registry migration is deliberately separate from Asset Store migration
 
 The preflight scans all Assets and all desired entity identities, including `<asset_uuid>_installed_date`, `<asset_uuid>_lifecycle_status`, and `<asset_uuid>_replacement`, before the first exposure-related Device or Entity Registry mutation. An exact Asset Device identifier may have zero or one active match. Multiple matches, external ownership, additional identifiers or connections, a foreign entity collision, a noncanonical Lifecycle/Runtime unique ID, a mismatched config entry, or multiple Runtime subentries for one Asset fail setup closed. An otherwise exact Device Lifecycle-owned projection found on one of the same parent entry's subentries is an incomplete derived projection and is safely moved back to the parent; metadata is never used to choose between devices or entities.
 
-Registry reconciliation is idempotent. A valid existing Asset Device is reused; only a missing exact projection is created. Existing entity updates change only `device_id` and `config_subentry_id`; they do not rewrite entity ID, unique ID, name overrides, enabled state, options, categories, labels, or unrelated customization.
+Registry reconciliation is idempotent. A valid existing Asset Device is reused; only a missing exact projection is created. Existing entity updates change only `device_id` and `config_subentry_id`; they do not rewrite entity ID, unique ID, name overrides, enabled state, options, categories, labels, or unrelated customization. Since 0.7.7 a setup or reload whose projection is already canonical makes no Entity Registry placement update at all.
 
-Device Registry and Entity Registry are not treated as one atomic transaction. Before each existing entity move, the migration retains its original entity ID, unique ID, device ID, and config-subentry ID. If a later step fails, attempted entity moves are restored in reverse order. Cleanup removes only an unreferenced Asset Device proven absent at preflight and created during the current setup attempt. A pre-existing device is never rollback cleanup.
+Device Registry and Entity Registry are not treated as one atomic transaction. Before each existing entity move, the migration retains its original entity ID, unique ID, device ID, and config-subentry ID. Because the legacy unique-ID migration no longer moves entities (since 0.7.7), that retained placement is the placement the entity had when setup started. If a later step fails, attempted entity moves are restored in reverse order. Cleanup removes only an unreferenced Asset Device proven absent at preflight and created during the current setup attempt. A pre-existing device is never rollback cleanup.
 
 If rollback itself fails, setup fails with an actionable error and Asset Store remains canonical and unchanged. A partial derived projection may remain. The next setup re-reads Store and both registries and reconciles the same deterministic desired state. It never allocates another Asset UUID or Asset ID, increments `next_asset_number`, rewrites Purchases or external references, remaps a missing external device, or adds a Store marker.
 
@@ -529,12 +529,33 @@ Current setup and legacy normalization follow this order:
 4. Validate all identity, provenance, membership, lifecycle-chain, and replacement-graph invariants.
 5. Atomically save Asset Store.
 6. Only after Store persistence succeeds, add generated stable references back to config subentries.
-7. Migrate Entity Registry unique IDs while preserving `entity_id`, without linking an entity to an external device that is no longer in the Device Registry.
+7. Migrate Entity Registry unique IDs only, preserving `entity_id`. Device and config-subentry placement are left untouched (since 0.7.7).
 8. Build and validate the complete exposure migration plan without mutation.
 9. Ensure/reconcile owned Asset Devices and existing entity placement with compensating rollback.
 10. Set `runtime_data` and set up entity platforms.
 
 This ordering makes repeated setup idempotent and avoids allocating a second Asset merely because a previous run stopped between Store and config-entry writes.
+
+## 0.7.7 Entity Registry placement ownership
+
+Device Lifecycle 0.7.7 changes one setup rule. It changes no canonical schema, identity, or invariant: Store remains 3.1, ConfigEntry remains version 4, no migration runs, the Home Assistant 2026.8.0 minimum is unchanged, and Asset UUIDs, `DLxxxx` Asset IDs, Asset Device identity, entity unique IDs, entity IDs, Runtime totals, and Recorder continuity are unchanged. Only `migration.py` changes; `exposure.py`, including its rollback, `storage.py`, `sensor.py`, and `stale_references.py` are untouched.
+
+Responsibilities are now separate:
+
+| Step | Owns | Does not do |
+|---|---|---|
+| Legacy entity migration (`migration.py`) | legacy entity discovery, the 0.4.x unique-ID move to Asset UUID-based unique IDs, the ambiguity check that refuses to merge a legacy and an Asset Core entity, and the stale-device warning | change `device_id` or `config_subentry_id` of any entity |
+| Exposure reconciliation (`exposure.py`) | canonical placement: every entity on its Asset Device, Lifecycle and the other Asset exposure entities parent-owned, Runtime in its Runtime subentry, with compensating rollback | change unique IDs |
+| Home Assistant entity platform | the same device and config subentry when the sensor platform adds each entity | |
+
+Before 0.7.7 the migration also attached each Lifecycle entity to the external Home Assistant device and the Purchase subentry that a configuration lists, and each Runtime entity to that external device, even though exposure then moved them straight back. Every setup and reload therefore wrote those placements twice. If exposure then failed, the temporary placement stayed: removing that Purchase in this state made Home Assistant delete the Lifecycle entity from the Entity Registry, and exposure's rollback restored the temporary placement instead of the one setup started from. Since 0.7.7:
+
+- an already canonical setup or reload writes no Entity Registry placement update
+- a setup that fails leaves every entity where it was when setup started, and exposure's unchanged rollback restores exactly that placement
+- a Purchase configuration that still lists the device of an Asset the person moved to another Purchase no longer attaches that Asset's Lifecycle entity to it, even temporarily
+- supported upgrades from 0.4.x, 0.5.x, 0.6.x, and earlier 0.7.x keep converging to the same canonical placement, because the entities those releases stored never needed the migration to place them: exposure establishes the placement from their unique IDs alone
+
+The stale-device warning is unchanged: the migration still logs it once for each Purchase- or Runtime-listed device that Home Assistant would not attach an entity to, per setup, with the same text, now as its own step rather than as a side effect of computing a device link. The migration's `Migrated Device Lifecycle entity` informational log line now appears only when a unique ID actually moves.
 
 ## Extension rules
 
@@ -607,9 +628,9 @@ Device Lifecycle stores Device Registry IDs it does not own: primary and related
 | Exposure preflight and Asset Device projection (`exposure.py`) | compares stored IDs only; never resolves external devices |
 | Relationships entity (`sensor.py`) | reports `missing` for that reference only |
 | Asset management UI (`config_flow.py`) | named as an unavailable Home Assistant device; new selections must exist |
-| Legacy entity relink (`migration.py`) | skips the device link only (since 0.7.5) |
+| Legacy entity migration (`migration.py`) | logs one warning; links no device and moves no subentry (since 0.7.7; in 0.7.5 and 0.7.6 it skipped the device link only) |
 
-Before 0.7.5 the legacy relink asked the Entity Registry to attach the Asset's Lifecycle or Runtime entity to every device a Purchase or Runtime subentry lists. Home Assistant refuses an unknown device with `ValueError`, so one removed device left the whole entry in `SETUP_ERROR` on every later setup. The relink now asks first whether Home Assistant will attach an entity to that ID, using the same test Home Assistant's own validation applies: exact ID membership in the device mapping on 2026.8, and `async_get(device_id, include_composite_devices=False)` on 2026.9+, which also excludes pre-migration composite IDs. If it will not, the relink leaves the entity's device link alone, still performs any unique-ID or subentry move, and logs one warning per stale reference and setup naming the Asset ID and the configuration that lists it. Exposure then places the entity on its Asset Device as before. No broad exception handler is involved, so unrelated errors still fail setup.
+Before 0.7.5 the legacy relink asked the Entity Registry to attach the Asset's Lifecycle or Runtime entity to every device a Purchase or Runtime subentry lists. Home Assistant refuses an unknown device with `ValueError`, so one removed device left the whole entry in `SETUP_ERROR` on every later setup. The relink now asks first whether Home Assistant will attach an entity to that ID, using the same test Home Assistant's own validation applies: exact ID membership in the device mapping on 2026.8, and `async_get(device_id, include_composite_devices=False)` on 2026.9+, which also excludes pre-migration composite IDs. If it will not, the relink leaves the entity's device link alone, still performs any unique-ID or subentry move, and logs one warning per stale reference and setup naming the Asset ID and the configuration that lists it. Exposure then places the entity on its Asset Device as before. No broad exception handler is involved, so unrelated errors still fail setup. Since 0.7.7 the migration links no device and moves no subentry at all, so this check decides only the warning; see [0.7.7 Entity Registry placement ownership](#077-entity-registry-placement-ownership).
 
 The stored reference is preserved exactly: no Store write, no subentry rewrite, no migration, no automatic cleanup, and no automatic selection of another device. Entity unique IDs, entity IDs, and registry entries are unchanged. Repair is an explicit user action through the existing flows: remove the device from the Purchase configuration (whose form rejects a missing device until it is deselected) or delete the Runtime configuration, then replace or unlink the primary device. Home Assistant Repairs integration is not part of 0.7.5; the advisory issues that followed are described in [Stale external device references in Repairs](#stale-external-device-references-in-repairs).
 
@@ -619,13 +640,13 @@ Every stored Asset relationship to a Home Assistant device that no longer resolv
 
 **Source.** Only the canonical Asset `ha_device_refs` (primary and related) are collected. Migration and exposure output are not used, because they deliberately skip unresolved references. Purchase `device_ids` and a Runtime `device_id` are not read: reconciliation projects every device they list onto an Asset primary relationship, so one missing device that a Purchase, a Runtime configuration, and the Asset primary all name is exactly one primary issue. The steps for removing the Purchase and Runtime dependencies are in that issue's text.
 
-**Resolution.** A reference is unresolved exactly when `device_registry.async_get(device_id)` returns `None`, called without keyword arguments on both 2026.8 and 2026.9+. It is the same test the Relationships entity and the Asset management UI apply, so Repairs never calls a device missing that those surfaces name. On both releases a pre-migration composite device ID resolves to Home Assistant's read-only stand-in while any of its split devices remains, so it is not reported. On 2026.9+ a child device resolves. The legacy entity relink (`migration._device_can_be_linked`) keeps its stricter question, whether Home Assistant will attach an entity to the ID, which excludes composite IDs. The two tests answer different questions and are intentionally not unified here.
+**Resolution.** A reference is unresolved exactly when `device_registry.async_get(device_id)` returns `None`, called without keyword arguments on both 2026.8 and 2026.9+. It is the same test the Relationships entity and the Asset management UI apply, so Repairs never calls a device missing that those surfaces name. On both releases a pre-migration composite device ID resolves to Home Assistant's read-only stand-in while any of its split devices remains, so it is not reported. On 2026.9+ a child device resolves. The legacy entity migration's warning (`migration._device_can_be_linked`) keeps its stricter question, whether Home Assistant would attach an entity to the ID, which excludes composite IDs. The two tests answer different questions and are intentionally not unified here.
 
 **Identity and ownership.** The issue ID is `stale_device_{role}_{asset_uuid}_{digest}`, with `role` `primary` or `related` and `digest` the first 32 hexadecimal characters of the SHA-256 of the stored device ID encoded as UTF-8. A stored device ID is only validated as a non-empty string, so hashing keeps every ID in one closed grammar and keeps the raw ID out of it. Neither names nor entity IDs are part of the identity. An issue is owned by this feature exactly when its domain is `device_lifecycle` and its ID matches that grammar in full. Translation key and `data` are not used for ownership, because an issue that is not persistent returns after a restart without either. Issues use `is_fixable=False`, `is_persistent=False`, severity `warning`, translation keys `stale_primary_device` and `stale_related_device`, and placeholders `asset_name` and `asset_id` only. There is no `RepairsFlow` and no `repairs.py` platform.
 
 **Lifecycle.** One idempotent reconciliation computes the desired set, creates or updates each desired issue, and deletes only owned issues that are no longer desired. It runs:
 
-- during setup, after Store reconciliation, the legacy relink, and exposure reconciliation
+- during setup, after Store reconciliation, the legacy entity migration, and exposure reconciliation
 - on every Device Registry `create` or `remove` event while the entry is loaded, recomputing the whole set; the removal of a composite's last split device carries the split's ID, not the stored one; `update` events keep the device ID and are ignored
 
 Updating in place keeps each issue's creation time and any dismissal, and Home Assistant announces only real changes, so a reload with unchanged state produces no issue events. An explicit repair through the existing flows (Purchase edit, Runtime removal, primary replace or unlink, related removal) changes Store or subentry data, and that change reloads the entry, which reconciles again. A device that Home Assistant restores under its old ID clears its issue. On 2026.8 a restore that carries no device information announces nothing, and the issue then clears on the next setup. Unloading only stops listening and deletes nothing. Removing the config entry deletes every owned issue and nothing else.
