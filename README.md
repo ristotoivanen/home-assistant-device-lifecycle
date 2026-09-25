@@ -641,6 +641,22 @@ For reproducible problems, open a [GitHub issue](https://github.com/ristotoivane
 - **Future — Documents**
 - **1.0 — Stable**
 
+### Pending validation
+
+#### 0.7.6 post-release validation — Repairs v1 in Test HA
+
+The 0.7.6 production smoke test passed. This is not a known defect and not unfinished 0.7.6 work: production has no naturally occurring stale device reference, and the scenario is destructive, so the end-to-end check is deferred to a dedicated Test HA environment. It may be tracked alongside 0.8.x Maintenance but remains 0.7.6 validation, not a 0.8.x feature. The expected behavior is the released contract in [Home Assistant device relationships](#home-assistant-device-relationships) and [Stale external device references in Repairs](ARCHITECTURE.md#stale-external-device-references-in-repairs).
+
+In Test HA, with a disposable Asset and disposable Home Assistant devices:
+
+- [ ] Link a device as the Asset's primary device, remove it from the Device Registry, and verify one Repairs warning that names the Asset by name and Asset ID without the raw Device Registry ID.
+- [ ] Verify the stored relationship is kept, not removed, rewritten, or relinked.
+- [ ] Repeat with a related device and verify its own relationship-specific warning.
+- [ ] Repair or remove each stale relationship explicitly and verify only its warning disappears.
+- [ ] Where practical, restore the same device under the same Device Registry ID and verify the warning clears.
+- [ ] Verify the English and Finnish Repairs text and the link to Device Lifecycle.
+- [ ] If the setup allows, confirm the Home Assistant 2026.8 limitation: a restore without device information may emit no Device Registry event, so the warning can remain until Device Lifecycle is set up again (reload or restart).
+
 ## License
 
 MIT
