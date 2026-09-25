@@ -57,13 +57,12 @@ def _migrate_or_relink_entity(
     *,
     old_unique_id: str,
     new_unique_id: str,
-    config_subentry_id: str,
-    device_id: str | None,
 ) -> None:
     """Migrate an existing entity without changing its entity_id/history.
 
-    A `device_id` of None leaves the entity's device link as it is: the
-    referenced Home Assistant device is gone, and the Asset Device keeps it.
+    Only the unique ID moves. Device and config subentry placement are left
+    as they are: exposure reconciliation places every entity afterwards, so
+    moving it here first would only be undone again (since 0.7.7).
     """
     new_entity_id = registry.async_get_entity_id(
         Platform.SENSOR,
@@ -97,10 +96,6 @@ def _migrate_or_relink_entity(
     update: dict[str, str] = {}
     if new_entity_id is None:
         update["new_unique_id"] = new_unique_id
-    if registry_entry.config_subentry_id != config_subentry_id:
-        update["config_subentry_id"] = config_subentry_id
-    if device_id is not None and registry_entry.device_id != device_id:
-        update["device_id"] = device_id
 
     if not update:
         return
@@ -127,11 +122,12 @@ async def async_migrate_entity_registry(
     device_registry = dr.async_get(hass)
 
     def _linkable(device_id: str, asset_id: str, source: str) -> str | None:
-        """Return the device ID to link, or None for a device that is gone.
+        """Warn once about a listed device Home Assistant would not link.
 
         A missing device is an unresolved reference, not a setup failure.
         The stored reference is kept exactly as it is for the person to
-        repair, and nothing else about the Asset changes.
+        repair, and nothing else about the Asset changes. Since 0.7.7 no
+        entity is linked to the device here, so only the warning remains.
         """
         if _device_can_be_linked(device_registry, device_id):
             return device_id
@@ -152,18 +148,17 @@ async def async_migrate_entity_registry(
                 if asset is None:
                     continue
 
+                _linkable(
+                    device_id,
+                    asset["asset_id"],
+                    "a Purchase configuration",
+                )
                 _migrate_or_relink_entity(
                     registry,
                     old_unique_id=(
                         f"{subentry.subentry_id}_{device_id}_lifecycle"
                     ),
                     new_unique_id=lifecycle_unique_id(asset["asset_uuid"]),
-                    config_subentry_id=subentry.subentry_id,
-                    device_id=_linkable(
-                        device_id,
-                        asset["asset_id"],
-                        "a Purchase configuration",
-                    ),
                 )
 
         elif subentry.subentry_type == SUBENTRY_TYPE_RUNTIME:
@@ -182,16 +177,15 @@ async def async_migrate_entity_registry(
             if asset is None:
                 continue
 
+            _linkable(
+                device_id,
+                asset["asset_id"],
+                "a Runtime configuration",
+            )
             _migrate_or_relink_entity(
                 registry,
                 old_unique_id=(
                     f"{subentry.subentry_id}_{device_id}_runtime_hours"
                 ),
                 new_unique_id=runtime_unique_id(asset["asset_uuid"]),
-                config_subentry_id=subentry.subentry_id,
-                device_id=_linkable(
-                    device_id,
-                    asset["asset_id"],
-                    "a Runtime configuration",
-                ),
             )
