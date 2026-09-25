@@ -39,6 +39,18 @@ Asset IDs are allocated monotonically and never recycled. The UUID and Asset ID 
 
 Asset Core uses Home Assistant's private, atomic, versioned storage. Its invariants and Store 3.1 schema are documented in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
+## What's new in 0.7.6
+
+Device Lifecycle 0.7.6 reports stored relationships to Home Assistant devices that no longer exist in **Settings → System → Repairs**. Store remains **3.1**, ConfigEntry remains version **4**, and no migration runs. Asset identity, entity unique IDs, entity IDs, entity names and states, and Recorder continuity are unchanged.
+
+- **Missing primary device.** When an Asset's primary Home Assistant device no longer exists in Home Assistant, Repairs shows a warning that names the Asset and its Asset ID.
+- **Missing related device.** Each missing related Home Assistant device gets its own warning.
+- **Nothing is changed for you.** The stored relationship is kept. Device Lifecycle does not remove, replace, or relink it, and the warning has no fix button.
+- **Fixing it clears the warning.** Removing or replacing the relationship in Asset management clears its warning, and so does the same Home Assistant device returning.
+- **Guidance in English and Finnish.** The warning explains the repair steps and links to Device Lifecycle.
+
+See [Home Assistant device relationships](#home-assistant-device-relationships), including the known limitation on Home Assistant 2026.8.
+
 ## What's new in 0.7.5
 
 Device Lifecycle 0.7.5 reorganizes Asset management into fewer, clearer views and makes relationship changes harder to get wrong. Store remains **3.1**, ConfigEntry remains version **4**, and no migration runs. Asset identity, entity unique IDs, entity IDs, entity names and states, and Recorder continuity are unchanged.
@@ -118,7 +130,7 @@ If the repository is not already available in your HACS instance, add it manuall
 
 Copy `custom_components/device_lifecycle/` into `/config/custom_components/device_lifecycle/`, restart Home Assistant, and add the integration from **Settings > Devices & services**.
 
-Device Lifecycle 0.7.5 requires Home Assistant 2026.8.0 or newer. Review the [upgrade notes](#upgrade-notes) and create a Home Assistant backup before any upgrade that changes the Store schema.
+Device Lifecycle 0.7.6 requires Home Assistant 2026.8.0 or newer. Review the [upgrade notes](#upgrade-notes) and create a Home Assistant backup before any upgrade that changes the Store schema.
 
 ## Optional dashboard
 
@@ -417,6 +429,8 @@ A Home Assistant device that has been removed from Home Assistant, for example b
 
 Each stored relationship to a Home Assistant device that no longer exists is also listed in **Settings → System → Repairs** as a warning that names the Asset by its name and Asset ID, for example "Primary Home Assistant device unavailable: Workshop device (DL0007)". A related device gets its own issue. The issue repeats the steps above and links to Device Lifecycle. It only reports the reference: it has no fix button and changes nothing. A missing device that a Purchase or Runtime configuration also lists is one issue for the Asset's primary device, not one per configuration. The issue disappears when you have removed or replaced the relationship, and also when the same Home Assistant device returns. Ignoring it in Repairs hides it without changing the stored reference. A reference whose device Home Assistant still resolves is not listed, including a device that Home Assistant split from an older multi-integration device and still resolves under its former ID.
 
+Known limitation on Home Assistant 2026.8: a device restored without device information may not produce a Device Registry event, so its warning can remain until the next Device Lifecycle reload or Home Assistant restart.
+
 Unlinking or replacing the primary device is blocked while an active:
 
 - Purchase configuration still includes that device, or
@@ -436,7 +450,7 @@ Existing relationships to historical or no-longer-configured Purchases are prese
 
 ## Storage and migration impact
 
-0.7.5 continues to use Store 3.1 and ConfigEntry version 4, with no schema migration. Store 3.1 contains `asset.lifecycle`, top-level `lifecycle_events`, and top-level `replacement_records`. It does not persist Asset Device IDs, Entity Registry IDs, exposure state, workflow drafts, or alternate identities.
+0.7.6 continues to use Store 3.1 and ConfigEntry version 4, with no schema migration. Store 3.1 contains `asset.lifecycle`, top-level `lifecycle_events`, and top-level `replacement_records`. It does not persist Asset Device IDs, Entity Registry IDs, exposure state, workflow drafts, or alternate identities.
 
 ## Warranty
 
@@ -449,7 +463,7 @@ Existing Purchase workflows can set a warranty with these modes:
 - 2 years
 - Manual
 
-For 1- and 2-year warranties, the warranty end date is calculated from the Purchase date with calendar-year and leap-day handling. Quick Add can apply those modes only when a configured Purchase with a valid Purchase date is selected, or use a manual warranty date without a Purchase. It revalidates the Purchase date immediately before commit. There is no separate warranty editor in 0.7.5: the **Linked purchase** / **Ostoslinkitys** form changes only the Purchase link.
+For 1- and 2-year warranties, the warranty end date is calculated from the Purchase date with calendar-year and leap-day handling. Quick Add can apply those modes only when a configured Purchase with a valid Purchase date is selected, or use a manual warranty date without a Purchase. It revalidates the Purchase date immediately before commit. There is no separate warranty editor in 0.7.6: the **Linked purchase** / **Ostoslinkitys** form changes only the Purchase link.
 
 ## Runtime tracking
 
@@ -469,6 +483,12 @@ While active, Runtime checkpoints to Asset Store every five minutes. It also che
 Runtime configuration remains owned by its Runtime subentry, and the external primary relationship remains its configured target. In 0.6.0 only the entity's Device Registry placement changes to the owned Asset Device. Runtime unique ID, entity ID, subentry ID, total, source behavior, initialization, restore import, thresholds, hysteresis, units, precision, state class, checkpointing, and CAS behavior are unchanged.
 
 ## Upgrade notes
+
+### Upgrading from 0.7.5 to 0.7.6
+
+No Home Assistant upgrade is required; 0.7.6 keeps the Home Assistant 2026.8.0 minimum. No Store or ConfigEntry migration runs. Store remains 3.1 and ConfigEntry remains version 4. Existing Assets, Purchases, lifecycle and replacement history, Asset Devices, entity unique IDs, entity IDs, entity names and states, and Recorder continuity remain unchanged.
+
+After the upgrade, each stored relationship to a Home Assistant device that no longer exists appears in **Settings → System → Repairs**. The stored relationships are unchanged; repair them as described in [Home Assistant device relationships](#home-assistant-device-relationships).
 
 ### Upgrading from 0.7.4 to 0.7.5
 
@@ -587,7 +607,7 @@ Removing a Runtime tracking entry removes only that Runtime sensor and active co
 
 Removing a Device Lifecycle Asset Device from Home Assistant does not delete or purge its canonical Asset. The projection can be recreated on reload.
 
-Device Lifecycle 0.7.5 does not provide a warranty editor, a searchable Asset list, a guided replacement wizard, preservation of values entered on a form when its location-clearing or Disposed confirmation is declined, Home Assistant Repairs for stale references, Asset deletion/purge/merge, Runtime reset/manual editing, bulk Asset creation, automatic discovery or stale-device rematching, Purchase creation inside Quick Add, Maintenance, RMA cases, Documents, export/import, future replacement scheduling, automatic inheritance/transfer between replacement Assets, a lifecycle-history UI, or full replacement-history attributes. Lifecycle and replacement history remain canonical in Store 3.1 even though Home Assistant exposes only current state.
+Device Lifecycle 0.7.6 does not provide a warranty editor, a searchable Asset list, a guided replacement wizard, preservation of values entered on a form when its location-clearing or Disposed confirmation is declined, Asset deletion/purge/merge, Runtime reset/manual editing, bulk Asset creation, automatic discovery or stale-device rematching, Purchase creation inside Quick Add, Maintenance, RMA cases, Documents, export/import, future replacement scheduling, automatic inheritance/transfer between replacement Assets, a lifecycle-history UI, or full replacement-history attributes. Lifecycle and replacement history remain canonical in Store 3.1 even though Home Assistant exposes only current state.
 
 ## Documentation
 
@@ -615,6 +635,7 @@ For reproducible problems, open a [GitHub issue](https://github.com/ristotoivane
 - **0.7.3 — Compatibility & Release Hygiene**
 - **0.7.4 — Asset Management UX**
 - **0.7.5 — Asset Management UX & safety**
+- **0.7.6 — Stale device references in Repairs**
 - **0.8.x — Maintenance**
 - **0.9.x — Portability & Hardening**
 - **Future — Documents**
