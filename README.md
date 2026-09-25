@@ -672,6 +672,37 @@ In Test HA, with a disposable Asset and disposable Home Assistant devices:
 - [ ] Verify the English and Finnish Repairs text and the link to Device Lifecycle.
 - [ ] If the setup allows, confirm the Home Assistant 2026.8 limitation: a restore without device information may emit no Device Registry event, so the warning can remain until Device Lifecycle is set up again (reload or restart).
 
+### Release validation
+
+#### 0.7.7 Test HA release validation — complete
+
+**0.7.7 RELEASE VALIDATION: COMPLETE.** The released Device Lifecycle 0.7.7 passed the Test HA smoke for its Entity Registry placement change (S1) on Home Assistant 2026.9.3.
+
+- **Environment.** Dedicated Test HA ("ha-ai-lab") with the released 0.7.7 installed. The integration was loaded, and the UI showed version 0.7.7. The installation had 2 Device Lifecycle devices with 15 entities, including DL Lab Device 01 (DL0002) and Testidevice 1 (DL0001). Existing configurations included the Purchase "Test Purchase 1" and Runtime tracking for DL Lab Device 01, using `sensor.dl_lab_device_01_power` with Power above threshold.
+- **Method.** An Entity Registry snapshot was taken, then the integration was reloaded twice in a row while listening for Entity Registry updates.
+- **Reload 1.** The integration returned to loaded, with 0 Device Lifecycle Entity Registry updates changing `device_id` or `config_subentry_id`. All 15 entities kept their entity ID, unique ID, `device_id`, `config_subentry_id`, `disabled_by`, and registry ID. Entity Registry `modified_at` was unchanged, and the Runtime value stayed at 0.011743 h.
+- **Reload 2.** The result was the same: loaded, 0 placement updates, identity and placement unchanged, `modified_at` unchanged, and Runtime still at 0.011743 h. The listener received 26 Device Lifecycle `state_changed` events during this reload, which shows it was active while it received no placement update.
+- **Other checks.**
+  - The English Asset hub and its five rows rendered: Details & warranty, Installation & location, Lifecycle & replacement, Home Assistant devices, and Choose another device. Purchase, warranty, lifecycle, deployment, and replacement remained separate, and related Home Assistant devices remained references.
+  - The Purchase and Runtime tracking configuration screens rendered normally.
+  - There were 0 Device Lifecycle Repairs issues before and after the reloads.
+  - After the reloads, the log had no new Device Lifecycle error, relevant warning, traceback, or setup, migration, exposure, or rollback failure.
+  - Lifecycle and Runtime history continued under the same entity IDs, apart from the expected short unavailable periods during each reload, and Runtime long-term statistics existed. This was observed through the Home Assistant history UI and APIs, not validated in the Recorder database.
+
+Not covered by this smoke:
+
+- Runtime accumulation across a reload while the source is actively accumulating. The source was inactive.
+- Recorder continuity in the database itself.
+- Whether the `Migrated Device Lifecycle entity` INFO log line appears.
+- The destructive stale-reference Repairs v1 checks. These remain the separate [0.7.6 pending validation](#076-post-release-validation--repairs-v1-in-test-ha) above.
+- The optional Device Lifecycle dashboard, which was not installed.
+
+Observations for later review. None of these is a 0.7.7 release failure:
+
+- An older log entry from 2026-09-20 reported a Home Assistant deprecation warning for `registry.devices` use in `custom_components/device_lifecycle/exposure.py` (line 133), saying it will stop working in Home Assistant 2027.9.0. It did not recur during the 0.7.7 reloads, and it is not yet known which installed version logged it.
+- Lifecycle entity attribute keys are Finnish (for example `takuun_tyyppi` and `ostos`) even when the Home Assistant UI is English. This is to be reviewed together with the entity attribute API.
+- The Runtime entity keeps its Runtime `config_subentry_id` while its Asset Device belongs to the parent entry. This stayed stable across both reloads and matches the documented Runtime ownership. It is recorded as evidence, not as a defect.
+
 ## License
 
 MIT
