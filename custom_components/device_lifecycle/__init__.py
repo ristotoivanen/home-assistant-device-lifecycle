@@ -11,6 +11,11 @@ from homeassistant.core import HomeAssistant
 from .const import CONFIG_ENTRY_VERSION
 from .exposure import async_reconcile_exposure_registry
 from .migration import async_migrate_entity_registry
+from .stale_references import (
+    async_delete_stale_reference_issues,
+    async_sync_stale_reference_issues,
+    async_track_stale_reference_issues,
+)
 from .storage import AssetStoreManager
 
 PLATFORMS = [Platform.SENSOR]
@@ -34,6 +39,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # creates deterministic Asset Devices or moves any existing entities.
     await async_reconcile_exposure_registry(hass, entry, manager)
 
+    # Stale external device references are reported in Repairs, derived from
+    # the canonical Asset relationships and never written back. Unloading
+    # keeps the issues so a reload does not churn them; only removing the
+    # entry deletes them.
+    async_sync_stale_reference_issues(hass, manager)
+    entry.async_on_unload(async_track_stale_reference_issues(hass, manager))
+
     entry.runtime_data = manager
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -47,6 +59,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload Device Lifecycle."""
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Delete the stale-reference Repairs issues when the entry is removed."""
+    async_delete_stale_reference_issues(hass)
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:

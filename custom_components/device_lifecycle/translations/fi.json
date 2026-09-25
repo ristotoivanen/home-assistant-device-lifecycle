@@ -658,5 +658,15 @@
         }
       }
     }
+  },
+  "issues": {
+    "stale_primary_device": {
+      "title": "Ensisijainen Home Assistant -laite ei saatavilla: {asset_name} ({asset_id})",
+      "description": "Laitteen {asset_name} ({asset_id}) ensisijainen Home Assistant -laite ei ole enää Home Assistantissa.\n\nDevice Lifecycle säilytti tämän linkityksen tarkoituksella. Mitään ei ole poistettu tai vaihdettu automaattisesti, eikä laite tai sen entiteetit ole muuttuneet.\n\nKorjaa se avaamalla [Device Lifecycle](/config/integrations/integration/device_lifecycle):\n\n1. Jos ostos käyttää vielä laitetta, muokkaa ostosta ja poista laite sen Home Assistant -laitteista.\n2. Jos käyttötuntiseuranta käyttää vielä laitetta, poista seuranta. Laite säilyttää kertyneet käyttötuntinsa.\n3. Valitse **Määrittele** → **Hallitse laitteita** → {asset_id} → **Home Assistant -laitteet** → **Hallitse ensisijaista Home Assistant -laitetta** ja vaihda laite tai poista linkitys.\n\nJos sama Home Assistant -laite palaa Home Assistantiin, tämä ilmoitus poistuu itsestään."
+    },
+    "stale_related_device": {
+      "title": "Liittyvä Home Assistant -laite ei saatavilla: {asset_name} ({asset_id})",
+      "description": "Laitteen {asset_name} ({asset_id}) liittyvä Home Assistant -laite ei ole enää Home Assistantissa.\n\nDevice Lifecycle säilytti tämän linkityksen tarkoituksella. Mitään ei ole poistettu automaattisesti, eikä laite tai sen entiteetit ole muuttuneet.\n\nPoista linkitys avaamalla [Device Lifecycle](/config/integrations/integration/device_lifecycle) ja valitsemalla **Määrittele** → **Hallitse laitteita** → {asset_id} → **Home Assistant -laitteet** → **Poista liittyvä Home Assistant -laite**. Laite näkyy siellä nimellä Home Assistant -laite ei saatavilla.\n\nJos sama Home Assistant -laite palaa Home Assistantiin, tämä ilmoitus poistuu itsestään."
+    }
   }
 }
