@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import inspect
 import json
+import re
 from pathlib import Path
 import textwrap
 from typing import Any
@@ -18,6 +19,7 @@ from custom_components.device_lifecycle.const import (
     DEPLOYMENT_STATES,
     HA_RELATIONSHIP_ACTIONS,
 )
+from custom_components.device_lifecycle.stale_references import TRANSLATION_KEYS
 
 TRANSLATION_DIRECTORY = (
     Path(__file__).parents[1]
@@ -454,3 +456,31 @@ def test_finalized_english_and_finnish_lifecycle_terms() -> None:
         "replace": "Vaihda linkitetty laite",
         "unlink": "Poista linkitys",
     }
+
+
+def test_stale_reference_issues_have_equivalent_translations() -> None:
+    """Both languages describe both issues with the same two placeholders.
+
+    The Asset is named by its name and Asset ID only; there is no
+    placeholder a Home Assistant device ID could reach the person through.
+    """
+    english = _translation("en")["issues"]
+    finnish = _translation("fi")["issues"]
+
+    assert set(english) == set(finnish) == set(TRANSLATION_KEYS.values())
+    for key in TRANSLATION_KEYS.values():
+        for issue in (english[key], finnish[key]):
+            assert set(issue) == {"title", "description"}
+            assert issue["title"].strip()
+            assert issue["description"].strip()
+            assert set(re.findall(r"{(\w+)}", issue["title"])) == {
+                "asset_id",
+                "asset_name",
+            }
+            assert set(re.findall(r"{(\w+)}", issue["description"])) == {
+                "asset_id",
+                "asset_name",
+            }
+            assert "/config/integrations/integration/device_lifecycle" in (
+                issue["description"]
+            )

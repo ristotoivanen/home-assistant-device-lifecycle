@@ -415,6 +415,8 @@ A Home Assistant device that has been removed from Home Assistant, for example b
 2. If a Runtime configuration tracks the device, delete that Runtime configuration. The Asset keeps its Runtime total.
 3. Then replace or unlink the primary Home Assistant device in **Home Assistant devices → Manage primary Home Assistant device**.
 
+Each stored relationship to a Home Assistant device that no longer exists is also listed in **Settings → System → Repairs** as a warning that names the Asset by its name and Asset ID, for example "Primary Home Assistant device unavailable: Workshop device (DL0007)". A related device gets its own issue. The issue repeats the steps above and links to Device Lifecycle. It only reports the reference: it has no fix button and changes nothing. A missing device that a Purchase or Runtime configuration also lists is one issue for the Asset's primary device, not one per configuration. The issue disappears when you have removed or replaced the relationship, and also when the same Home Assistant device returns. Ignoring it in Repairs hides it without changing the stored reference. A reference whose device Home Assistant still resolves is not listed, including a device that Home Assistant split from an older multi-integration device and still resolves under its former ID.
+
 Unlinking or replacing the primary device is blocked while an active:
 
 - Purchase configuration still includes that device, or

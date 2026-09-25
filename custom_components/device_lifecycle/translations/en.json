@@ -658,5 +658,15 @@
         }
       }
     }
+  },
+  "issues": {
+    "stale_primary_device": {
+      "title": "Primary Home Assistant device unavailable: {asset_name} ({asset_id})",
+      "description": "The primary Home Assistant device of {asset_name} ({asset_id}) is no longer in Home Assistant.\n\nDevice Lifecycle kept this relationship on purpose. Nothing has been removed or replaced automatically, and the Asset and its entities are unchanged.\n\nTo repair it, open [Device Lifecycle](/config/integrations/integration/device_lifecycle):\n\n1. If a Purchase still lists the device, reconfigure that Purchase and remove the device from its Home Assistant devices.\n2. If Runtime tracking still uses the device, delete that Runtime configuration. The Asset keeps its Runtime total.\n3. Choose **Configure** → **Manage devices** → {asset_id} → **Home Assistant devices** → **Manage primary Home Assistant device**, then replace or unlink the device.\n\nIf the same Home Assistant device returns to Home Assistant, this issue clears by itself."
+    },
+    "stale_related_device": {
+      "title": "Related Home Assistant device unavailable: {asset_name} ({asset_id})",
+      "description": "A related Home Assistant device of {asset_name} ({asset_id}) is no longer in Home Assistant.\n\nDevice Lifecycle kept this relationship on purpose. Nothing has been removed automatically, and the Asset and its entities are unchanged.\n\nTo remove the relationship, open [Device Lifecycle](/config/integrations/integration/device_lifecycle) and choose **Configure** → **Manage devices** → {asset_id} → **Home Assistant devices** → **Remove related Home Assistant device**. The device is listed there as Home Assistant device unavailable.\n\nIf the same Home Assistant device returns to Home Assistant, this issue clears by itself."
+    }
   }
 }
