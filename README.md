@@ -39,6 +39,16 @@ Asset IDs are allocated monotonically and never recycled. The UUID and Asset ID 
 
 Asset Core uses Home Assistant's private, atomic, versioned storage. Its invariants and Store 3.1 schema are documented in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
+## What's new in 0.7.7
+
+Device Lifecycle 0.7.7 is a small reliability release. It changes how setup treats the Home Assistant Entity Registry and adds no new features. Store remains **3.1**, ConfigEntry remains version **4**, and no migration runs. No action is needed after upgrading.
+
+- **Entities stay in place during setup.** Until now, every restart or reload briefly moved each Asset's Lifecycle and Runtime entities from the Asset's own Device Lifecycle device to the Home Assistant device, and the Purchase or Runtime tracking configuration, that lists it, and then straight back. They now stay on the Asset's device throughout.
+- **Fewer Entity Registry writes.** A normal restart or reload no longer rewrites those entities when nothing has changed.
+- **Safer when setup fails.** If setup stops with an error, entities are left exactly where they were instead of in that temporary place, and removing a Purchase configuration in that state no longer removes the Asset's Lifecycle entity.
+- **Upgrades from older releases keep working.** Installations that started on 0.4.x or later still have their legacy entity identities converted as before.
+- **Everything else stays the same.** Entity IDs, unique IDs, names, and Runtime totals are unchanged, so existing history stays with the same entities. The log warning for a Home Assistant device that a Purchase or Runtime tracking configuration still lists after it was removed is also unchanged.
+
 ## What's new in 0.7.6
 
 Device Lifecycle 0.7.6 reports stored relationships to Home Assistant devices that no longer exist in **Settings → System → Repairs**. Store remains **3.1**, ConfigEntry remains version **4**, and no migration runs. Asset identity, entity unique IDs, entity IDs, entity names and states, and Recorder continuity are unchanged.
@@ -130,7 +140,7 @@ If the repository is not already available in your HACS instance, add it manuall
 
 Copy `custom_components/device_lifecycle/` into `/config/custom_components/device_lifecycle/`, restart Home Assistant, and add the integration from **Settings > Devices & services**.
 
-Device Lifecycle 0.7.6 requires Home Assistant 2026.8.0 or newer. Review the [upgrade notes](#upgrade-notes) and create a Home Assistant backup before any upgrade that changes the Store schema.
+Device Lifecycle 0.7.7 requires Home Assistant 2026.8.0 or newer. Review the [upgrade notes](#upgrade-notes) and create a Home Assistant backup before any upgrade that changes the Store schema.
 
 ## Optional dashboard
 
@@ -450,7 +460,7 @@ Existing relationships to historical or no-longer-configured Purchases are prese
 
 ## Storage and migration impact
 
-0.7.6 continues to use Store 3.1 and ConfigEntry version 4, with no schema migration. Store 3.1 contains `asset.lifecycle`, top-level `lifecycle_events`, and top-level `replacement_records`. It does not persist Asset Device IDs, Entity Registry IDs, exposure state, workflow drafts, or alternate identities.
+0.7.7 continues to use Store 3.1 and ConfigEntry version 4, with no schema migration. Store 3.1 contains `asset.lifecycle`, top-level `lifecycle_events`, and top-level `replacement_records`. It does not persist Asset Device IDs, Entity Registry IDs, exposure state, workflow drafts, or alternate identities.
 
 ## Warranty
 
@@ -463,7 +473,7 @@ Existing Purchase workflows can set a warranty with these modes:
 - 2 years
 - Manual
 
-For 1- and 2-year warranties, the warranty end date is calculated from the Purchase date with calendar-year and leap-day handling. Quick Add can apply those modes only when a configured Purchase with a valid Purchase date is selected, or use a manual warranty date without a Purchase. It revalidates the Purchase date immediately before commit. There is no separate warranty editor in 0.7.6: the **Linked purchase** / **Ostoslinkitys** form changes only the Purchase link.
+For 1- and 2-year warranties, the warranty end date is calculated from the Purchase date with calendar-year and leap-day handling. Quick Add can apply those modes only when a configured Purchase with a valid Purchase date is selected, or use a manual warranty date without a Purchase. It revalidates the Purchase date immediately before commit. There is no separate warranty editor in 0.7.7: the **Linked purchase** / **Ostoslinkitys** form changes only the Purchase link.
 
 ## Runtime tracking
 
@@ -483,6 +493,10 @@ While active, Runtime checkpoints to Asset Store every five minutes. It also che
 Runtime configuration remains owned by its Runtime subentry, and the external primary relationship remains its configured target. In 0.6.0 only the entity's Device Registry placement changes to the owned Asset Device. Runtime unique ID, entity ID, subentry ID, total, source behavior, initialization, restore import, thresholds, hysteresis, units, precision, state class, checkpointing, and CAS behavior are unchanged.
 
 ## Upgrade notes
+
+### Upgrading from 0.7.6 to 0.7.7
+
+Upgrade through HACS, or manually, as usual and restart Home Assistant. No Home Assistant upgrade is required; 0.7.7 keeps the Home Assistant 2026.8.0 minimum. No configuration is converted and no Store or ConfigEntry migration runs: Store remains 3.1 and ConfigEntry remains version 4. No Asset is recreated. Existing Assets, Purchases, lifecycle and replacement history, Asset Devices, entity unique IDs, entity IDs, entity names and states, and Runtime totals remain unchanged.
 
 ### Upgrading from 0.7.5 to 0.7.6
 
@@ -607,7 +621,7 @@ Removing a Runtime tracking entry removes only that Runtime sensor and active co
 
 Removing a Device Lifecycle Asset Device from Home Assistant does not delete or purge its canonical Asset. The projection can be recreated on reload.
 
-Device Lifecycle 0.7.6 does not provide a warranty editor, a searchable Asset list, a guided replacement wizard, preservation of values entered on a form when its location-clearing or Disposed confirmation is declined, Asset deletion/purge/merge, Runtime reset/manual editing, bulk Asset creation, automatic discovery or stale-device rematching, Purchase creation inside Quick Add, Maintenance, RMA cases, Documents, export/import, future replacement scheduling, automatic inheritance/transfer between replacement Assets, a lifecycle-history UI, or full replacement-history attributes. Lifecycle and replacement history remain canonical in Store 3.1 even though Home Assistant exposes only current state.
+Device Lifecycle 0.7.7 does not provide a warranty editor, a searchable Asset list, a guided replacement wizard, preservation of values entered on a form when its location-clearing or Disposed confirmation is declined, Asset deletion/purge/merge, Runtime reset/manual editing, bulk Asset creation, automatic discovery or stale-device rematching, Purchase creation inside Quick Add, Maintenance, RMA cases, Documents, export/import, future replacement scheduling, automatic inheritance/transfer between replacement Assets, a lifecycle-history UI, or full replacement-history attributes. Lifecycle and replacement history remain canonical in Store 3.1 even though Home Assistant exposes only current state.
 
 ## Documentation
 
@@ -636,6 +650,7 @@ For reproducible problems, open a [GitHub issue](https://github.com/ristotoivane
 - **0.7.4 — Asset Management UX**
 - **0.7.5 — Asset Management UX & safety**
 - **0.7.6 — Stale device references in Repairs**
+- **0.7.7 — Entity Registry placement hardening**
 - **0.8.x — Maintenance**
 - **0.9.x — Portability & Hardening**
 - **Future — Documents**
