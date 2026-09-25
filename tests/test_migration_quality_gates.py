@@ -35,13 +35,15 @@ def test_legacy_and_canonical_entity_collision_fails_closed() -> None:
             registry,
             old_unique_id="old",
             new_unique_id="new",
-            config_subentry_id="purchase",
-            device_id="device",
         )
 
 
 def test_disappeared_and_already_converged_registry_rows_need_no_update() -> None:
-    """Stale lookups and already-canonical ownership are deterministic no-ops."""
+    """Stale lookups and an already-canonical unique ID are deterministic no-ops.
+
+    Since 0.7.7 placement is not the migration's concern, so a row whose
+    unique ID has converged is left alone wherever it is placed.
+    """
     disappeared = Mock()
     disappeared.async_get_entity_id.side_effect = ["sensor.new", None]
     disappeared.async_get.return_value = None
@@ -49,22 +51,18 @@ def test_disappeared_and_already_converged_registry_rows_need_no_update() -> Non
         disappeared,
         old_unique_id="old",
         new_unique_id="new",
-        config_subentry_id="purchase",
-        device_id="device",
     )
     disappeared.async_update_entity.assert_not_called()
 
     converged = Mock()
     converged.async_get_entity_id.side_effect = ["sensor.new", None]
     converged.async_get.return_value = SimpleNamespace(
-        config_subentry_id="purchase", device_id="device"
+        config_subentry_id="elsewhere", device_id="other-device"
     )
     _migrate_or_relink_entity(
         converged,
         old_unique_id="old",
         new_unique_id="new",
-        config_subentry_id="purchase",
-        device_id="device",
     )
     converged.async_update_entity.assert_not_called()
 
