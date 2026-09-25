@@ -17,6 +17,7 @@
         "user": {
           "title": "Lisää ostos",
           "description": "Tallenna ostos, vaikka laitteita ei olisi vielä saapunut tai lisätty Home Assistantiin. Voit valita Home Assistant -laitteet nyt tai liittää laitteita ostokseen myöhemmin.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
+          "submit": "Lisää ostos",
           "data": {
             "device_ids": "Home Assistant -laitteet (valinnainen)",
             "purchase_name": "Ostoksen nimi",
@@ -43,6 +44,7 @@
         "reconfigure": {
           "title": "Muokkaa ostosta",
           "description": "Ostokseen liitetyt elinkaarilaitteet:\n\n{linked_assets}\n\nYllä oleva luettelo on tässä näkymässä vain tiedoksi. Muokkaa ostoksen tietoja tai Home Assistantin laiterekisterin laitteita alla. Ostos säilyy ilman laitteitakin. Laiterekisterin laitteen poistaminen poistaa tämän ostoksen Elinkaari-entiteetin, mutta laite ja sen elinkaaritunnus säilyvät. Muuta manuaalisesti hallitun laitteen ostosta kohdasta Hallitse laitetta → Liitä ostokseen.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
+          "submit": "Tallenna muutokset",
           "data": {
             "device_ids": "Home Assistant -laitteet (valinnainen)",
             "purchase_name": "Ostoksen nimi",
@@ -76,6 +78,9 @@
         "invalid_purchase_price": "Ostoksen kokonaishinnan pitää olla vähintään nolla.",
         "invalid_warranty_type": "Takuun tyyppi ei ole kelvollinen.",
         "service_device_not_allowed": "Valittu kohde on Home Assistant -palvelu eikä fyysinen laite."
+      },
+      "abort": {
+        "reconfigure_successful": "Ostos päivitettiin."
       }
     },
     "runtime": {
@@ -88,6 +93,7 @@
         "user": {
           "title": "Lisää käyttötuntiseuranta",
           "description": "Valitse ensin fyysinen laite ja käyntiajan tunnistustapa. Seuraavaksi valitaan siihen sopiva lähde-entiteetti.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
+          "submit": "Jatka",
           "data": {
             "device_id": "Seurattava laite",
             "runtime_mode": "Seurantatapa"
@@ -100,6 +106,7 @@
         "runtime_source": {
           "title": "Määritä käyntiajan lähde",
           "description": "Lähdelista suodatetaan valitun seurantatavan mukaan. Tehoseurannassa näytetään vain varsinaiset tehosensorit ja päällä-tilassa järkevät on/off-entiteetit.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
+          "submit": "Lisää käyttötuntiseuranta",
           "data": {
             "source_entity_id": "Lähde-entiteetti",
             "power_threshold": "Tehoraja",
@@ -114,6 +121,7 @@
         "reconfigure": {
           "title": "Muokkaa käyttötuntiseurantaa",
           "description": "Valitse käyntiajan tunnistustapa. Seuraavaksi valitaan siihen sopiva lähde-entiteetti. Seurattava fyysinen laite ei muutu.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
+          "submit": "Jatka",
           "data": {
             "runtime_mode": "Seurantatapa"
           },
@@ -124,6 +132,7 @@
         "reconfigure_source": {
           "title": "Määritä käyntiajan lähde",
           "description": "Lähdelista suodatetaan valitun seurantatavan mukaan. Tehoraja ja hystereesi näytetään vain tehotilassa.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
+          "submit": "Tallenna muutokset",
           "data": {
             "source_entity_id": "Lähde-entiteetti",
             "power_threshold": "Tehoraja",
@@ -149,6 +158,9 @@
         "power_hysteresis_too_large": "Hystereesi ei voi olla tehorajaa suurempi.",
         "invalid_runtime_mode": "Käyttötuntiseurannan tapa ei ole kelvollinen.",
         "service_device_not_allowed": "Valittu kohde on Home Assistant -palvelu eikä seurattava fyysinen laite."
+      },
+      "abort": {
+        "reconfigure_successful": "Käyttötuntiseuranta päivitettiin."
       }
     }
   },

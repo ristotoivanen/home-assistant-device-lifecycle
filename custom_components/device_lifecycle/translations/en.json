@@ -17,6 +17,7 @@
         "user": {
           "title": "Add purchase",
           "description": "Record a Purchase even if no devices have arrived or been added to Home Assistant yet. You can link physical devices now or attach Assets to this Purchase later.\n\nClose the window without saving by using the X button in the upper-left corner.",
+          "submit": "Add purchase",
           "data": {
             "device_ids": "Home Assistant devices (optional)",
             "purchase_name": "Purchase name",
@@ -43,6 +44,7 @@
         "reconfigure": {
           "title": "Edit purchase",
           "description": "Device Lifecycle Assets linked to this Purchase:\n\n{linked_assets}\n\nThe list above is read-only here. Edit Purchase details or Home Assistant Device Registry devices below. A Purchase remains valid with no devices. Removing a registry device removes its Lifecycle entity from this Purchase but preserves its Asset and Asset ID. Change a manually managed Asset's Purchase from Manage Asset → Link to Purchase.\n\nClose the window without saving by using the X button in the upper-left corner.",
+          "submit": "Save changes",
           "data": {
             "device_ids": "Home Assistant devices (optional)",
             "purchase_name": "Purchase name",
@@ -76,6 +78,9 @@
         "invalid_purchase_price": "The total purchase price must be zero or greater.",
         "invalid_warranty_type": "The warranty type is invalid.",
         "service_device_not_allowed": "The selected item is a Home Assistant service rather than a physical device."
+      },
+      "abort": {
+        "reconfigure_successful": "Purchase updated."
       }
     },
     "runtime": {
@@ -88,6 +93,7 @@
         "user": {
           "title": "Add runtime tracking",
           "description": "First choose the physical device and runtime detection method. Next, select a source entity suitable for that method.\n\nClose the window without saving by using the X button in the upper-left corner.",
+          "submit": "Continue",
           "data": {
             "device_id": "Tracked device",
             "runtime_mode": "Tracking method"
@@ -100,6 +106,7 @@
         "runtime_source": {
           "title": "Configure runtime source",
           "description": "The source list is filtered for the selected tracking method. Power mode shows only actual power sensors; on-state mode shows sensible on/off entities.\n\nClose the window without saving by using the X button in the upper-left corner.",
+          "submit": "Add runtime tracking",
           "data": {
             "source_entity_id": "Source entity",
             "power_threshold": "Power threshold",
@@ -114,6 +121,7 @@
         "reconfigure": {
           "title": "Edit runtime tracking",
           "description": "Choose the runtime detection method. Next, select a source entity suitable for that method. The tracked physical device is unchanged.\n\nClose the window without saving by using the X button in the upper-left corner.",
+          "submit": "Continue",
           "data": {
             "runtime_mode": "Tracking method"
           },
@@ -124,6 +132,7 @@
         "reconfigure_source": {
           "title": "Configure runtime source",
           "description": "The source list is filtered for the selected tracking method. Power threshold and hysteresis are shown only in power mode.\n\nClose the window without saving by using the X button in the upper-left corner.",
+          "submit": "Save changes",
           "data": {
             "source_entity_id": "Source entity",
             "power_threshold": "Power threshold",
@@ -149,6 +158,9 @@
         "power_hysteresis_too_large": "The hysteresis cannot be greater than the power threshold.",
         "invalid_runtime_mode": "The runtime tracking method is invalid.",
         "service_device_not_allowed": "The selected item is a Home Assistant service rather than a trackable physical device."
+      },
+      "abort": {
+        "reconfigure_successful": "Runtime tracking updated."
       }
     }
   },
