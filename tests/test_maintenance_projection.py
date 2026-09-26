@@ -694,6 +694,154 @@ def test_combined_unknown_calendar_with_ok_runtime() -> None:
     assert projection.combined_state is DueState.UNKNOWN
 
 
+# Future effective calendar anchor (projection erratum 2026-09-26)
+
+
+def test_future_initial_anchor_one_day_ahead() -> None:
+    """A dated baseline one day in the future stays the source; calendar UNKNOWN."""
+    schedule = _schedule(initial_anchor=_anchor("2026-09-27", None))
+    projection = _project(schedule, today=date(2026, 9, 26))
+    assert projection.anchor == _source(
+        EffectiveSource.INITIAL_ANCHOR, "2026-09-27", None
+    )
+    assert projection.calendar == CalendarCondition(None, DueState.UNKNOWN)
+    assert projection.combined_state is DueState.UNKNOWN
+
+
+def test_far_future_anchor_after_clock_correction() -> None:
+    """Accepted while the clock was ahead: never OK with a trusted future due."""
+    schedule = _schedule(calendar_interval={"value": 1, "unit": "years"})
+    projection = _project(
+        schedule, _event(EVENT_1, "2036-09-26"), today=date(2026, 9, 26)
+    )
+    assert projection.anchor == _source(EffectiveSource.EVENT_GROUP, "2036-09-26", None)
+    assert projection.calendar == CalendarCondition(None, DueState.UNKNOWN)
+    assert projection.combined_state is DueState.UNKNOWN
+
+
+def test_anchor_today_is_projected_normally_in_projection() -> None:
+    """An anchor equal to today is valid; it is not the same as due today."""
+    projection = _project(_schedule(), _event(EVENT_1, "2026-09-26"))
+    assert projection.calendar == CalendarCondition(date(2027, 3, 26), DueState.OK)
+    assert projection.combined_state is DueState.OK
+
+
+def test_future_event_remains_the_effective_source() -> None:
+    """Source selection is unchanged; only the calendar projection is unsafe."""
+    schedule = _schedule(initial_anchor=_anchor("2026-03-01", None))
+    projection = _project(schedule, _event(EVENT_1, "2026-10-10"))
+    assert projection.anchor == _source(EffectiveSource.EVENT_GROUP, "2026-10-10", None)
+    assert projection.calendar == CalendarCondition(None, DueState.UNKNOWN)
+
+
+def test_future_initial_anchor_is_not_replaced_by_an_older_event() -> None:
+    """The future baseline stays selected; no fallback to an older Event."""
+    schedule = _both(initial_anchor=_anchor("2036-09-26", "300"))
+    projection = _project(
+        schedule, _event(EVENT_1, "2026-05-01", "200"), current="1000"
+    )
+    assert projection.anchor == _source(
+        EffectiveSource.INITIAL_ANCHOR, "2036-09-26", "300"
+    )
+    assert projection.calendar == CalendarCondition(None, DueState.UNKNOWN)
+    assert projection.runtime.due == Decimal(1300)
+    assert projection.runtime.state is DueState.OK
+    assert projection.combined_state is DueState.UNKNOWN
+
+
+@pytest.mark.parametrize(
+    ("current", "runtime_state", "combined"),
+    [
+        ("1200", DueState.OK, DueState.UNKNOWN),
+        ("1500", DueState.DUE, DueState.DUE),
+        ("1500.0", DueState.DUE, DueState.DUE),
+        ("1600", DueState.OVERDUE, DueState.OVERDUE),
+        (None, DueState.UNKNOWN, DueState.UNKNOWN),
+    ],
+)
+def test_future_calendar_anchor_with_runtime(
+    current: str | None, runtime_state: DueState, combined: DueState
+) -> None:
+    """The Runtime projection keeps its own rules; the frozen ranking applies."""
+    schedule = _both(runtime_interval_seconds="500")
+    projection = _project(
+        schedule, _event(EVENT_1, "2036-09-26", "1000"), current=current
+    )
+    assert projection.anchor == _source(
+        EffectiveSource.EVENT_GROUP, "2036-09-26", "1000"
+    )
+    assert projection.calendar == CalendarCondition(None, DueState.UNKNOWN)
+    assert projection.runtime.due == Decimal(1500)
+    assert projection.runtime.state is runtime_state
+    assert projection.combined_state is combined
+
+
+def test_future_calendar_anchor_runtime_still_subject_to_rule_a() -> None:
+    projection = _project(_both(), _event(EVENT_1, "2036-09-26", "1000"), current="999")
+    assert projection.anchor == _source(EffectiveSource.EVENT_GROUP, "2036-09-26", None)
+    assert projection.calendar.state is DueState.UNKNOWN
+    assert projection.runtime.state is DueState.UNKNOWN
+    assert projection.combined_state is DueState.UNKNOWN
+
+
+@pytest.mark.parametrize(
+    ("runtime_interval", "current", "combined"),
+    [
+        (None, None, DueState.UNKNOWN),
+        ("500", "1200", DueState.UNKNOWN),
+        ("500", "1500", DueState.DUE),
+        ("500", "1600", DueState.OVERDUE),
+    ],
+)
+def test_future_calendar_anchor_preparation_is_unknown(
+    runtime_interval: str | None, current: str | None, combined: DueState
+) -> None:
+    """Unknown calendar due: preparation is UNKNOWN, never INACTIVE."""
+    schedule = _prepared(runtime_interval_seconds=runtime_interval)
+    projection = _project(
+        schedule, _event(EVENT_1, "2036-09-26", "1000"), current=current
+    )
+    assert projection.calendar.due is None
+    assert projection.combined_state is combined
+    assert projection.preparation is PreparationState.UNKNOWN
+
+
+def test_future_calendar_anchor_recovers_when_today_reaches_it() -> None:
+    """The same persisted data projects normally once the anchor is not future."""
+    schedule = _prepared(calendar_interval={"value": 1, "unit": "years"})
+    events = (_event(EVENT_1, "2036-09-26"),)
+    before = _project(schedule, *events, today=date(2036, 9, 25))
+    after = _project(schedule, *events, today=date(2036, 9, 26))
+    assert before.calendar == CalendarCondition(None, DueState.UNKNOWN)
+    assert before.preparation is PreparationState.UNKNOWN
+    assert after.calendar == CalendarCondition(date(2037, 9, 26), DueState.OK)
+    assert after.preparation is PreparationState.INACTIVE
+
+
+def test_future_calendar_anchor_on_disabled_schedule() -> None:
+    """Disabled semantics are unchanged: no active projection at all."""
+    projection = _project(_schedule(enabled=False), _event(EVENT_1, "2036-09-26"))
+    assert projection.active is False
+    assert projection.calendar is None
+    assert projection.combined_state is None
+
+
+def test_future_persisted_dates_remain_load_valid() -> None:
+    """The erratum is projection-only; load validation never compares with today."""
+    schedules = {
+        SCHEDULE_1: _schedule(initial_anchor=_anchor("2036-09-26", None)),
+        SCHEDULE_2: _both(
+            schedule_uuid=SCHEDULE_2, initial_anchor=_anchor("9999-12-31", "10")
+        ),
+    }
+    events = _events(
+        _event(EVENT_1, "2099-01-01", "1"),
+        _event(EVENT_2, "9999-12-31", None, schedule_uuids=[SCHEDULE_2]),
+        _voided(EVENT_3, "2040-02-29"),
+    )
+    validate_maintenance_collections({ASSET_A: {}}, schedules, events)
+
+
 # Disabled Schedule
 
 

@@ -10,8 +10,9 @@ Records are expected to have passed the standalone validation in
 maintenance.py. Invalid persisted shapes or non-canonical values are
 programming errors and raise. Normal domain uncertainty - an unknown
 Runtime snapshot, contradictory Runtime history, several Events on the
-latest date, a date-less baseline whose order cannot be proven, or a date
-that cannot be represented - is returned as UNKNOWN, never raised.
+latest date, a date-less baseline whose order cannot be proven, a calendar
+anchor later than ``today``, or a date that cannot be represented - is
+returned as UNKNOWN, never raised.
 """
 
 from __future__ import annotations
@@ -282,8 +283,14 @@ def calendar_condition(
     interval_unit: str,
     today: date,
 ) -> CalendarCondition:
-    """Project the calendar condition from the effective calendar anchor."""
-    if anchor is None:
+    """Project the calendar condition from the effective calendar anchor.
+
+    An anchor later than ``today`` is not trusted: it can remain after the
+    Home Assistant clock was wrongly ahead and later corrected. The calendar
+    projection is then UNKNOWN with no due date, while the persisted source
+    itself stays selected and unchanged.
+    """
+    if anchor is None or anchor > today:
         return CalendarCondition(None, DueState.UNKNOWN)
     due = add_calendar_interval(anchor, interval_value, interval_unit)
     if due is None:

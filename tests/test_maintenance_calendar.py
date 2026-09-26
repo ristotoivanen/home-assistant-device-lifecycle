@@ -7,6 +7,7 @@ from datetime import date
 import pytest
 
 from custom_components.device_lifecycle.maintenance_projection import (
+    CalendarCondition,
     DueState,
     add_calendar_interval,
     calendar_condition,
@@ -121,6 +122,48 @@ def test_calendar_condition_unknown_anchor() -> None:
 
 def test_calendar_condition_overflow_is_unknown() -> None:
     """An unrepresentable due date is an UNKNOWN projection boundary."""
-    condition = calendar_condition(date(9999, 12, 1), 1, "months", date(2026, 9, 26))
+    condition = calendar_condition(date(9999, 12, 1), 1, "months", date(9999, 12, 15))
     assert condition.due is None
     assert condition.state is DueState.UNKNOWN
+
+
+# Future effective calendar anchor (projection erratum 2026-09-26)
+
+
+@pytest.mark.parametrize(
+    ("anchor", "value", "unit"),
+    [
+        (date(2026, 9, 27), 1, "days"),
+        (date(2026, 9, 27), 6, "months"),
+        # Clock was wrongly ahead and later corrected.
+        (date(2036, 9, 26), 1, "years"),
+        (date(9999, 12, 31), 1, "days"),
+    ],
+)
+def test_future_anchor_is_unknown_without_due(
+    anchor: date, value: int, unit: str
+) -> None:
+    """A future anchor never projects a trusted due date or an OK state."""
+    condition = calendar_condition(anchor, value, unit, date(2026, 9, 26))
+    assert condition == CalendarCondition(None, DueState.UNKNOWN)
+
+
+def test_anchor_today_is_projected_normally() -> None:
+    """An anchor equal to today is not in the future; the due date is later."""
+    condition = calendar_condition(date(2026, 9, 26), 1, "years", date(2026, 9, 26))
+    assert condition == CalendarCondition(date(2027, 9, 26), DueState.OK)
+
+
+def test_anchor_today_is_not_due_today() -> None:
+    """Intervals are positive, so an anchor today is never due today."""
+    condition = calendar_condition(date(2026, 9, 26), 1, "days", date(2026, 9, 26))
+    assert condition == CalendarCondition(date(2026, 9, 27), DueState.OK)
+
+
+def test_future_anchor_becomes_known_once_today_reaches_it() -> None:
+    """The calendar projection recovers when the anchor is no longer future."""
+    anchor = date(2036, 9, 26)
+    assert calendar_condition(anchor, 1, "years", date(2036, 9, 25)).due is None
+    assert calendar_condition(anchor, 1, "years", date(2036, 9, 26)) == (
+        CalendarCondition(date(2037, 9, 26), DueState.OK)
+    )

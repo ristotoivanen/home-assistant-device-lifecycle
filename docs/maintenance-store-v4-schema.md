@@ -6,6 +6,7 @@
 | Schema freeze approved | 2026-09-26 |
 | Implementation status | not implemented |
 | Store version number | not yet assigned (Store 4.x; the final minor is assigned after Maintenance and Asset Archive coordination) |
+| Projection erratum 2026-09-26 | Future effective calendar anchors project UNKNOWN; see [Future calendar anchor](#future-calendar-anchor). No persisted schema fields or load invariants changed. |
 
 This document is the canonical persisted schema for 0.8.x Maintenance. It is implementation-independent. It freezes the persisted record shapes, their canonical representations, the whole-Store load invariants, the mutation rules that protect them, and the derived projection semantics that the persisted data must support. A change to anything in this document is a schema revision and needs an explicit review; it is not an implementation detail.
 
@@ -167,7 +168,7 @@ The following are deliberately **not** whole-Store invariants:
 - Any comparison with the current canonical Runtime. Historical Runtime is never judged against the current Runtime at load.
 - Monotonic Runtime across historical Events. A contradiction makes the Runtime projection UNKNOWN instead.
 - The baseline lock. It is derived from Event references and enforced at mutation time.
-- `performed_date <= today` or `initial_anchor.date <= today`.
+- `performed_date <= today` or `initial_anchor.date <= today`. A future effective calendar anchor makes the calendar projection UNKNOWN instead.
 - Permanent non-reuse of a hard-deleted Schedule UUID. There is no tombstone; new UUIDs are generated.
 - A maximum interval. A due date that cannot be represented is a projection error boundary (UNKNOWN).
 - An order for Events on the same `performed_date`, or an order for `schedule_uuids`.
@@ -281,6 +282,23 @@ missing or unsafe  -> UNKNOWN
 A Schedule with both intervals is due by whichever comes first. The combined state is the maximum of the condition states in the order `OK < UNKNOWN < DUE < OVERDUE`; for example, `DUE` with `UNKNOWN` is `DUE`, and `OVERDUE` with `UNKNOWN` is `OVERDUE`. A disabled Schedule has no active due projection. "Today" is Home Assistant's configured local civil date, `dt_util.now().date()`.
 
 A preparation reminder is active only from `lead_days` before a known calendar due date. It never changes the due state or the due calculation, and it must not suggest that time remains once the Schedule is `DUE` or `OVERDUE`.
+
+### Future calendar anchor
+
+Added by the projection erratum of 2026-09-26; the original freeze did not state this rule.
+
+If the effective calendar anchor is later than Home Assistant's current local civil date, the calendar projection is UNKNOWN: there is no calendar due date, and the calendar condition state is UNKNOWN. An anchor equal to today is not in the future and is projected normally.
+
+This is a defensive projection rule. A future anchor can exist without Store corruption: an Event is accepted while the Home Assistant clock is wrongly ahead, and the clock is later corrected. Therefore:
+
+- The Store stays valid and loadable. Load-time validation never compares persisted dates with the current date.
+- The Event or `initial_anchor` is not changed, voided, or re-dated, and effective-source selection is unchanged: the future date remains the selected source.
+- The calendar projection stays UNKNOWN until the anchor is no longer in the future or the history is corrected.
+- The Runtime projection is not affected by this rule and can still be known under its own rules, including Rules A, B, and B′.
+- The combined state still uses the order `OK < UNKNOWN < DUE < OVERDUE`.
+- A preparation reminder is UNKNOWN, because the calendar due date is unknown.
+
+The mutation rule that rejects a user-entered future date is separate and unchanged.
 
 ## Calendar arithmetic
 
