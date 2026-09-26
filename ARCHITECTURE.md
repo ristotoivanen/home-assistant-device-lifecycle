@@ -574,6 +574,85 @@ Growing histories do not belong in ConfigSubentries. ConfigSubentries remain sui
 
 These boundaries reserve 0.8.x for Maintenance, including reversible Asset archive and restore, 0.9.x for Portability, Data Safety & Hardening, including controlled permanent Asset deletion, and a later release for Documents. None is represented by placeholder 3.1 records. See [Planned: Asset archive and permanent deletion](#planned-asset-archive-and-permanent-deletion).
 
+## Planned: 0.8.x Maintenance usability constraints
+
+Status: **planning only**. Nothing in this section is implemented, and it defines no user interface, OptionsFlow structure, entity, dashboard, or Store field. It records design constraints that every 0.8.x Maintenance domain, storage, and workflow decision must satisfy.
+
+**Usability is a first-class 0.8.x design constraint.** Maintenance adds growing, date- and Runtime-related history, which is internally more complex than any earlier Asset domain. That complexity belongs in the data model and the implementation, not in the person's everyday workflow. The constraints below extend the existing management rules that user-facing copy never shows internal identifiers (see [Summaries and identifier safety](#summaries-and-identifier-safety)) and that a mutation target is never chosen implicitly.
+
+### Minimal normal path
+
+Common Maintenance workflows must stay very simple. Creating an ordinary maintenance schedule, marking maintenance as done, and recording an ordinary maintenance event must require as few steps and as few mandatory fields as the data model allows. A normal workflow asks only for information the person can reasonably be expected to know.
+
+This is a design principle, not a user-interface contract. The number of steps, the controls, the field names, and the flow structure are decided in the Maintenance UX v0.1 checkpoint below.
+
+### Internal concepts must not leak into normal workflows
+
+Internal architecture concepts may appear in this document and in the implementation, but a person must not need to understand them to create an ordinary schedule, mark maintenance done, or record an ordinary maintenance event. Examples of such internal concepts:
+
+- UUIDs and other internal identifiers
+- the Store structure
+- schedule anchors such as an `initial_anchor` or an `effective_anchor`
+- Runtime snapshot mechanics
+- derived-state and due-calculation mechanics
+
+### Progressive disclosure
+
+Rare or advanced inputs are shown only when the person needs them, not in the normal path. Examples:
+
+- a backdated maintenance event
+- a historical Runtime reading
+- one maintenance event that satisfies several schedules
+- correcting or voiding a maintenance event
+- other comparable exceptional cases
+
+`OPEN DESIGN — deferred to Maintenance UX v0.1`: how and where each advanced input is offered.
+
+### Safe defaults without guessing
+
+The system should derive or prefill information when it can do so safely, without guessing. Examples of what this can mean for Maintenance:
+
+- today's date as the default maintenance date
+- a snapshot of the current canonical Runtime total when maintenance is recorded as done now and that total is known
+- the schedule name as the default title of a maintenance event
+
+**Convenience must never override data correctness.** A default is only offered when it follows from known data. Device Lifecycle must not invent unknown historical data, such as a past maintenance date or the Runtime total at a past maintenance, to make a workflow easier. A known current value is never presented as a historical one.
+
+### UNKNOWN is a valid user outcome
+
+Unknown starting information is not a validation error. The person must be able to state, for example:
+
+- that the previous maintenance is unknown
+- that the Runtime total at a historical maintenance is unknown
+- that the maintenance baseline is unknown
+
+without being forced to guess a date or a Runtime value. UNKNOWN is then a deliberate and safe state, consistent with how Lifecycle `unknown`, Deployment `unknown`, and an uninitialized Runtime total (`null`, never zero) are already treated. How a schedule with an unknown baseline reports its due state is part of the due and calendar semantics.
+
+### Design review rule
+
+Every new 0.8.x domain and storage decision is also judged by one question:
+
+> Can the common user workflow remain simple without exposing the internal data model?
+
+If the answer is no, the design must be revised before internal complexity reaches the person.
+
+### Maintenance UX v0.1 checkpoint
+
+The concrete normal Maintenance user experience, **Maintenance UX v0.1**, is designed later, as an explicit design checkpoint: after the Maintenance due and calendar semantics are sufficiently settled, and before the Store 4.x design is finally frozen, so that the storage design can still change if the workflow requires it.
+
+### Maintenance preparation reminder
+
+A maintenance schedule can need an optional advance reminder that helps the person prepare for upcoming maintenance. For example, when a ventilation filter change is due in about a month, the person can be reminded to order new filters. This is a generic Maintenance use case, not a feature for one kind of device: other examples are buying consumables, obtaining a spare part, or preparing other material or tools the maintenance needs.
+
+Only these boundaries are fixed now:
+
+- a preparation reminder is separate from the schedule's actual due and overdue state
+- a reminder must not change a schedule's due calculation or any maintenance history
+- in ordinary use a reminder is optional and very simple
+- it is not a product catalogue, inventory, web shop, or automatic ordering system
+
+`OPEN DESIGN — deferred to Maintenance UX v0.1`: the reminder model, its lead time, notification delivery, any entities, and its storage. It is designed together with the rest of the normal Maintenance path and is not part of any current release.
+
 ## Planned: Asset archive and permanent deletion
 
 Status: **planning only**. Nothing in this section is implemented. Device Lifecycle 0.7.7 provides neither Asset archive nor Asset deletion, Store 3.1 contains no archive or deletion state, and ConfigEntry remains version 4. This section records the semantics and release boundary that later designs must follow. Where a detail is not yet decided, it is marked `OPEN DESIGN` with the release whose design owns it.
