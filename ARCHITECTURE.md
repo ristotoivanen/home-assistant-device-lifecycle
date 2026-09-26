@@ -578,7 +578,7 @@ These boundaries reserve 0.8.x for Maintenance, including reversible Asset archi
 
 Status: **planning only**. Nothing in this section is implemented, and it defines no user interface, OptionsFlow structure, entity, dashboard, or Store field. It records design constraints that every 0.8.x Maintenance domain, storage, and workflow decision must satisfy.
 
-The canonical Maintenance Store schema is [Maintenance Store 4.x frozen schema](docs/maintenance-store-v4-schema.md). Status: **FROZEN** (approved 2026-09-26), not implemented, Store version number not yet assigned. The implementation order and activation boundary are in [Maintenance implementation plan](docs/maintenance-implementation-plan.md).
+The canonical Maintenance Store schema is [Maintenance Store 4.x frozen schema](docs/maintenance-store-v4-schema.md). Status: **FROZEN** (approved 2026-09-26), not implemented. The Store target is Store 4.1, coordinated with Asset Archive in [Asset Archive and Store 4.1 frozen architecture](docs/asset-archive-store-v4.md). The implementation order and activation boundary are in [Maintenance implementation plan](docs/maintenance-implementation-plan.md).
 
 **Usability is a first-class 0.8.x design constraint.** Maintenance adds growing, date- and Runtime-related history, which is internally more complex than any earlier Asset domain. That complexity belongs in the data model and the implementation, not in the person's everyday workflow. The constraints below extend the existing management rules that user-facing copy never shows internal identifiers (see [Summaries and identifier safety](#summaries-and-identifier-safety)) and that a mutation target is never chosen implicitly.
 
@@ -682,7 +682,7 @@ Later extension, not implemented in 0.8.x: Runtime schedules may later derive an
 
 ## Planned: Asset archive and permanent deletion
 
-Status: **planning only**. Nothing in this section is implemented. Device Lifecycle 0.7.7 provides neither Asset archive nor Asset deletion, Store 3.1 contains no archive or deletion state, and ConfigEntry remains version 4. This section records the semantics and release boundary that later designs must follow. Where a detail is not yet decided, it is marked `OPEN DESIGN` with the release whose design owns it.
+Status: **planning only**. Nothing in this section is implemented. Device Lifecycle 0.7.7 provides neither Asset archive nor Asset deletion, Store 3.1 contains no archive or deletion state, and ConfigEntry remains version 4. This section records the semantics and release boundary that later designs must follow. The 0.8.x Archive design is frozen in [Asset Archive and Store 4.1 frozen architecture](docs/asset-archive-store-v4.md). Where a 0.9.x purge detail is not yet decided, it is marked `OPEN DESIGN` with the release whose design owns it.
 
 Two different operations are planned, in two different releases:
 
@@ -698,37 +698,36 @@ Neither operation changes the [identity invariants](#identity-invariants): an As
 
 ### Archive Asset (0.8.x)
 
-Archive is a normal user operation. It removes an Asset from active use without destroying its identity or history. Maintenance history, planned for 0.8.x, is growing Asset-owned history, so 0.8.x needs a way to retire Assets that keeps that history intact rather than a way to destroy it.
+Archive is a normal user operation. It removes an Asset from active/current management without destroying its identity or history. Maintenance history, planned for 0.8.x, is growing Asset-owned history, so 0.8.x needs a way to retire Assets that keeps that history intact rather than a way to destroy it.
+
+The Archive design is **FROZEN** (2026-09-26). The canonical contract, including the complete Store 4.1 shape, is [Asset Archive and Store 4.1 frozen architecture](docs/asset-archive-store-v4.md). It is not implemented. The `OPEN DESIGN` questions this section listed before the freeze are superseded by that document; this section keeps only the locked principles and a summary.
 
 Locked semantics:
 
 1. Archive preserves `asset_uuid`.
 2. Archive preserves the `DLxxxx` Asset ID and never releases it for reuse. `next_asset_number` is unchanged.
-3. Archive preserves all historical data: Purchase membership and relationship provenance, the Lifecycle event chain, every Replacement record including voided records, the canonical Runtime total, and future Maintenance history.
+3. Archive preserves all historical data: Purchase membership and relationship provenance, the Lifecycle event chain, every Replacement record including voided records, the canonical Runtime total, and Maintenance history.
 4. Archive is reversible. Restoring an archived Asset returns the same Asset: it keeps the same `asset_uuid` and `DLxxxx`, allocates nothing, and does not behave as a newly created Asset.
-5. Entity `unique_id` values must remain stable across archive and restore. Archive and restore must not silently break Recorder continuity: any case in which the chosen design cannot keep an entity's history continuous must be explicit and documented. This rule does not claim that Recorder continuity can always be guaranteed; the guarantees themselves are open design below.
-6. Archive is not a Lifecycle status. Lifecycle `disposed`, `retired`, and `lost` describe the physical item; archive describes whether Device Lifecycle keeps the record in active use. Archiving is neither `disposed` nor a replacement for it, and recording a Lifecycle status never archives an Asset.
+5. Entity `unique_id` values remain stable across archive and restore, and entities stay registered. Archive writes no `disabled_by`.
+6. Archive is not a Lifecycle status. Lifecycle `disposed`, `retired`, and `lost` describe the physical item; archive describes whether Device Lifecycle keeps the record in active/current management. Archiving is neither `disposed` nor a replacement for it, and recording a Lifecycle status never archives an Asset.
 7. Archive is not permanent deletion. An archived Asset remains a complete canonical Asset.
 8. Archive and restore are explicit user mutations. Device Lifecycle never archives or restores an Asset automatically, for example because its Home Assistant device is missing, its Lifecycle status changed, or it has been replaced.
-9. Archive state is canonical Store data and therefore requires an explicit, versioned Store migration. The Store 3.1 schema does not represent it.
+9. Archive state is canonical Store data and requires an explicit, versioned Store migration. The Store 3.1 schema does not represent it; Store 4.1 does.
 
-Archive must not succeed in a state where it would leave the Asset or its relationships inconsistent. At minimum, an Asset with an active dependency must not be archivable until that dependency is resolved, for example:
+Frozen summary (the canonical document is authoritative):
 
-- a Deployment that still records the Asset as installed (`deployed`)
-- active Runtime tracking by a Runtime configuration
-- any other active relationship whose archiving would leave that relationship inconsistent
+- **Store 4.1.** `STORAGE_VERSION = 4`, `STORAGE_MINOR_VERSION = 1`, exactly seven top-level keys (the five Store 3.1 keys plus `maintenance_schedules` and `maintenance_events`). Archive adds no top-level collection. Every Asset has exactly 21 keys: the 20 Store 3.1 keys plus `archived_at`, which is `null` for an active Asset or a canonical UTC timestamp for an archived one. Purchase records keep their 12 keys, now as an exact key set. There is no Archive history, reason, tombstone, sequence, epoch, or transaction metadata.
+- **Load invariants.** `archived_at` is `null` or canonical UTC, and an archived Asset is never `deployed`. The second rule is also a load invariant: an archived and deployed Asset fails closed and is never repaired by inference.
+- **Preconditions.** Archive requires an existing Asset (already archived is a no-op), no `deployed` Deployment, no Runtime ConfigSubentry that resolves to the Asset under the same identity semantics as Runtime reconciliation, and no surviving Runtime writer holding undurable Runtime state. Archive and Runtime create/rebind serialize and revalidate, so an archived Asset never ends up with a resolving Runtime ConfigSubentry.
+- **Effect.** Archive changes only `archived_at`; Restore sets it back to `null`. Neither changes Lifecycle, Deployment, Home Assistant references, Runtime, Purchase, Replacement, or Maintenance data.
+- **Mutation boundary.** Archive blocks direct user/current-management mutations. It does not block correction or void of already-persisted historical facts: Maintenance Void and Correct Event and the existing Replacement void remain available. Lifecycle transitions are blocked. Source-authoritative reconciliation continues for the fields its source owns.
+- **Identity versus management.** Identity and reconciliation lookup uses all Assets, including archived ones, so an archived Asset keeps its primary Home Assistant Device and no duplicate Asset is created. Current-management candidates are only Assets with `archived_at == null`, re-checked at every final submit.
+- **Home Assistant.** Archive and Restore refresh entities and Repairs through an integration-local refresh, without a parent ConfigEntry reload. Maintenance entities of an archived Asset report no active projection, never a false `off`. Stale-reference Repairs are suppressed while archived. An archived Asset with a resolving Runtime ConfigSubentry at setup is quarantined with its own Repair instead of failing the entry. The Runtime entity's registry identity becomes Asset/parent-owned so it survives removal of the Runtime ConfigSubentry.
+- **Migration.** Store 3.1 migrates to Store 4.1 after a read-only exact-shape preflight of the Store 3.1 Asset and Purchase records. Every Asset receives `archived_at = null` and Maintenance starts empty.
 
-`OPEN DESIGN — deferred to 0.8.x design`:
+Until the implementation lands, the current behavior described elsewhere in this document is unchanged, including the Runtime entity's Runtime-subentry ownership in [0.7.7 Entity Registry placement ownership](#077-entity-registry-placement-ownership) and the reload after each saved change.
 
-- the exact dependency matrix, including how primary and related Home Assistant device relationships, Purchase configurations, active replacement relationships, and Maintenance schedules are treated
-- whether any Lifecycle status is required before archive, given that archive itself never changes Lifecycle
-- the Store representation of archive state, its migration, and any archive or restore history
-- how an archived Asset is exposed in Home Assistant: its Asset Device and its entities
-- the Entity Registry lifecycle during archive: whether an archived Asset's entities are removed, disabled, or retained
-- which `entity_id` preservation guarantees archive and restore give
-- which Recorder and history continuity guarantees archive and restore give. If archive removes an Entity Registry entry, whether restore gets the same `entity_id` back can depend on Home Assistant's retention of deleted entities, which is time-limited. This section does not assume that retention for any archive design
-- how archived Assets appear in Asset management, Quick Add targets, replacement targets, and Repairs
-- how the optional dashboard's existing "Archived" inventory group relates to archive state. Today that group is only a presentation of Lifecycle `retired`, `disposed`, and `lost` and has no connection to this planned operation
+The dashboard's existing "Archived" inventory group is only a presentation of Lifecycle `retired`, `disposed`, and `lost` and has no connection to Asset Archive. A future user interface uses distinct labels for the two concepts.
 
 ### Permanent deletion / purge (0.9.x)
 

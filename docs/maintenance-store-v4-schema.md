@@ -5,7 +5,8 @@
 | Status | **FROZEN** |
 | Schema freeze approved | 2026-09-26 |
 | Implementation status | not implemented |
-| Store version number | not yet assigned (Store 4.x; the final minor is assigned after Maintenance and Asset Archive coordination) |
+| Store version number | Store 4.1 (`STORAGE_VERSION = 4`, `STORAGE_MINOR_VERSION = 1`), assigned 2026-09-26 by the coordinated [Asset Archive and Store 4.1 frozen architecture](asset-archive-store-v4.md) |
+| Archive coordination 2026-09-26 | Archived-Asset projection and mutation rules added; see [Archived Assets](#archived-assets). No persisted Maintenance record shape or Maintenance load invariant changed. |
 | Projection erratum 2026-09-26 | Future effective calendar anchors project UNKNOWN; see [Future calendar anchor](#future-calendar-anchor). No persisted schema fields or load invariants changed. |
 
 This document is the canonical persisted schema for 0.8.x Maintenance. It is implementation-independent. It freezes the persisted record shapes, their canonical representations, the whole-Store load invariants, the mutation rules that protect them, and the derived projection semantics that the persisted data must support. A change to anything in this document is a schema revision and needs an explicit review; it is not an implementation detail.
@@ -23,12 +24,12 @@ The design constraints this schema satisfies are in [ARCHITECTURE.md: Planned: 0
 
 ## Store payload
 
-Store 4.x keeps every Store 3.1 top-level collection unchanged and adds two required top-level mappings:
+Store 4.1 keeps every Store 3.1 top-level collection and adds two required top-level mappings. The complete Store 4.1 shape, including the one Archive field that every Asset gains (`archived_at`), is canonical in [Asset Archive and Store 4.1 frozen architecture](asset-archive-store-v4.md); Maintenance adds no Asset field.
 
 ```text
 next_asset_number        (unchanged)
-purchases                (unchanged)
-assets                   (unchanged; no new Asset fields)
+purchases                (unchanged shape; exact key set in Store 4.1)
+assets                   (Store 3.1 fields plus archived_at; no Maintenance fields)
 lifecycle_events         (unchanged)
 replacement_records      (unchanged)
 maintenance_schedules    schedule_uuid -> MaintenanceSchedule
@@ -279,7 +280,7 @@ past threshold     -> OVERDUE
 missing or unsafe  -> UNKNOWN
 ```
 
-A Schedule with both intervals is due by whichever comes first. The combined state is the maximum of the condition states in the order `OK < UNKNOWN < DUE < OVERDUE`; for example, `DUE` with `UNKNOWN` is `DUE`, and `OVERDUE` with `UNKNOWN` is `OVERDUE`. A disabled Schedule has no active due projection. "Today" is Home Assistant's configured local civil date, `dt_util.now().date()`.
+A Schedule with both intervals is due by whichever comes first. The combined state is the maximum of the condition states in the order `OK < UNKNOWN < DUE < OVERDUE`; for example, `DUE` with `UNKNOWN` is `DUE`, and `OVERDUE` with `UNKNOWN` is `OVERDUE`. A disabled Schedule has no active due projection. A Schedule of an archived Asset has no active due projection either; see [Archived Assets](#archived-assets). "Today" is Home Assistant's configured local civil date, `dt_util.now().date()`.
 
 A preparation reminder is active only from `lead_days` before a known calendar due date. It never changes the due state or the due calculation, and it must not suggest that time remains once the Schedule is `DUE` or `OVERDUE`.
 
@@ -324,16 +325,41 @@ Due dates use civil-date arithmetic, never timestamps or 86 400-second days.
 
 There are no lock flags, projection caches, sequence numbers, Runtime epochs, Schedule tombstones, correction patches, or idempotency or transaction metadata in the Store.
 
+## Archived Assets
+
+Added by the Archive coordination of 2026-09-26. The persisted Maintenance record shapes and load invariants are unchanged, and no `archived` field is added to Maintenance records. Archive state is only `asset.archived_at`, defined in [Asset Archive and Store 4.1 frozen architecture](asset-archive-store-v4.md).
+
+### Projection
+
+- A Schedule that belongs to an archived Asset has no active due projection and no active preparation projection.
+- This is separate from `enabled == false`. The persisted `enabled` value is unchanged by Archive and Restore.
+- Future Home Assistant active-projection entities represent it as unavailable or no active projection, never as `off`. The entities stay registered.
+- Restore resumes the normal projection from the unchanged persisted Schedule and Event history. A Schedule may immediately project `OVERDUE`.
+
+### Mutation boundary
+
+Replay is checked first, before the archive guard, as in mutation rule 3. After replay, for an archived Asset:
+
+| Allowed | Blocked |
+|---|---|
+| Void Event | Create Schedule |
+| Correct Event (it may atomically create the corrected Event under the correction model above) | Edit Schedule current configuration |
+| | Set baseline |
+| | Add or remove interval |
+| | Enable or disable |
+| | Hard-delete Schedule |
+| | Record Event (ordinary new Event) |
+
+Void and Correct Event are corrections of already-persisted historical facts, which Archive does not block; every other operation is current management. A future requirement that changes this table needs an explicit review.
+
 ## Migration and version boundary
 
-- Store 3.1 migrates to Store 4.x by adding empty `maintenance_schedules` and `maintenance_events` mappings. All Store 3.1 data is preserved unchanged.
+- Store 3.1 migrates to Store 4.1. The Maintenance part of the migration only adds empty `maintenance_schedules` and `maintenance_events` mappings (`add_maintenance_collections`). All Store 3.1 data is preserved; the Archive part adds `archived_at = null` to every Asset. The complete pipeline, including the Store 3.1 Asset and Purchase source preflight, is in [Asset Archive and Store 4.1 frozen architecture: Migration](asset-archive-store-v4.md#migration).
 - Migration never creates Schedules, Events, or baselines, and never infers performed maintenance from Purchase, installation, Runtime, or Lifecycle data. Maintenance for existing Assets starts empty.
 - The migration result is validated as a complete Store before it is saved or published, and the saved result is read back and verified.
-- The existing fail-closed version handling is kept: a wrong minor within the same major is rejected with the project's own error, never with `NotImplementedError`, which Home Assistant would treat as a signal to load the data unchanged. Downgrading from Store 4.x to a 0.7.x release is unsupported; restore a backup instead.
-- The Maintenance schema shape is frozen independently of Asset Archive. Archive preserves the Asset record, identity, and history, so every Maintenance reference to an existing Asset remains valid. The final Store 4.x version number is assigned only after Maintenance and Archive are coordinated. Permanent deletion is 0.9.x and out of scope here.
+- The existing fail-closed version handling is kept: a wrong minor within the same major is rejected with the project's own error, never with `NotImplementedError`, which Home Assistant would treat as a signal to load the data unchanged. Downgrading from Store 4.1 to a 0.7.x release is unsupported; restore a backup instead.
+- Archive preserves the Asset record, identity, and history, so every Maintenance reference to an existing Asset remains valid. Permanent deletion is 0.9.x and out of scope here.
 
-## Remaining open item
+## Open items
 
-| Item | Affects |
-|---|---|
-| Store 4.x version-number assignment, coordinated with Asset Archive | Version assignment only; not the persisted Maintenance schema |
+None for the persisted schema. The Store version-number assignment that was open at the Maintenance freeze was resolved on 2026-09-26: Store 4.1.
