@@ -117,6 +117,69 @@ class PurchaseData(TypedDict):
     asset_uuids: list[str]
 
 
+MaintenanceIntervalUnit = Literal["days", "months", "years"]
+
+
+class MaintenanceCalendarIntervalData(TypedDict):
+    """A Maintenance Schedule calendar interval with its semantic unit."""
+
+    value: int
+    unit: MaintenanceIntervalUnit
+
+
+class MaintenanceInitialAnchorData(TypedDict):
+    """The explicit calculation baseline that precedes maintenance history."""
+
+    date: str | None
+    runtime_seconds: str | None
+
+
+class MaintenancePreparationReminderData(TypedDict):
+    """A calendar-based preparation reminder for one Maintenance Schedule."""
+
+    lead_days: int
+    message: str | None
+
+
+class MaintenanceScheduleData(TypedDict):
+    """Current planning configuration for one Asset's maintenance.
+
+    Frozen in docs/maintenance-store-v4-schema.md. Every key is always
+    present; a nullable field is stored as None, never omitted. Not part of
+    the Store 3.1 payload.
+    """
+
+    schedule_uuid: str
+    asset_uuid: str
+    name: str
+    enabled: bool
+    calendar_interval: MaintenanceCalendarIntervalData | None
+    runtime_interval_seconds: str | None
+    initial_anchor: MaintenanceInitialAnchorData | None
+    preparation_reminder: MaintenancePreparationReminderData | None
+
+
+class MaintenanceEventData(TypedDict):
+    """One historical fact: maintenance performed on one Asset.
+
+    Frozen in docs/maintenance-store-v4-schema.md. Every key is always
+    present; a nullable field is stored as None, never omitted. Not part of
+    the Store 3.1 payload.
+    """
+
+    event_uuid: str
+    asset_uuid: str
+    schedule_uuids: list[str]
+    title: str
+    performed_date: str
+    runtime_seconds: str | None
+    recorded_at: str
+    notes: str | None
+    voided_at: str | None
+    void_reason: str | None
+    corrects_event_uuid: str | None
+
+
 class AssetStoreData(TypedDict):
     """Top-level normalized Device Lifecycle storage payload."""
 
