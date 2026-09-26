@@ -629,6 +629,7 @@ Device Lifecycle 0.7.7 does not provide a warranty editor, a searchable Asset li
 - [Optional dashboard and import instructions](dashboard/README.md)
 - [Persistent Test HA lab](docs/test-ha-lab.md)
 - [Maintenance Store 4.x frozen schema](docs/maintenance-store-v4-schema.md) (planned 0.8.x; not implemented)
+- [Maintenance implementation plan](docs/maintenance-implementation-plan.md)
 - [Release history](https://github.com/ristotoivanen/home-assistant-device-lifecycle/releases)
 - [Issue tracker](https://github.com/ristotoivanen/home-assistant-device-lifecycle/issues)
 

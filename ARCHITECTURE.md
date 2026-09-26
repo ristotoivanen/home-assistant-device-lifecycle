@@ -578,7 +578,7 @@ These boundaries reserve 0.8.x for Maintenance, including reversible Asset archi
 
 Status: **planning only**. Nothing in this section is implemented, and it defines no user interface, OptionsFlow structure, entity, dashboard, or Store field. It records design constraints that every 0.8.x Maintenance domain, storage, and workflow decision must satisfy.
 
-The canonical Maintenance Store schema is [Maintenance Store 4.x frozen schema](docs/maintenance-store-v4-schema.md). Status: **FROZEN** (approved 2026-09-26), not implemented, Store version number not yet assigned.
+The canonical Maintenance Store schema is [Maintenance Store 4.x frozen schema](docs/maintenance-store-v4-schema.md). Status: **FROZEN** (approved 2026-09-26), not implemented, Store version number not yet assigned. The implementation order and activation boundary are in [Maintenance implementation plan](docs/maintenance-implementation-plan.md).
 
 **Usability is a first-class 0.8.x design constraint.** Maintenance adds growing, date- and Runtime-related history, which is internally more complex than any earlier Asset domain. That complexity belongs in the data model and the implementation, not in the person's everyday workflow. The constraints below extend the existing management rules that user-facing copy never shows internal identifiers (see [Summaries and identifier safety](#summaries-and-identifier-safety)) and that a mutation target is never chosen implicitly.
 
