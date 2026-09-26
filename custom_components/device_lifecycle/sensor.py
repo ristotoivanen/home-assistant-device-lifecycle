@@ -1109,6 +1109,7 @@ class DeviceRuntimeHoursSensor(SensorEntity):
         self._unsub_checkpoint = self._manager.register_runtime_checkpoint(
             self._asset_uuid,
             self.async_checkpoint_runtime,
+            prepare_unload=self.async_prepare_runtime_unload,
         )
 
         current_state = self.hass.states.get(self._source_entity_id)
@@ -1136,13 +1137,22 @@ class DeviceRuntimeHoursSensor(SensorEntity):
         self.async_write_ha_state()
 
     async def async_will_remove_from_hass(self) -> None:
-        """Attempt a final serialized checkpoint before listener cleanup."""
+        """Attempt a final serialized checkpoint before listener cleanup.
+
+        The config-entry unload path has already made Runtime durable and
+        quiesced this writer with ``async_prepare_runtime_unload``, so this is
+        normally a no-op checkpoint. A direct removal outside that gate stays
+        best effort; if Runtime is still pending afterwards it is reported to
+        the manager so no later checkpoint presents the old total as current.
+        """
         self._removing = True
         try:
             async with self._runtime_lock:
                 self._seal_active(self._monotonic(), continue_active=False)
                 await self._async_flush_pending()
                 self.async_write_ha_state()
+                if self._pending:
+                    self._manager.mark_runtime_unresolved(self._asset_uuid)
         finally:
             self._cleanup_runtime_listeners()
         await super().async_will_remove_from_hass()
@@ -1159,6 +1169,10 @@ class DeviceRuntimeHoursSensor(SensorEntity):
         new_state = event.data["new_state"]
 
         async with self._runtime_lock:
+            # Re-check inside the lock: a callback queued behind a successful
+            # unload preparation must not create Runtime after it.
+            if self._removing:
+                return
             currently_active = self._active_since is not None
             new_active = self._is_active(
                 new_state,
@@ -1184,6 +1198,8 @@ class DeviceRuntimeHoursSensor(SensorEntity):
         if self._removing:
             return
         async with self._runtime_lock:
+            if self._removing:
+                return
             if self._active_since is not None:
                 self._seal_active(self._monotonic(), continue_active=True)
             await self._async_flush_pending()
@@ -1199,6 +1215,14 @@ class DeviceRuntimeHoursSensor(SensorEntity):
         cannot be committed stays pending and the request raises.
         """
         async with self._runtime_lock:
+            if self._removing:
+                # A quiesced or removed writer no longer observes Runtime, so
+                # its committed total is not a current checkpoint.
+                raise AssetStoreError(
+                    f"Runtime writer for Asset {self._asset_uuid} is stopped for "
+                    "unload",
+                    code="runtime_writer_quiesced",
+                )
             if self._active_since is not None:
                 self._seal_active(self._monotonic(), continue_active=True)
             try:
@@ -1206,6 +1230,30 @@ class DeviceRuntimeHoursSensor(SensorEntity):
             finally:
                 self.async_write_ha_state()
             return self._committed_seconds
+
+    async def async_prepare_runtime_unload(self) -> None:
+        """Durably checkpoint and quiesce this writer before platform unload.
+
+        Under the Runtime lock the active interval is sealed through now and
+        every pending delta is committed strictly. Only after that succeeds is
+        tracking stopped and the writer quiesced, so no queued callback can
+        create Runtime afterwards. On failure every pending delta is kept, the
+        writer stays registered, tracking continues from the sealed boundary
+        without double counting, and the error is raised. A writer that is
+        already quiesced has nothing left to persist.
+        """
+        async with self._runtime_lock:
+            if self._removing:
+                return
+            if self._active_since is not None:
+                self._seal_active(self._monotonic(), continue_active=True)
+            try:
+                await self._async_flush_pending(strict=True)
+            finally:
+                self.async_write_ha_state()
+            self._active_since = None
+            self._removing = True
+            self.async_write_ha_state()
 
     async def _handle_shutdown(self, _event: Event) -> None:
         """Attempt a final checkpoint during normal Home Assistant shutdown."""

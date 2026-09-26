@@ -16,7 +16,7 @@ from .stale_references import (
     async_sync_stale_reference_issues,
     async_track_stale_reference_issues,
 )
-from .storage import AssetStoreManager
+from .storage import AssetStoreError, AssetStoreManager
 
 PLATFORMS = [Platform.SENSOR]
 _LOGGER = logging.getLogger(__name__)
@@ -57,8 +57,32 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload Device Lifecycle."""
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    """Unload Device Lifecycle only after Runtime is durably checkpointed.
+
+    Entity removal cannot veto an unload that has already started, so every
+    Runtime writer is checkpointed and quiesced first. If that fails, nothing
+    is unloaded and the pending Runtime stays with its live writer.
+    """
+    manager: AssetStoreManager = entry.runtime_data
+    try:
+        await manager.async_prepare_runtime_unload()
+    except AssetStoreError as err:
+        _LOGGER.error(
+            "Device Lifecycle was not unloaded because Runtime could not be "
+            "durably checkpointed; pending Runtime is kept and the unload can "
+            "be retried: %s",
+            err,
+        )
+        return False
+
+    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if not unloaded:
+        _LOGGER.error(
+            "Device Lifecycle platforms failed to unload after Runtime was "
+            "checkpointed; Runtime tracking is stopped until the entry is "
+            "reloaded"
+        )
+    return unloaded
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:

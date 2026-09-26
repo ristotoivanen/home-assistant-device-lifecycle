@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager
 from copy import deepcopy
 import logging
@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from uuid import UUID
 
 from homeassistant.components.sensor import SensorDeviceClass
-from homeassistant.config_entries import SOURCE_USER
+from homeassistant.config_entries import SOURCE_USER, ConfigEntryState
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
@@ -110,6 +110,25 @@ def _verified_store_readback(hass_storage: dict) -> Iterator[None]:
         side_effect=lambda _path: deepcopy(hass_storage[STORAGE_KEY]),
     ):
         yield
+
+
+@pytest.fixture(autouse=True)
+async def _readback_bridge_through_teardown(
+    hass: HomeAssistant, hass_storage: dict
+) -> AsyncIterator[None]:
+    """Unload loaded entries at teardown with the same readback bridge as setup.
+
+    The hass fixture unloads every config entry at teardown, which a real Home
+    Assistant shutdown does not. Unload first makes Runtime durable, and that
+    verification reads the Store back, so it runs here while the bridge that
+    the setup used is still active.
+    """
+    yield
+    with _verified_store_readback(hass_storage):
+        for entry in hass.config_entries.async_entries(DOMAIN):
+            if entry.state is ConfigEntryState.LOADED:
+                assert await hass.config_entries.async_unload(entry.entry_id)
+        await hass.async_block_till_done()
 
 
 async def _setup_loaded_entry(
@@ -1261,11 +1280,16 @@ async def test_runtime_reconfigure_title_only_change_still_causes_one_reload(
     device_registry.async_update_device(device_id, name_by_user="Renamed machine")
     original_schedule_reload = hass.config_entries.async_schedule_reload
 
-    with patch.object(
-        hass.config_entries,
-        "async_schedule_reload",
-        wraps=original_schedule_reload,
-    ) as schedule_reload:
+    # The reload unloads first, which makes Runtime durable and verifies the
+    # Store readback, so it needs the same readback bridge as the setup.
+    with (
+        _verified_store_readback(hass_storage),
+        patch.object(
+            hass.config_entries,
+            "async_schedule_reload",
+            wraps=original_schedule_reload,
+        ) as schedule_reload,
+    ):
         _source_form, result = await _reconfigure_runtime_source(
             hass,
             entry,
@@ -1279,6 +1303,7 @@ async def test_runtime_reconfigure_title_only_change_still_causes_one_reload(
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "reconfigure_successful"
     assert entry.subentries[subentry_id].title != title_before
+    assert entry.state is ConfigEntryState.LOADED
     assert dict(entry.subentries[subentry_id].data)[CONF_SOURCE_ENTITY_ID] == (
         SOURCE_ENTITY_ID
     )

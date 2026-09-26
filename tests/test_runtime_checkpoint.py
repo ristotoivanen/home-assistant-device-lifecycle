@@ -63,6 +63,17 @@ async def _add(hass: HomeAssistant, sensor: DeviceRuntimeHoursSensor) -> None:
         await sensor.async_added_to_hass()
 
 
+def _writers(manager: AssetStoreManager) -> dict[str, DeviceRuntimeHoursSensor]:
+    """Map each registered Asset to the entity whose methods are registered."""
+    writers = {}
+    for asset_uuid, writer in manager._runtime_writers.items():
+        entity = writer.checkpoint.__self__
+        assert writer.checkpoint == entity.async_checkpoint_runtime
+        assert writer.prepare_unload == entity.async_prepare_runtime_unload
+        writers[asset_uuid] = entity
+    return writers
+
+
 def _record_commits(manager: AssetStoreManager) -> list[tuple[Decimal, Decimal]]:
     """Record every delta commit in order while keeping the real pipeline."""
     commits: list[tuple[Decimal, Decimal]] = []
@@ -86,13 +97,13 @@ async def test_entity_lifecycle_registers_and_unregisters_checkpoint(
 ) -> None:
     manager = _runtime_manager(hass, asset_store_data)
     sensor = _sensor(hass, manager, _Clock())
-    assert manager._runtime_checkpoints == {}
+    assert manager._runtime_writers == {}
 
     await _add(hass, sensor)
-    assert manager._runtime_checkpoints == {ASSET_UUID: sensor.async_checkpoint_runtime}
+    assert _writers(manager) == {ASSET_UUID: sensor}
 
     await sensor.async_will_remove_from_hass()
-    assert manager._runtime_checkpoints == {}
+    assert manager._runtime_writers == {}
     assert sensor._unsub_checkpoint is None
 
 
@@ -115,7 +126,7 @@ async def test_duplicate_writer_registration_fails_closed(
     assert info.value.code == "runtime_checkpoint_writer_exists"
     track_state.assert_not_called()
     track_interval.assert_not_called()
-    assert manager._runtime_checkpoints == {ASSET_UUID: first.async_checkpoint_runtime}
+    assert _writers(manager) == {ASSET_UUID: first}
 
 
 async def test_stale_unregister_never_removes_a_newer_writer(
@@ -124,14 +135,18 @@ async def test_stale_unregister_never_removes_a_newer_writer(
     manager = _runtime_manager(hass, asset_store_data)
     first = AsyncMock()
     second = AsyncMock()
-    unregister_first = manager.register_runtime_checkpoint(ASSET_UUID, first)
+    unregister_first = manager.register_runtime_checkpoint(
+        ASSET_UUID, first, prepare_unload=first
+    )
     unregister_first()
-    unregister_second = manager.register_runtime_checkpoint(ASSET_UUID, second)
+    unregister_second = manager.register_runtime_checkpoint(
+        ASSET_UUID, second, prepare_unload=second
+    )
     unregister_first()
-    assert manager._runtime_checkpoints == {ASSET_UUID: second}
+    assert manager._runtime_writers[ASSET_UUID].checkpoint is second
     unregister_second()
     unregister_second()
-    assert manager._runtime_checkpoints == {}
+    assert manager._runtime_writers == {}
 
 
 async def test_reload_leaves_no_stale_writer(
@@ -145,9 +160,9 @@ async def test_reload_leaves_no_stale_writer(
 
     new = _sensor(hass, manager, _Clock())
     await _add(hass, new)
-    assert manager._runtime_checkpoints == {ASSET_UUID: new.async_checkpoint_runtime}
+    assert _writers(manager) == {ASSET_UUID: new}
     # A fresh manager, as created by an entry reload, starts empty.
-    assert AssetStoreManager(hass)._runtime_checkpoints == {}
+    assert AssetStoreManager(hass)._runtime_writers == {}
 
 
 # No active writer
@@ -390,17 +405,28 @@ async def test_removal_racing_a_checkpoint_counts_once_and_leaves_no_writer(
     await _add(hass, sensor)
     sensor._active_since = 0.0
     clock.value = 7
+    original_save = manager._store.async_save
+
+    async def _yielding_save(data: AssetStoreData) -> None:
+        await asyncio.sleep(0)
+        await original_save(data)
+
+    manager._store.async_save = AsyncMock(side_effect=_yielding_save)
 
     results = await asyncio.gather(
         manager.async_checkpoint_runtime(ASSET_UUID),
         sensor.async_will_remove_from_hass(),
         manager.async_checkpoint_runtime(ASSET_UUID),
+        return_exceptions=True,
     )
 
     assert results[0] == Decimal(1007)
-    assert results[2] == Decimal(1007)
+    # A request queued behind the removal is refused, not answered with a
+    # total the removed writer no longer observes.
+    assert isinstance(results[2], AssetStoreError)
+    assert results[2].code == "runtime_writer_quiesced"
     assert manager.runtime_total_seconds(ASSET_UUID) == Decimal(1007)
-    assert manager._runtime_checkpoints == {}
+    assert manager._runtime_writers == {}
     assert sensor._active_since is None
     clock.value = 100
     sensor.async_checkpoint_runtime = AsyncMock()  # type: ignore[method-assign]
@@ -421,22 +447,25 @@ async def test_manager_checkpoint_never_holds_mutation_lock_around_callback(
     async def _checkpoint() -> None:
         observed.append(manager._mutation_lock.locked())
 
-    manager.register_runtime_checkpoint(ASSET_UUID, _checkpoint)
+    manager.register_runtime_checkpoint(
+        ASSET_UUID, _checkpoint, prepare_unload=_checkpoint
+    )
     await manager.async_checkpoint_runtime(ASSET_UUID)
-    assert observed == [False]
+    await manager.async_prepare_runtime_unload()
+    assert observed == [False, False]
 
     source = ast.parse(Path(storage_module.__file__).read_text(encoding="utf-8"))
-    method = next(
-        node
-        for node in ast.walk(source)
-        if isinstance(node, ast.AsyncFunctionDef)
-        and node.name == "async_checkpoint_runtime"
-    )
-    body = ast.Module(body=method.body, type_ignores=[])
-    attributes = {
-        node.attr for node in ast.walk(body) if isinstance(node, ast.Attribute)
-    }
-    assert "_mutation_lock" not in attributes
+    for name in ("async_checkpoint_runtime", "async_prepare_runtime_unload"):
+        method = next(
+            node
+            for node in ast.walk(source)
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == name
+        )
+        body = ast.Module(body=method.body, type_ignores=[])
+        attributes = {
+            node.attr for node in ast.walk(body) if isinstance(node, ast.Attribute)
+        }
+        assert "_mutation_lock" not in attributes, name
 
 
 async def test_sensor_checkpoint_takes_runtime_lock_before_store_lock(

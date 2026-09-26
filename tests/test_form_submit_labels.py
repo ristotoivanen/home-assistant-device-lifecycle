@@ -53,6 +53,7 @@ from custom_components.device_lifecycle.models import AssetStoreData
 from .conftest import SOURCE_ENTITY_ID, capture_reloads
 from .test_exposure_options_reload import (
     _power_source_input,
+    _readback_bridge_through_teardown,  # noqa: F401 - autouse fixture
     _setup_runtime_entry,
     _verified_store_readback,
 )

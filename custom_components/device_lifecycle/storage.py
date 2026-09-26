@@ -103,8 +103,8 @@ FIELD_SOURCES = frozenset(
 )
 
 _MutationResultT = TypeVar("_MutationResultT")
-# The active Runtime writer's strict checkpoint for one Asset. It returns only
-# after every observable Runtime delta is durably committed, or raises.
+# A Runtime writer operation for one Asset. It returns only after every
+# observable Runtime delta is durably committed, or raises.
 RuntimeCheckpointCallback = Callable[[], Awaitable[Any]]
 _UNSET = object()
 _USER_EDITABLE_ASSET_FIELDS = (
@@ -1187,6 +1187,19 @@ def _validate_store_data(data: AssetStoreData) -> None:
     _validate_replacement_graph(data)
 
 
+@dataclass(frozen=True, slots=True)
+class RuntimeWriter:
+    """In-memory capabilities of the active Runtime writer for one Asset.
+
+    ``checkpoint`` strictly persists observable Runtime and keeps tracking.
+    ``prepare_unload`` strictly persists it, stops tracking, and quiesces the
+    writer so no further Runtime can be created before entity removal.
+    """
+
+    checkpoint: RuntimeCheckpointCallback
+    prepare_unload: RuntimeCheckpointCallback
+
+
 class AssetStoreManager:
     """Own the normalized persistent Asset/Purchase model."""
 
@@ -1197,8 +1210,11 @@ class AssetStoreManager:
         self._data: AssetStoreData = _empty_store_data()
         self._mutation_lock = asyncio.Lock()
         self._persistence_uncertain = False
-        # In-memory only: the active Runtime writer's checkpoint per Asset.
-        self._runtime_checkpoints: dict[str, RuntimeCheckpointCallback] = {}
+        # In-memory only, for this manager's lifetime: the active Runtime
+        # writer per Asset, and Assets whose writer was removed while Runtime
+        # was still pending, so an old total is never reported as current.
+        self._runtime_writers: dict[str, RuntimeWriter] = {}
+        self._runtime_unresolved: set[str] = set()
 
     async def async_setup(self) -> None:
         """Load and validate persistent Asset Core data."""
@@ -1377,26 +1393,38 @@ class AssetStoreManager:
         self,
         asset_uuid: str,
         checkpoint: RuntimeCheckpointCallback,
+        *,
+        prepare_unload: RuntimeCheckpointCallback,
     ) -> Callable[[], None]:
-        """Register the active Runtime writer's strict checkpoint for one Asset.
+        """Register the active Runtime writer of one Asset.
 
         The registration is in memory only and belongs to this manager, so a
         reload starts empty. Only one writer may be registered per Asset; a
         second registration fails closed. The returned callback removes only
         this registration, so a stale unregister never removes a newer writer.
         """
-        if asset_uuid in self._runtime_checkpoints:
+        if asset_uuid in self._runtime_writers:
             raise AssetStoreError(
                 f"Asset {asset_uuid} already has an active Runtime writer",
                 code="runtime_checkpoint_writer_exists",
             )
-        self._runtime_checkpoints[asset_uuid] = checkpoint
+        writer = RuntimeWriter(checkpoint, prepare_unload)
+        self._runtime_writers[asset_uuid] = writer
 
         def _unregister() -> None:
-            if self._runtime_checkpoints.get(asset_uuid) is checkpoint:
-                del self._runtime_checkpoints[asset_uuid]
+            if self._runtime_writers.get(asset_uuid) is writer:
+                del self._runtime_writers[asset_uuid]
 
         return _unregister
+
+    def mark_runtime_unresolved(self, asset_uuid: str) -> None:
+        """Record that a removed writer left Runtime that was never persisted.
+
+        Only a writer removed outside the unload gate, whose final checkpoint
+        failed, calls this. For the rest of this manager's lifetime a Runtime
+        checkpoint of the Asset fails instead of reporting the old total.
+        """
+        self._runtime_unresolved.add(asset_uuid)
 
     async def async_checkpoint_runtime(self, asset_uuid: str) -> Decimal | None:
         """Durably persist all observable Runtime now and return the canonical total.
@@ -1405,9 +1433,11 @@ class AssetStoreManager:
         without stopping tracking and commits every pending delta through
         ``async_commit_runtime_delta``. A delta that cannot be committed stays
         pending and the checkpoint raises; the old total is never reported as
-        a successful checkpoint. Without an active writer there is no
-        uncommitted Runtime to flush, so nothing is written and the canonical
-        total is returned as is: ``None`` while Runtime is uninitialized.
+        a successful checkpoint. A writer quiesced for unload also raises.
+        Without an active writer there is no uncommitted Runtime to flush, so
+        nothing is written and the canonical total is returned as is: ``None``
+        while Runtime is uninitialized. If a removed writer left unpersisted
+        Runtime behind, the checkpoint raises ``runtime_checkpoint_unresolved``.
 
         The returned value is always the canonical persisted total, the same
         value ``runtime_total_seconds`` returns, never a display estimate.
@@ -1420,10 +1450,42 @@ class AssetStoreManager:
         awaits the checkpoint first and starts the mutation afterwards.
         """
         self.runtime_total_seconds(asset_uuid)
-        checkpoint = self._runtime_checkpoints.get(asset_uuid)
-        if checkpoint is not None:
-            await checkpoint()
+        if asset_uuid in self._runtime_unresolved:
+            raise AssetStoreError(
+                f"Runtime for Asset {asset_uuid} was not persisted when its "
+                "writer was removed; reload Device Lifecycle",
+                code="runtime_checkpoint_unresolved",
+            )
+        writer = self._runtime_writers.get(asset_uuid)
+        if writer is not None:
+            await writer.checkpoint()
         return self.runtime_total_seconds(asset_uuid)
+
+    async def async_prepare_runtime_unload(self) -> None:
+        """Durably checkpoint and quiesce every active Runtime writer.
+
+        Called before platforms are unloaded. Writers are prepared in Asset
+        UUID order and the first failure aborts with the Asset named, so the
+        caller must not start the unload. A writer that already prepared stays
+        quiesced: its tracking cannot be resumed losslessly, because source
+        changes after the quiesce were not observed. Preparing a quiesced
+        writer again succeeds, so a retried unload continues where it failed.
+
+        Same lock ordering as ``async_checkpoint_runtime``: ``_mutation_lock``
+        is never held around a writer.
+        """
+        for asset_uuid in sorted(self._runtime_writers):
+            writer = self._runtime_writers.get(asset_uuid)
+            if writer is None:
+                continue
+            try:
+                await writer.prepare_unload()
+            except AssetStoreError as err:
+                raise AssetStoreError(
+                    f"Runtime for Asset {asset_uuid} could not be durably "
+                    "checkpointed before unload",
+                    code="runtime_unload_checkpoint_failed",
+                ) from err
 
     def runtime_total_seconds(self, asset_uuid: str) -> Decimal | None:
         """Return one Asset's detached canonical Runtime total."""
