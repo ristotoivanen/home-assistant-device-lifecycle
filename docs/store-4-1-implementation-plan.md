@@ -310,8 +310,19 @@ Each work package is one commit. Every commit keeps the full test suite green on
     - `AssetStoreManager.async_reserve_runtime_binding(entry, asset_uuid) -> Callable[[], None]`
     - `AssetStoreManager.archive_blockers(entry, asset_uuid) -> tuple[str, ...]`, a read-only preview for the user interface that is never authoritative
     - Runtime binding reservations are kept per ConfigEntry in `hass.data` under a `HassKey` (in memory only), so they survive a manager replacement by reload.
+    - `RuntimeWriter` gains three capabilities next to `checkpoint` and `prepare_unload`: `durability`, a synchronous probe returning `RuntimeWriterDurability(observing: bool, pending: bool, committed_seconds: Decimal)`; `finalize`, a strict flush of already-pending deltas that never seals new time; and `retire`, described below. `register_runtime_checkpoint` takes them as keyword arguments and rejects registration for an archived Asset.
+    - `AssetStoreManager._runtime_archive_eligibility(data, asset_uuid) -> RuntimeArchiveEligibility`, a manager-private synchronous helper (see [Runtime Archive eligibility](#runtime-archive-eligibility)).
+    - `AssetStoreManager.async_finalize_runtime(asset_uuid)`: calls the writer's `finalize`; never holds `_mutation_lock` around it; raises and keeps every pending delta on failure.
+    - `AssetStoreManager.async_retire_orphaned_runtime_writers(entry)`: for every registered writer whose Asset no longer has a resolving Runtime subentry (`runtime_subentries_resolving_to`), calls the writer's `retire`. Failures are logged and leave the writer quiesced with its pending deltas; they never block the reload that follows.
+  - `sensor.py` (`DeviceRuntimeHoursSensor`), all under the existing `_runtime_lock`:
+    - `retire`: seals observed time through now, stops observing (sets `_removing`, removes the source listener), then attempts a strict flush. Unlike `async_prepare_runtime_unload`, it quiesces even when the flush fails, because the tracking configuration is gone.
+    - `finalize`: strict flush of the pending deltas only.
+    - The periodic interval retries a quiesced writer's pending deltas best effort without sealing.
+    - `async_prepare_runtime_unload` on an already quiesced writer strictly flushes any remaining pending deltas instead of returning immediately, so a quiesced writer with pending Runtime still blocks the unload gate.
+    - No path adds time observed after the quiesce; pending deltas are never discarded.
+  - `__init__.py`: `_async_update_listener` awaits `async_retire_orphaned_runtime_writers(entry)` before it schedules the reload.
   - `config_flow.py`: `RuntimeSubentryFlow` resolves the selected device to its canonical Asset through `resolve_runtime_subentry_asset` over all Assets (early UX rejection of an archived owner in `async_step_user`). In `async_step_runtime_source` it takes the reservation immediately before returning `async_create_entry`, with no other `await` in between, and releases it in `async_remove()`. `async_step_reconfigure` rejects a subentry whose target is archived. The flow aborts with `entry_not_loaded` when the parent has no loaded manager.
-  - Translations for `runtime_asset_archived`, `archive_runtime_configured`, `archive_runtime_binding_in_progress`, `archive_runtime_writer_active`, `archive_runtime_unresolved`, and `archive_asset_deployed`.
+  - Translations for `runtime_asset_archived`, `archive_runtime_configured`, `archive_runtime_binding_in_progress`, `archive_runtime_writer_active`, `archive_runtime_undurable`, `archive_runtime_unresolved`, and `archive_asset_deployed`.
   - New `tests/test_archive_manager.py` and `tests/test_archive_runtime_race.py`.
 - **Archive sequence (all inside `_async_mutate_reporting`, holding `_mutation_lock`):**
 
@@ -322,11 +333,28 @@ Each work package is one commit. Every commit keeps the full test suite green on
     deployment_state != deployed
     runtime_subentries_resolving_to(entry.subentries, data["assets"], uuid) == ()
     no Runtime binding reservation for (entry_id, uuid)
-    uuid not in _runtime_writers and uuid not in _runtime_unresolved
+    _runtime_archive_eligibility(data, uuid) in {ABSENT, QUIESCED_DURABLE}
     apply_archive_request(..., observed_utc=utc_now_iso())
   -> 4.1 validation -> save -> direct readback -> publish
   ambiguous save -> resolve_ambiguous: persisted archived_at != null -> success
   ```
+
+<a id="runtime-archive-eligibility"></a>
+- **Runtime Archive eligibility.** The frozen condition is "no surviving Runtime writer for this Asset holds undurable Runtime state". A missing Runtime ConfigSubentry does not by itself prove that Runtime is durable, and a registered writer does not by itself prove that it is not. Archive therefore needs both: no resolving Runtime subentry and no binding reservation (configuration relationship absent), and a durability-safe writer state. `_runtime_archive_eligibility` derives that state synchronously from in-memory evidence only, in this order:
+
+  | State | Evidence | Archive |
+  |---|---|---|
+  | `UNRESOLVED` | `asset_uuid in _runtime_unresolved` (a removed writer left pending Runtime) | blocked: `archive_runtime_unresolved` |
+  | `ABSENT` | no registered writer | writer condition passes |
+  | `ACTIVE` | `durability().observing` | blocked: `archive_runtime_writer_active` |
+  | `UNDURABLE` | not observing, and `durability().pending`, or `committed_seconds` differs from the canonical total in the locked candidate | blocked: `archive_runtime_undurable` |
+  | `QUIESCED_DURABLE` | not observing, no pending delta, and `committed_seconds` equals the canonical total in the locked candidate | writer condition passes |
+
+  - A quiesced writer alone is never sufficient; `QUIESCED_DURABLE` requires the completed strict flush (empty pending) and the verified canonical total.
+  - `_runtime_unresolved` is never cleared to enable Archive. It ends only with the manager, as today.
+  - No Runtime metadata is persisted, and no elapsed time is inferred.
+  - A successful parent reload is not required: a writer that quiesced after its Runtime subentry was removed and later finalized durably stays registered and is `QUIESCED_DURABLE`.
+  - The deployment and Runtime-subentry preconditions still apply.
 
 - **Runtime create/rebind sequence:**
 
@@ -345,7 +373,15 @@ Each work package is one commit. Every commit keeps the full test suite green on
   - If the reservation comes first, it exists from before the Archive check until after the subentry has been added. Archive then sees either the reservation or the subentry, and fails.
   - A reload between reservation and subentry creation cannot hide the reservation, because it lives in `hass.data` per entry. A flow abandoned without finishing releases the reservation in `async_remove()`.
   - Setup quarantine (WP12) remains the backstop for backups and older configuration.
-- **Lock ordering:** `_runtime_lock` → `_mutation_lock` stays the only nested order. Archive never awaits a writer; it inspects the in-memory registrations synchronously. A Runtime subentry removal schedules a reload whose unload gate durably checkpoints the writer. Until that reload has happened, the writer is still registered and Archive fails with `archive_runtime_writer_active`, so the user retries after the reload.
+- **Lock ordering and race safety:** `_runtime_lock` → `_mutation_lock` stays the only nested order.
+  - Archive never acquires `_runtime_lock` and never awaits a writer. Its mutator reads `durability()` synchronously while holding `_mutation_lock`, in the same synchronous segment as the change, so the observation is authoritative for that commit.
+  - Making Runtime durable happens before Archive and outside `_mutation_lock`: the Archive flow (WP15) awaits `async_finalize_runtime(asset_uuid)` (`_runtime_lock` → `_mutation_lock` per delta, as in every Runtime commit) and only then calls `async_archive_asset`.
+  - The observation cannot become unsafe after it is taken:
+    - A quiesced writer can no longer create Runtime, because every Runtime-creating path already rechecks `_removing` under `_runtime_lock`. `finalize` and `prepare_unload` only reduce pending.
+    - A pending delta whose commit is waiting for `_mutation_lock` is still in `pending` and makes the state `UNDURABLE`.
+    - `committed_seconds` changes only after a commit has been published, which cannot interleave with the locked mutator.
+    - A new writer can only register at platform setup for a resolving Runtime subentry, which Archive has just proven absent; subentry creation goes through the binding reservation. After Archive publishes, `register_runtime_checkpoint` refuses an archived Asset and `async_commit_runtime_delta` refuses it too (WP10), so no Runtime can be written for it.
+- **Runtime subentry removal without a required reload:** removing the Runtime subentry runs `async_retire_orphaned_runtime_writers` from the update listener, so the writer stops observing at once, whether or not its strict flush succeeds, and the reload is scheduled. If the flush or the reload's unload gate fails, the entry stays loaded, and the writer stays registered, quiesced, and `UNDURABLE` with its pending deltas. Durability later becomes provable by `finalize`, either the periodic best-effort retry or the Archive flow's explicit call. The writer is then `QUIESCED_DURABLE`, and Archive succeeds without any parent reload.
 - **Restore:** `apply_archive_request` with `RestoreAssetRequest`, no Runtime check, no subentry recreation, no Home Assistant device or reference repair; ambiguous save resolved by `archived_at is None` in the persisted snapshot.
 - **Proof tests:** unit and integration for every precondition, NO_OP without a save, ambiguous success for both operations, and ambiguous non-matching state raising. Deterministic interleavings with a blocking `async_save`:
   - Archive in flight vs Runtime create: the reservation waits for the lock and fails.
@@ -356,7 +392,19 @@ Each work package is one commit. Every commit keeps the full test suite green on
   - Rebind by primary-device change: the device of an archived owner cannot be claimed.
   - Reconfigure of a quarantined subentry is rejected.
   - A legacy subentry resolving by device blocks Archive.
-  - A registered or unresolved writer blocks Archive.
+  - Active writer: a registered, observing writer → Archive rejected with `archive_runtime_writer_active`.
+  - Pending writer: a quiesced, non-observing writer with a pending delta → Archive rejected with `archive_runtime_undurable`.
+  - Unresolved: `_runtime_unresolved` contains the Asset → Archive rejected with `archive_runtime_unresolved`; `async_finalize_runtime` does not clear it.
+  - Durable quiesced writer: Runtime subentry absent, writer still registered, quiesced, strict flush completed, pending empty, `committed_seconds` equal to the canonical total → Archive succeeds, and no parent reload is called (asserted with `capture_reloads`).
+  - Failed checkpoint then recovery (fake monotonic clock):
+    - Canonical total 1000; the source is active from t=50.
+    - The Runtime subentry is removed and `retire` runs at t=60 with the commit failing: 10 seconds stay pending and the writer is quiesced. Archive is rejected (`archive_runtime_undurable`). The reload's unload gate also fails and the entry stays loaded.
+    - At t=100, with the source still on, `async_finalize_runtime` succeeds: the canonical total is 1010, not 1050, and pending is empty.
+    - The writer is still registered and quiesced, and Archive succeeds without a reload.
+  - Committed-total mismatch: a quiesced writer with empty pending whose `committed_seconds` differs from the canonical total → `archive_runtime_undurable`.
+  - Race: a writer's delta commit queued behind an Archive that holds `_mutation_lock` → Archive is rejected, because the delta is still pending. After an Archive has published, `register_runtime_checkpoint` and `async_commit_runtime_delta` for that Asset fail closed. No interleaving ends with `archived_at != null` and a pending or unresolved Runtime for the Asset.
+  - Lock order: `async_archive_asset` never acquires `_runtime_lock` (asserted by instrumenting the lock). `async_finalize_runtime` is never awaited while `_mutation_lock` is held.
+  - Unload gate: a quiesced writer with pending deltas still makes `async_prepare_runtime_unload` fail. When the flush succeeds, the unload proceeds.
   - After Restore, a new Runtime subentry for the same device resumes from the canonical total.
 
   The ordering assumption about `async_add_subentry` before `flow.async_remove()` is asserted by a test on both supported Home Assistant versions.
@@ -388,7 +436,7 @@ Each work package is one commit. Every commit keeps the full test suite green on
 - **Commit message:** `config_flow: add Archive and Restore to Asset management`
 - **Goal:** Home Assistant-native Archive and Restore in the existing OptionsFlow.
 - **Files and symbols:** `config_flow.py`:
-  - An Archive action in the Asset hub opens `confirm_archive_asset`. It previews the consequences from `archive_blockers`: it lists a `deployed` Deployment and Runtime tracking (configured, being set up, or still running) as blockers with the steps that resolve them. It never undoes Deployment or removes Runtime itself, and it records no history.
+  - An Archive action in the Asset hub opens `confirm_archive_asset`. It previews the consequences from `archive_blockers`: it lists a `deployed` Deployment and Runtime tracking (configured, being set up, still observing, not yet durable, or unresolved) as blockers with the steps that resolve them. Before submitting, it awaits `async_finalize_runtime` for a quiesced writer with pending Runtime (WP13), which never guesses or discards Runtime. It never undoes Deployment or removes Runtime itself, and it records no history.
   - The init menu gains an archived-Assets entry opening a selector over `archived_assets()` and a restricted archived-Asset view: facts, Restore (`confirm_restore_asset`), and the existing Replacement void. Maintenance history correction is added to this view in WP17.
   - Restore explains that the identity is unchanged, that stale device references may show in Repairs, that Runtime stays off until configured, and that Maintenance may be overdue at once.
   - Both finish with `_finish_asset_action(..., reload=False)` and rely on WP14.
@@ -642,7 +690,8 @@ U = unit, I = integration (pytest with Home Assistant), X = external Test HA. Ev
 | Runtime conflict quarantine | no writer, no writes, no rewrite, one Repair, repeated reloads and restart | I | 12 |
 | Repairs lifecycle | stale issues suppressed/rederived; conflict issue until resolved; entry removal deletes | I | 10, 12, 14 |
 | Archive vs Runtime race | create, rebind, reservation, reload window, abandoned flow | I | 13 |
-| HA reload/unload | unload gate unchanged; archived Asset setup; quarantine without reload loops | I | 7, 12, 13 |
+| Runtime Archive eligibility | active, pending, unresolved, durable quiesced, failed-then-finalized timeline, committed-total mismatch, no reload required | U, I | 13 |
+| HA reload/unload | unload gate unchanged by WP7 and still blocking a quiesced writer with pending Runtime (WP13); archived Asset setup; quarantine without reload loops | I | 7, 12, 13 |
 | Dispatcher refresh | entities and Repairs update without reload; failed listener keeps commit | I | 14 |
 | Entity identity continuity | no `disabled_by`, no registry writes across Archive/Restore; Maintenance entities stay registered | I | 14, 16 |
 | Archive/Restore UI | preview, blockers, restricted archived view, distinct labels | I | 15 |
@@ -658,6 +707,7 @@ No generic domain event bus, migration framework, archive engine, cross-store tr
 - one conflict-Repairs module (`runtime_conflicts.py`)
 - one optional resolver argument on the existing mutation pipeline
 - one in-memory reservation set
+- three capabilities on the existing `RuntimeWriter` (`durability`, `finalize`, `retire`) and one manager-private eligibility helper, with no persisted Runtime metadata and no general state machine
 - one publish-listener list on the existing manager
 
 ## 11. Remaining external dependencies and owner decisions
