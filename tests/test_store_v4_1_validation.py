@@ -812,12 +812,20 @@ def _production_trees() -> dict[str, ast.Module]:
 
 
 def test_only_storage_imports_the_store_4_1_helpers() -> None:
-    allowed = {"storage.py", "archive.py", "store_shape.py", "maintenance.py"}
+    # maintenance_mutations.py is the pure, unwired Maintenance library that
+    # reads the Archive state since WP5; its own tests prove it is unwired.
+    allowed = {
+        "storage.py",
+        "archive.py",
+        "store_shape.py",
+        "maintenance.py",
+        "maintenance_mutations.py",
+    }
     for name, tree in _production_trees().items():
         imported = _imported_modules(tree) & {"store_shape", "archive"}
         if name not in allowed:
             assert not imported, name
-    # Maintenance itself stays free of Archive until WP5.
+    # The Maintenance schema validator stays free of Archive state.
     assert not _imported_modules(_production_trees()["maintenance.py"]) & {
         "archive",
         "store_shape",

@@ -132,7 +132,11 @@ def _anchor_of(
     """Effective anchor after Runtime safety, through the full projection."""
     checked_schedule, checked_events = _checked(schedule, _events(*events))
     return project_schedule(
-        checked_schedule, checked_events, today=TODAY, current_runtime=current
+        checked_schedule,
+        checked_events,
+        today=TODAY,
+        current_runtime=current,
+        asset_archived=False,
     ).anchor
 
 
@@ -144,7 +148,11 @@ def _project(
 ) -> MaintenanceProjection:
     checked_schedule, checked_events = _checked(schedule, _events(*events))
     return project_schedule(
-        checked_schedule, checked_events, today=today, current_runtime=current
+        checked_schedule,
+        checked_events,
+        today=today,
+        current_runtime=current,
+        asset_archived=False,
     )
 
 
@@ -383,7 +391,9 @@ def test_same_day_group_ignores_recorded_at_uuid_and_order() -> None:
     )
     schedule = _both()
     results = {
-        project_schedule(schedule, events, today=TODAY, current_runtime="5000")
+        project_schedule(
+            schedule, events, today=TODAY, current_runtime="5000", asset_archived=False
+        )
         for events in (
             {EVENT_1: first, EVENT_2: second},
             {EVENT_2: second, EVENT_1: first},
@@ -1006,7 +1016,9 @@ def test_reminder_without_calendar_interval_is_a_programming_error() -> None:
     """Validation forbids it, so projection refuses rather than guessing."""
     schedule = _runtime_only(preparation_reminder={"lead_days": 1, "message": None})
     with pytest.raises(ValueError, match="requires a calendar interval"):
-        project_schedule(schedule, {}, today=TODAY, current_runtime=None)
+        project_schedule(
+            schedule, {}, today=TODAY, current_runtime=None, asset_archived=False
+        )
 
 
 # Purity, determinism, and invalid inputs
@@ -1025,12 +1037,16 @@ def test_inputs_are_not_mutated() -> None:
     )
     _checked(schedule, events)
     before = deepcopy((schedule, events))
-    first = project_schedule(schedule, events, today=TODAY, current_runtime="5000")
+    first = project_schedule(
+        schedule, events, today=TODAY, current_runtime="5000", asset_archived=False
+    )
     effective_anchor(schedule, events)
     relevant_events(events, SCHEDULE_1)
     latest_event_group(events.values())
     assert (schedule, events) == before
-    second = project_schedule(schedule, events, today=TODAY, current_runtime="5000")
+    second = project_schedule(
+        schedule, events, today=TODAY, current_runtime="5000", asset_archived=False
+    )
     assert first == second
 
 
@@ -1045,10 +1061,18 @@ def test_projection_depends_only_on_supplied_today_and_runtime() -> None:
     schedule = _both()
     events = _events(_event(EVENT_1, "2026-05-01", "1000"))
     early = project_schedule(
-        schedule, events, today=date(2026, 6, 1), current_runtime="1500"
+        schedule,
+        events,
+        today=date(2026, 6, 1),
+        current_runtime="1500",
+        asset_archived=False,
     )
     late = project_schedule(
-        schedule, events, today=date(2027, 6, 1), current_runtime="2500"
+        schedule,
+        events,
+        today=date(2027, 6, 1),
+        current_runtime="2500",
+        asset_archived=False,
     )
     assert early.combined_state is DueState.OK
     assert late.combined_state is DueState.OVERDUE
@@ -1057,14 +1081,18 @@ def test_projection_depends_only_on_supplied_today_and_runtime() -> None:
 @pytest.mark.parametrize("current", ["1e3", "-1", "01", " 1", "NaN"])
 def test_non_canonical_current_runtime_is_rejected(current: str) -> None:
     with pytest.raises(CanonicalValueError):
-        project_schedule(_both(), {}, today=TODAY, current_runtime=current)
+        project_schedule(
+            _both(), {}, today=TODAY, current_runtime=current, asset_archived=False
+        )
 
 
 def test_non_canonical_persisted_runtime_is_rejected() -> None:
     """Projection expects validated records and never repairs them."""
     events = _events(_event(EVENT_1, "2026-05-01", "1.0e3"))
     with pytest.raises(CanonicalValueError):
-        project_schedule(_both(), events, today=TODAY, current_runtime=None)
+        project_schedule(
+            _both(), events, today=TODAY, current_runtime=None, asset_archived=False
+        )
 
 
 # Production boundary

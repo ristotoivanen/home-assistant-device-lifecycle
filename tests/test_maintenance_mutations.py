@@ -86,10 +86,19 @@ MODULE_PATH = Path(maintenance_mutations.__file__)
 
 
 def _assets() -> dict[str, Any]:
-    """Asset records with a Runtime total that Maintenance must never write."""
+    """Active Store 4.1-style Asset records with a Runtime total that
+    Maintenance must never write."""
     return {
-        ASSET_A: {"asset_uuid": ASSET_A, "runtime": {"total_seconds": "5000"}},
-        ASSET_B: {"asset_uuid": ASSET_B, "runtime": {"total_seconds": "9000"}},
+        ASSET_A: {
+            "asset_uuid": ASSET_A,
+            "runtime": {"total_seconds": "5000"},
+            "archived_at": None,
+        },
+        ASSET_B: {
+            "asset_uuid": ASSET_B,
+            "runtime": {"total_seconds": "9000"},
+            "archived_at": None,
+        },
     }
 
 
@@ -1624,6 +1633,7 @@ def test_module_is_pure_and_time_is_injected() -> None:
         "decimal",
         "enum",
         "typing",
+        ".archive",
         ".canonical",
         ".maintenance",
         ".maintenance_projection",

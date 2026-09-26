@@ -12,7 +12,11 @@ function over a detached ``MaintenanceSnapshot``:
 - the observed time, Home Assistant's local civil date, and the current
   canonical Runtime come only from ``MaintenanceMutationContext``, never from
   the request and never from a clock read here;
-- Asset Runtime is read only through the context and is never written.
+- Asset Runtime is read only through the context and is never written;
+- an archived Asset blocks every current-management operation after replay
+  is resolved, while Void Event and Correct Event stay available, because
+  Archive never blocks correcting already-persisted history. The Archive
+  state is read only from the Asset's ``archived_at`` (``asset_is_archived``).
 
 Nothing in production calls this module before Store 4 activation. The Store
 manager later runs it inside its lock, deep copy, validate, save, readback,
@@ -28,6 +32,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Any, ClassVar
 
+from .archive import asset_is_archived
 from .canonical import (
     CanonicalValueError,
     decimal_from_input,
@@ -113,6 +118,10 @@ class MaintenanceNotFoundError(MaintenanceMutationError):
     """The target or a referenced record does not exist."""
 
     outcome = MutationOutcome.NOT_FOUND
+
+
+class MaintenanceArchivedAssetError(MaintenanceMutationError):
+    """The owning Asset is archived, so current management is blocked."""
 
 
 class MaintenanceConfirmationRequiredError(MaintenanceMutationError):
@@ -556,10 +565,25 @@ def _require_schedule(
     return schedule
 
 
-def _require_asset(snapshot: MaintenanceSnapshot, asset_uuid: str) -> None:
-    if asset_uuid not in snapshot.assets:
+def _require_asset(snapshot: MaintenanceSnapshot, asset_uuid: str) -> Mapping[str, Any]:
+    asset = snapshot.assets.get(asset_uuid)
+    if asset is None:
         raise MaintenanceNotFoundError(
             f"Asset {asset_uuid} does not exist", code="maintenance_asset_not_found"
+        )
+    return asset
+
+
+def _reject_archived(snapshot: MaintenanceSnapshot, asset_uuid: str) -> None:
+    """Refuse current management of an archived Asset.
+
+    A missing Asset keeps its NOT_FOUND error. An Asset without
+    ``archived_at`` raises ``KeyError``: it is a schema error, never "active".
+    """
+    if asset_is_archived(_require_asset(snapshot, asset_uuid)):
+        raise MaintenanceArchivedAssetError(
+            f"Asset {asset_uuid} is archived; restore it to manage its Maintenance",
+            code="maintenance_asset_archived",
         )
 
 
@@ -660,7 +684,7 @@ def create_schedule(
             code="maintenance_replay_conflict",
         )
 
-    _require_asset(snapshot, asset_uuid)
+    _reject_archived(snapshot, asset_uuid)
     _check_new_anchor(anchor, context)
     return _changed(snapshot, schedules=_with_schedule(snapshot, record))
 
@@ -674,6 +698,7 @@ def edit_schedule(
     existing = _require_schedule(
         snapshot, _uuid("schedule_uuid", request.schedule_uuid)
     )
+    _reject_archived(snapshot, existing["asset_uuid"])
     calendar_interval = _calendar_interval(request.calendar_interval)
     runtime_interval = _runtime(
         "runtime_interval_seconds", request.runtime_interval_seconds, positive=True
@@ -731,6 +756,7 @@ def set_initial_anchor(
     existing = _require_schedule(
         snapshot, _uuid("schedule_uuid", request.schedule_uuid)
     )
+    _reject_archived(snapshot, existing["asset_uuid"])
     anchor = _anchor(request.initial_anchor)
     _require_anchor_dimensions(
         anchor, existing["calendar_interval"], existing["runtime_interval_seconds"]
@@ -759,6 +785,7 @@ def add_interval(
     existing = _require_schedule(
         snapshot, _uuid("schedule_uuid", request.schedule_uuid)
     )
+    _reject_archived(snapshot, existing["asset_uuid"])
     anchor = existing["initial_anchor"]
     same_value: bool
     if _dimension(request.dimension) is IntervalDimension.CALENDAR:
@@ -831,6 +858,7 @@ def remove_interval(
     existing = _require_schedule(
         snapshot, _uuid("schedule_uuid", request.schedule_uuid)
     )
+    _reject_archived(snapshot, existing["asset_uuid"])
     confirmed = _bool("confirm_destroy_baseline", request.confirm_destroy_baseline)
     if _dimension(request.dimension) is IntervalDimension.CALENDAR:
         interval_key, other_key, component_key = (
@@ -886,6 +914,7 @@ def set_enabled(
     existing = _require_schedule(
         snapshot, _uuid("schedule_uuid", request.schedule_uuid)
     )
+    _reject_archived(snapshot, existing["asset_uuid"])
     enabled = _bool("enabled", request.enabled)
     if existing["enabled"] is enabled:
         return _unchanged(MutationOutcome.NO_OP, snapshot)
@@ -904,7 +933,8 @@ def delete_schedule(
     missing UUID is NOT_FOUND, never a silent success.
     """
     schedule_uuid = _uuid("schedule_uuid", request.schedule_uuid)
-    _require_schedule(snapshot, schedule_uuid)
+    existing = _require_schedule(snapshot, schedule_uuid)
+    _reject_archived(snapshot, existing["asset_uuid"])
     if not can_hard_delete_schedule(snapshot.events, schedule_uuid):
         raise MaintenanceRequestError(
             f"Maintenance Schedule {schedule_uuid} is referenced by an Event",
@@ -1082,7 +1112,7 @@ def record_event(
             return _unchanged(MutationOutcome.REPLAY, snapshot)
         raise _replay_conflict(event_uuid)
 
-    _require_asset(snapshot, asset_uuid)
+    _reject_archived(snapshot, asset_uuid)
     _require_links(snapshot, asset_uuid, fields["schedule_uuids"])
     _reject_future_date("performed_date", fields["performed_date"], context)
     _reject_runtime_above_current("runtime_seconds", fields["runtime_seconds"], context)

@@ -583,8 +583,10 @@ def test_archive_module_is_pure() -> None:
 def test_archive_is_reachable_only_through_inactive_store_4_1_code() -> None:
     """Since WP3 only storage.py imports archive, and only for 4.1 code.
 
-    ``asset_is_archived`` and ``ARCHIVED_AT`` are used by no production
-    module at all yet, and no production module spells ``"archived_at"``.
+    Since WP5 the pure, unwired Maintenance mutation library also imports
+    ``asset_is_archived``; its own tests prove nothing in production calls
+    it. ``ARCHIVED_AT`` is used by no production module, and no production
+    module spells ``"archived_at"``.
     """
     future_only = frozenset(
         {
@@ -599,9 +601,13 @@ def test_archive_is_reachable_only_through_inactive_store_4_1_code() -> None:
         if path.name in {"archive.py", "store_shape.py"}:
             continue
         source = path.read_text(encoding="utf-8")
+        assert f'"{ARCHIVED_AT}"' not in source, path.name
+        if path.name == "maintenance_mutations.py":
+            assert _imported_modules(path) & {"archive", "archive.asset_is_archived"}
+            assert "ARCHIVED_AT" not in source
+            continue
         for symbol in unused:
             assert symbol not in source, (path.name, symbol)
-        assert f'"{ARCHIVED_AT}"' not in source, path.name
         if path.name == "storage.py":
             continue
         for name in _imported_modules(path):

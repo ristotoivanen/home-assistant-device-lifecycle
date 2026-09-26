@@ -54,6 +54,16 @@ class PreparationState(StrEnum):
     UNKNOWN = "unknown"
 
 
+class InactiveReason(StrEnum):
+    """Why a Schedule has no active due projection. Never persisted.
+
+    Neither reason is a due state: an inactive Schedule is not UNKNOWN.
+    """
+
+    DISABLED = "disabled"
+    ASSET_ARCHIVED = "asset_archived"
+
+
 class EffectiveSource(StrEnum):
     """Which source the effective anchor was taken from."""
 
@@ -97,10 +107,12 @@ class RuntimeCondition:
 class MaintenanceProjection:
     """The live projection of one Schedule. Never persisted.
 
-    ``anchor`` is the effective anchor after Runtime safety. When ``active``
-    is False the Schedule is disabled: there is no active due projection, so
-    ``calendar``, ``runtime``, ``combined_state``, and ``preparation`` are
-    ``None``. When ``active`` is True, ``calendar`` or ``runtime`` is
+    ``anchor`` is the effective anchor after Runtime safety; it is derived
+    even when there is no active projection. When ``active`` is False,
+    ``inactive_reason`` says why (the Asset is archived, which takes
+    precedence, or the Schedule is disabled) and ``calendar``, ``runtime``,
+    ``combined_state``, and ``preparation`` are ``None``. When ``active`` is
+    True, ``inactive_reason`` is ``None``, ``calendar`` or ``runtime`` is
     ``None`` only when that interval is not configured, ``combined_state``
     is always set, and ``preparation`` is ``None`` only when no preparation
     reminder is configured.
@@ -112,6 +124,7 @@ class MaintenanceProjection:
     runtime: RuntimeCondition | None
     combined_state: DueState | None
     preparation: PreparationState | None
+    inactive_reason: InactiveReason | None
 
 
 def relevant_events(
@@ -355,15 +368,25 @@ def project_schedule(
     *,
     today: date,
     current_runtime: str | None,
+    asset_archived: bool,
 ) -> MaintenanceProjection:
     """Project one Schedule in the frozen order.
 
     1. Select the effective source and raw anchors.
     2. Apply Runtime safety (Rules A, B, B').
-    3. Derive due dates and thresholds, then condition states.
-    4. Combine the states.
-    5. Derive the preparation state.
+    3. An archived Asset, then a disabled Schedule, has no active projection.
+    4. Derive due dates and thresholds, then condition states.
+    5. Combine the states.
+    6. Derive the preparation state.
+
+    ``asset_archived`` is the owning Asset's Archive state and has no
+    default, so a caller can never project an archived Asset as active by
+    omission. Archive is not a pause: nothing is advanced or stored while
+    archived, and the same persisted history projects normally again as soon
+    as the Asset is active.
     """
+    if type(asset_archived) is not bool:
+        raise TypeError("asset_archived must be a bool")
     current = _runtime(current_runtime)
     anchor = apply_runtime_safety(
         effective_anchor(schedule, events),
@@ -371,8 +394,14 @@ def project_schedule(
         schedule["schedule_uuid"],
         current,
     )
+    if asset_archived:
+        return MaintenanceProjection(
+            False, anchor, None, None, None, None, InactiveReason.ASSET_ARCHIVED
+        )
     if not schedule["enabled"]:
-        return MaintenanceProjection(False, anchor, None, None, None, None)
+        return MaintenanceProjection(
+            False, anchor, None, None, None, None, InactiveReason.DISABLED
+        )
 
     calendar_config = schedule["calendar_interval"]
     calendar_result = (
@@ -419,4 +448,5 @@ def project_schedule(
         runtime_result,
         combined,
         preparation,
+        None,
     )
