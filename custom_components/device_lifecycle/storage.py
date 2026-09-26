@@ -24,6 +24,12 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import json as json_util
 from homeassistant.util import dt as dt_util
 
+from .archive import (
+    ArchiveCompositionError,
+    ArchiveValidationError,
+    add_asset_archive_state,
+    validate_asset_archive_state,
+)
 from .const import (
     CONF_ASSET_UUID,
     CONF_CURRENCY,
@@ -60,6 +66,13 @@ from .const import (
     WARRANTY_TWO_YEARS,
     WARRANTY_TYPES,
 )
+from .maintenance import (
+    MAINTENANCE_COLLECTION_KEYS,
+    MaintenanceCompositionError,
+    MaintenanceValidationError,
+    add_maintenance_collections,
+    validate_maintenance_collections,
+)
 from .models import (
     AssetData,
     AssetStoreData,
@@ -69,6 +82,14 @@ from .models import (
     PurchaseData,
     ReplacementReason,
     ReplacementRecordData,
+)
+from .store_shape import (
+    ASSET_KEYS_4_1,
+    PURCHASE_KEYS,
+    STORE_4_1_TOP_LEVEL_KEYS,
+    StoreShapeError,
+    preflight_store_3_1_record_shapes,
+    require_exact_record_keys,
 )
 
 STORAGE_VERSION = 3
@@ -957,7 +978,12 @@ def _validate_replacement_graph(data: AssetStoreData) -> None:
 
 
 def _validate_store_data(data: AssetStoreData) -> None:
-    """Validate invariants which must remain true across all future releases."""
+    """Validate a production Store 3.1 payload.
+
+    The exact Store 3.1 top-level shape, then the domain invariants shared
+    with Store 4.1. This is the only validator the production Store uses
+    until Store 4.1 is activated.
+    """
     if not isinstance(data, dict):
         raise AssetStoreError("Asset Core storage payload is not a mapping")
     keys = set(data)
@@ -970,6 +996,16 @@ def _validate_store_data(data: AssetStoreData) -> None:
             f"invalid top-level shape: missing={missing}, unexpected={unexpected}"
         )
 
+    _validate_store_payload(data)
+
+
+def _validate_store_payload(data: Mapping[str, Any]) -> None:
+    """Validate the domain invariants shared by Store 3.1 and Store 4.1.
+
+    The caller owns the version-specific top-level shape and record shapes.
+    This covers the Asset, Purchase, membership, Lifecycle, and Replacement
+    invariants exactly as Store 3.1 has always validated them.
+    """
     if not all(
         isinstance(data.get(key), dict)
         for key in (
@@ -1185,6 +1221,100 @@ def _validate_store_data(data: AssetStoreData) -> None:
 
     _validate_lifecycle_graph(data)
     _validate_replacement_graph(data)
+
+
+# Store 4.1 support below is inactive: the production Store is 3.1, and no
+# setup, migration dispatch, recovery, or mutation path calls it until the
+# Store 4.1 activation commit. The target is docs/asset-archive-store-v4.md.
+
+
+def _validate_store_v4_1_data(data: Mapping[str, Any]) -> None:
+    """Validate a complete Store 4.1 payload by composing the authorities.
+
+    Exact top-level keys, collection types, exact Asset and Purchase record
+    shapes, the shared Store invariants, the Asset Archive state, and the
+    Maintenance collections, in that order. Runtime ConfigSubentry state is
+    outside the Store and is not a load invariant.
+    """
+    if not isinstance(data, Mapping):
+        raise AssetStoreError("Asset Core storage payload is not a mapping")
+    keys = set(data)
+    if keys != STORE_4_1_TOP_LEVEL_KEYS:
+        missing = sorted(STORE_4_1_TOP_LEVEL_KEYS - keys)
+        unexpected = sorted(str(key) for key in keys - STORE_4_1_TOP_LEVEL_KEYS)
+        raise AssetStoreError(
+            "Asset Core Store 4.1 has an invalid top-level shape: "
+            f"missing={missing}, unexpected={unexpected}"
+        )
+    if not all(
+        isinstance(data[key], dict)
+        for key in (
+            "purchases",
+            "assets",
+            "lifecycle_events",
+            "replacement_records",
+            *MAINTENANCE_COLLECTION_KEYS,
+        )
+    ):
+        raise AssetStoreError("Asset Core storage has an invalid top-level structure")
+    try:
+        require_exact_record_keys(data["assets"], ASSET_KEYS_4_1, kind="assets")
+        require_exact_record_keys(data["purchases"], PURCHASE_KEYS, kind="purchases")
+    except StoreShapeError as err:
+        raise AssetStoreError(
+            f"Asset Core Store 4.1 record shape is invalid: {err}",
+            code="store_record_shape_invalid",
+        ) from err
+
+    _validate_store_payload(data)
+
+    try:
+        validate_asset_archive_state(data["assets"])
+    except ArchiveValidationError as err:
+        raise AssetStoreError(
+            f"Asset Core Store 4.1 Archive state is invalid: {err}",
+            code="store_archive_state_invalid",
+        ) from err
+    try:
+        validate_maintenance_collections(
+            data["assets"],
+            data["maintenance_schedules"],
+            data["maintenance_events"],
+        )
+    except MaintenanceValidationError as err:
+        raise AssetStoreError(
+            f"Asset Core Store 4.1 Maintenance data is invalid: {err}",
+            code="store_maintenance_invalid",
+        ) from err
+
+
+def _migrate_v3_1_to_v4_1(old_data: AssetStoreData) -> dict[str, Any]:
+    """Return the Store 4.1 payload for an exact, valid Store 3.1 payload.
+
+    Validate Store 3.1, prove the exact Asset and Purchase source shapes,
+    add the Archive state, add the empty Maintenance collections, and only
+    then validate the complete Store 4.1 candidate. Nothing is inferred,
+    persisted, or read from a clock, and the input is never modified.
+    """
+    data = deepcopy(old_data)
+    _validate_store_data(data)
+    try:
+        preflight_store_3_1_record_shapes(data)
+    except StoreShapeError as err:
+        raise AssetStoreError(
+            "Asset Core Store 3.1 cannot be migrated to 4.1 because a record "
+            f"has an unexpected shape: {err}",
+            code="store_migration_source_incompatible",
+        ) from err
+    try:
+        candidate = add_maintenance_collections(add_asset_archive_state(data))
+    except (ArchiveCompositionError, MaintenanceCompositionError) as err:
+        raise AssetStoreError(
+            f"Asset Core Store 3.1 cannot be migrated to 4.1: {err}",
+            code="store_migration_composition_failed",
+        ) from err
+    _validate_store_v4_1_data(candidate)
+    return candidate
 
 
 @dataclass(frozen=True, slots=True)

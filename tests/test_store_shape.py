@@ -50,6 +50,7 @@ from custom_components.device_lifecycle.store_shape import (
 )
 
 from .conftest import ASSET_UUID, DEVICE_ID, PURCHASE_UUID
+from .test_store_v4_1_validation import INACTIVE_STORE_4_1, referencing_scopes
 
 QUICK_UUID = "44444444-4444-4444-8444-444444444444"
 SECOND_UUID = "55555555-5555-4555-8555-555555555555"
@@ -525,7 +526,8 @@ def _imported_modules(path: Path) -> set[str]:
     return names
 
 
-def test_no_production_module_imports_store_shape() -> None:
+def test_store_shape_is_reachable_only_through_inactive_store_4_1_code() -> None:
+    """Since WP3 only storage.py imports store_shape, and only for 4.1 code."""
     public = {
         name
         for name in vars(store_shape)
@@ -534,7 +536,7 @@ def test_no_production_module_imports_store_shape() -> None:
         == store_shape.__name__
     } - {"annotations", "Any", "Iterable", "Mapping"}
     for path in sorted(PACKAGE.glob("*.py")):
-        if path.name == "store_shape.py":
+        if path.name in {"store_shape.py", "storage.py"}:
             continue
         imported = _imported_modules(path)
         assert not any(
@@ -544,6 +546,9 @@ def test_no_production_module_imports_store_shape() -> None:
         source = path.read_text(encoding="utf-8")
         for symbol in public:
             assert symbol not in source, (path.name, symbol)
+    tree = ast.parse((PACKAGE / "storage.py").read_text(encoding="utf-8"))
+    for symbol, scopes in referencing_scopes(tree, frozenset(public)).items():
+        assert scopes <= INACTIVE_STORE_4_1, (symbol, scopes)
 
 
 def test_store_shape_is_pure() -> None:

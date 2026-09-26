@@ -503,9 +503,22 @@ def _imports(path: Path) -> set[str]:
 
 
 def test_runtime_domain_has_no_maintenance_imports() -> None:
-    for module in (sensor_module, storage_module):
-        imports = _imports(Path(module.__file__))
-        assert not any("maintenance" in name for name in imports), module.__name__
+    """Runtime never depends on Maintenance operations or projections.
+
+    Since WP3 storage.py imports the Maintenance Store schema authority
+    (``maintenance``) for the inactive Store 4.1 validator and migration
+    step only; the Store 4.1 reachability tests prove it is used nowhere
+    else. The Runtime sensor imports no Maintenance module at all.
+    """
+    assert not any(
+        "maintenance" in name for name in _imports(Path(sensor_module.__file__))
+    )
+    storage_imports = {
+        name
+        for name in _imports(Path(storage_module.__file__))
+        if "maintenance" in name
+    }
+    assert storage_imports == {"maintenance"}
 
 
 def test_store_3_1_shape_and_version_unchanged(

@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 from homeassistant.core import HomeAssistant
 
-from custom_components.device_lifecycle import maintenance
+from custom_components.device_lifecycle import maintenance, storage
 from custom_components.device_lifecycle.maintenance import (
     MaintenanceCompositionError,
     add_maintenance_collections,
@@ -28,6 +28,7 @@ from custom_components.device_lifecycle.storage import (
 
 from .conftest import ASSET_UUID
 from .test_lifecycle import _manager
+from .test_store_v4_1_validation import referencing_scopes
 
 STORE_3_1_KEYS = (
     "next_asset_number",
@@ -169,7 +170,11 @@ async def test_store_3_1_activation_boundary_stays_real(
 
 
 def test_helper_is_pure_and_not_wired_into_production() -> None:
-    """No HA, I/O, clock, or migration dependency; nothing in production calls it."""
+    """No HA, I/O, clock, or migration dependency.
+
+    Since WP3 the inactive Store 3.1 -> 4.1 step exists and composes this
+    helper, but no production path dispatches to it before activation.
+    """
     module_path = Path(maintenance.__file__)
     tree = ast.parse(module_path.read_text(encoding="utf-8"))
     imports: set[str] = set()
@@ -181,8 +186,21 @@ def test_helper_is_pure_and_not_wired_into_production() -> None:
     assert not any(name.startswith("homeassistant") for name in imports)
     assert "_migrate_v3_1_to_v4" not in module_path.read_text(encoding="utf-8")
     for path in module_path.parent.glob("*.py"):
-        if path.name in {"maintenance.py", "maintenance_mutations.py"}:
+        if path.name in {"maintenance.py", "maintenance_mutations.py", "storage.py"}:
             continue
         source = path.read_text(encoding="utf-8")
         assert "add_maintenance_collections" not in source, path.name
         assert "_migrate_v3_1_to_v4" not in source, path.name
+
+    storage_tree = ast.parse(
+        (module_path.parent / "storage.py").read_text(encoding="utf-8")
+    )
+    scopes = referencing_scopes(
+        storage_tree,
+        frozenset({"add_maintenance_collections", "_migrate_v3_1_to_v4_1"}),
+    )
+    # The step exists and composes the helper ...
+    assert scopes["add_maintenance_collections"] == {"_migrate_v3_1_to_v4_1"}
+    assert hasattr(storage, "_migrate_v3_1_to_v4_1")
+    # ... but nothing, including the Store migration callback, calls the step.
+    assert scopes.get("_migrate_v3_1_to_v4_1", set()) == set()

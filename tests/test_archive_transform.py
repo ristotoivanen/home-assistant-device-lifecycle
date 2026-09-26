@@ -46,6 +46,7 @@ from custom_components.device_lifecycle.store_shape import (
 
 from .conftest import ASSET_UUID, DEVICE_ID, PURCHASE_UUID
 from .test_lifecycle import _manager
+from .test_store_v4_1_validation import INACTIVE_STORE_4_1, referencing_scopes
 
 SECOND_UUID = "55555555-5555-4555-8555-555555555555"
 THIRD_UUID = "66666666-6666-4666-8666-666666666666"
@@ -573,17 +574,29 @@ def test_archive_module_is_pure() -> None:
     }
 
 
-def test_no_production_module_imports_archive_or_store_shape() -> None:
-    future_only = {
-        "ArchiveCompositionError",
-        "ArchiveValidationError",
-        "add_asset_archive_state",
-        "asset_is_archived",
-        "validate_asset_archive_state",
-        "ARCHIVED_AT",
-    }
+def test_archive_is_reachable_only_through_inactive_store_4_1_code() -> None:
+    """Since WP3 only storage.py imports archive, and only for 4.1 code.
+
+    ``asset_is_archived`` and ``ARCHIVED_AT`` are used by no production
+    module at all yet, and no production module spells ``"archived_at"``.
+    """
+    future_only = frozenset(
+        {
+            "ArchiveCompositionError",
+            "ArchiveValidationError",
+            "add_asset_archive_state",
+            "validate_asset_archive_state",
+        }
+    )
+    unused = {"asset_is_archived", "ARCHIVED_AT"}
     for path in sorted(PACKAGE.glob("*.py")):
         if path.name in {"archive.py", "store_shape.py"}:
+            continue
+        source = path.read_text(encoding="utf-8")
+        for symbol in unused:
+            assert symbol not in source, (path.name, symbol)
+        assert f'"{ARCHIVED_AT}"' not in source, path.name
+        if path.name == "storage.py":
             continue
         for name in _imported_modules(path):
             assert name.split(".")[-1] not in {"archive", "store_shape"}, (
@@ -591,10 +604,11 @@ def test_no_production_module_imports_archive_or_store_shape() -> None:
                 name,
             )
             assert ".archive." not in f".{name}.", (path.name, name)
-        source = path.read_text(encoding="utf-8")
         for symbol in future_only:
             assert symbol not in source, (path.name, symbol)
-        assert f'"{ARCHIVED_AT}"' not in source, path.name
+    tree = ast.parse((PACKAGE / "storage.py").read_text(encoding="utf-8"))
+    for symbol, scopes in referencing_scopes(tree, future_only).items():
+        assert scopes <= INACTIVE_STORE_4_1, (symbol, scopes)
 
 
 async def test_production_store_is_still_3_1(hass: HomeAssistant) -> None:
