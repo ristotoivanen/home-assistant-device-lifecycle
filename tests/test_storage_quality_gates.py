@@ -21,6 +21,8 @@ from custom_components.device_lifecycle.storage import (
     STORAGE_KEY,
     STORAGE_MINOR_VERSION,
     STORAGE_VERSION,
+    STORE_TOP_LEVEL_KEYS,
+    _empty_store_data,
     _migrate_v1_to_v2_1,
     _normalize_price,
     _runtime_seconds,
@@ -876,3 +878,129 @@ async def test_ambiguous_recovery_refuses_disappeared_nonempty_store(
 
     assert manager._persistence_uncertain is True
     manager._store.async_save.assert_not_awaited()
+
+
+def test_store_3_1_top_level_key_set_is_exact() -> None:
+    """The Store 3.1 payload shape is exactly the frozen set of five keys."""
+    assert STORE_TOP_LEVEL_KEYS == {
+        "next_asset_number",
+        "purchases",
+        "assets",
+        "lifecycle_events",
+        "replacement_records",
+    }
+    assert set(_empty_store_data()) == STORE_TOP_LEVEL_KEYS
+
+
+def test_exact_store_3_1_top_level_shape_is_accepted(
+    asset_store_data: AssetStoreData,
+) -> None:
+    """A payload with exactly the frozen top-level keys validates."""
+    data = deepcopy(asset_store_data)
+    assert set(data) == STORE_TOP_LEVEL_KEYS
+
+    _validate_store_data(data)
+
+
+@pytest.mark.parametrize("key", sorted(STORE_TOP_LEVEL_KEYS))
+def test_missing_top_level_key_is_rejected(
+    asset_store_data: AssetStoreData,
+    key: str,
+) -> None:
+    """Removing any required top-level key fails closed and names the key."""
+    data = deepcopy(asset_store_data)
+    del data[key]  # type: ignore[misc]
+
+    with pytest.raises(
+        AssetStoreError,
+        match=rf"invalid top-level shape: missing=\['{key}'\], unexpected=\[\]",
+    ):
+        _validate_store_data(data)
+
+
+def test_unknown_top_level_key_is_rejected(
+    asset_store_data: AssetStoreData,
+) -> None:
+    """An unknown top-level key is not a forward-compatible extension."""
+    data: dict[str, Any] = deepcopy(asset_store_data)
+    data["unexpected_future_field"] = {}
+
+    with pytest.raises(
+        AssetStoreError,
+        match=(
+            rf"Asset Core Store {STORAGE_VERSION}\.{STORAGE_MINOR_VERSION} has an "
+            r"invalid top-level shape: missing=\[\], "
+            r"unexpected=\['unexpected_future_field'\]"
+        ),
+    ):
+        _validate_store_data(data)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "future_keys",
+    [
+        ("maintenance_schedules",),
+        ("maintenance_events",),
+        ("maintenance_events", "maintenance_schedules"),
+    ],
+)
+def test_store_4_maintenance_collections_are_invalid_in_store_3_1(
+    asset_store_data: AssetStoreData,
+    future_keys: tuple[str, ...],
+) -> None:
+    """Maintenance collections belong to Store 4 and fail closed in Store 3.1.
+
+    This pins the activation boundary in docs/maintenance-implementation-plan.md:
+    Store 3.1 stays unaware of the Maintenance shape until Store 4 activation.
+    """
+    data: dict[str, Any] = deepcopy(asset_store_data)
+    for key in future_keys:
+        data[key] = {}
+
+    with pytest.raises(AssetStoreError, match="invalid top-level shape"):
+        _validate_store_data(data)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("version", "minor_version"),
+    [(STORAGE_VERSION, STORAGE_MINOR_VERSION), (2, 1)],
+)
+async def test_setup_with_unknown_top_level_key_fails_closed_without_writing(
+    hass: HomeAssistant,
+    hass_storage: dict[str, Any],
+    asset_store_data: AssetStoreData,
+    version: int,
+    minor_version: int,
+) -> None:
+    """Load rejects an unknown key without dropping it, writing, or publishing.
+
+    Store 3.1 is validated directly on load. An older Store is migrated and the
+    migrated result is validated as Store 3.1, so an unknown key is never
+    carried silently into the current schema either.
+    """
+    data: dict[str, Any] = deepcopy(asset_store_data)
+    if version == 2:
+        del data["lifecycle_events"]
+        del data["replacement_records"]
+        for asset in data["assets"].values():
+            del asset["lifecycle"]
+    data["maintenance_schedules"] = {}
+    envelope = {
+        "version": version,
+        "minor_version": minor_version,
+        "key": STORAGE_KEY,
+        "data": data,
+    }
+    hass_storage[STORAGE_KEY] = deepcopy(envelope)
+    manager = AssetStoreManager(hass)
+
+    with (
+        patch.object(manager._store, "async_save", AsyncMock()) as save,
+        pytest.raises(AssetStoreError, match="invalid top-level shape"),
+    ):
+        await manager.async_setup()
+
+    save.assert_not_awaited()
+    assert hass_storage[STORAGE_KEY] == envelope
+    assert manager._data == _empty_store_data()
+    assert manager.assets() == []

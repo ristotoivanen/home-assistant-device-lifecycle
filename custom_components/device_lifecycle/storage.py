@@ -75,6 +75,19 @@ STORAGE_VERSION = 3
 STORAGE_MINOR_VERSION = 1
 STORAGE_KEY = f"{DOMAIN}.assets"
 
+# The exact top-level shape of the Store 3.1 payload. The Store version names
+# one exact schema, so a key outside this set is not a forward-compatible
+# extension: it belongs to a different schema and fails closed.
+STORE_TOP_LEVEL_KEYS = frozenset(
+    {
+        "next_asset_number",
+        "purchases",
+        "assets",
+        "lifecycle_events",
+        "replacement_records",
+    }
+)
+
 ASSET_ID_PATTERN = re.compile(r"^DL([0-9]{4})$")
 MAX_ASSET_NUMBER = 9999
 
@@ -942,6 +955,18 @@ def _validate_replacement_graph(data: AssetStoreData) -> None:
 
 def _validate_store_data(data: AssetStoreData) -> None:
     """Validate invariants which must remain true across all future releases."""
+    if not isinstance(data, dict):
+        raise AssetStoreError("Asset Core storage payload is not a mapping")
+    keys = set(data)
+    if keys != STORE_TOP_LEVEL_KEYS:
+        # Name the keys only; the payload itself is never logged.
+        missing = sorted(STORE_TOP_LEVEL_KEYS - keys)
+        unexpected = sorted(str(key) for key in keys - STORE_TOP_LEVEL_KEYS)
+        raise AssetStoreError(
+            f"Asset Core Store {STORAGE_VERSION}.{STORAGE_MINOR_VERSION} has an "
+            f"invalid top-level shape: missing={missing}, unexpected={unexpected}"
+        )
+
     if not all(
         isinstance(data.get(key), dict)
         for key in (
@@ -1192,18 +1217,11 @@ class AssetStoreManager:
         if not isinstance(loaded, dict):
             raise AssetStoreError("Asset Core storage payload is not a mapping")
 
-        # Store is versioned, so a version-one payload is expected to contain all
+        # Store is versioned, so the payload is expected to contain all
         # top-level keys. Refuse to guess if the private store is malformed.
-        if not all(
-            key in loaded
-            for key in (
-                "next_asset_number",
-                "purchases",
-                "assets",
-                "lifecycle_events",
-                "replacement_records",
-            )
-        ):
+        # Unexpected keys are rejected by the exact-shape check in
+        # _validate_store_data before anything is published.
+        if not STORE_TOP_LEVEL_KEYS.issubset(loaded):
             raise AssetStoreError("Asset Core storage payload is incomplete")
 
         data = cast(AssetStoreData, deepcopy(loaded))
