@@ -2,22 +2,27 @@
 
 This document describes `ha-ai-lab`, the persistent Home Assistant environment used for Device Lifecycle regression and UX testing. It is a test fixture, not part of the integration: nothing here is a Device Lifecycle feature, schema, or API contract.
 
-The lab is separate from release history. Release validation results are recorded per release in the README's [Release validation](../README.md#release-validation) section. The 0.7.6 destructive stale-reference Repairs v1 validation is still [pending](../README.md#076-post-release-validation--repairs-v1-in-test-ha); building this lab did not perform it.
+The lab is separate from release history. Release validation results are recorded per release in the README's [Release validation](../README.md#release-validation) section. Building the original lab did not perform the 0.7.6 destructive stale-reference Repairs v1 validation. That validation was completed later in this lab, on 2026-09-26. It is recorded in the README's [0.7.6 post-release validation](../README.md#076-post-release-validation--repairs-v1-in-test-ha--complete) and in [Repairs v1 destructive Test HA validation](repairs-v1-test-ha-validation.md). It added the [DL0009 Repairs fixture](#dl0009--dl-repairs-fixture--destructive-test).
 
 ## Baseline
 
-The baseline was established after the 0.7.7 release validation had already completed:
+The current baseline:
 
 | Item | Value |
 |---|---|
 | Home Assistant | 2026.9.3 |
 | Device Lifecycle | 0.7.7, loaded |
-| Assets | 8 |
-| Device Lifecycle entities | 58 (52 enabled, 6 disabled Replacement entities) |
+| Assets | 9 |
+| Device Lifecycle entities | 65 (58 enabled, 7 disabled Replacement entities) |
 | Config subentries | 6 |
 | Device Lifecycle Repairs issues | 0 |
 
-A final reload after the lab was built kept all 58 entity identities and placements and produced 0 `entity_registry_updated` placement events. That reload checked the new baseline. It was not another 0.7.7 release smoke; the formal two-reload 0.7.7 smoke had already completed separately.
+History of this baseline:
+
+- **Original baseline.** The original lab baseline was established after the 0.7.7 release validation had already completed. It had 8 Assets (DL0001–DL0008) and 58 Device Lifecycle entities (52 enabled, 6 disabled Replacement entities).
+- **Checking reload.** A final reload after that lab was built kept all 58 entity identities and placements and produced 0 `entity_registry_updated` placement events. That reload checked the original baseline. It was not another 0.7.7 release smoke; the formal two-reload 0.7.7 smoke had already completed separately.
+- **DL0009 added.** DL0009 was added on purpose for the Repairs v1 destructive validation that was completed on 2026-09-26. It contributes 7 entities, one of them its disabled Replacement entity, and no config subentry.
+- **DL0001–DL0008 unchanged.** They stayed unchanged throughout that validation.
 
 ## Asset scenarios
 
@@ -33,6 +38,7 @@ Each Asset exists for a specific scenario. Keep that purpose when changing lab d
 | DL0006 | DL Lab Device 06 — Minimal | minimal/default Asset |
 | DL0007 | DL Lab Device 05 Old — Replaced | replacement predecessor |
 | DL0008 | DL Lab Device 05 — Replacement | replacement successor |
+| DL0009 | DL Repairs Fixture — destructive test | dedicated Repairs regression fixture: stale primary and related device references |
 
 ### DL0001 — Testidevice 1
 
@@ -96,6 +102,24 @@ Each Asset exists for a specific scenario. Keep that purpose when changing lab d
 
 When the replacement was recorded, only the two Replacement entities changed. Lifecycle, Deployment, Purchase, warranty, Runtime, and Home Assistant device relationships did not change automatically. The predecessor's Lifecycle and Deployment were changed afterwards as separate, explicit steps. This is the regression evidence for Replacement ≠ Lifecycle ≠ Deployment.
 
+### DL0009 — DL Repairs Fixture — destructive test
+
+- **Purpose.** DL0009 is the persistent, dedicated regression fixture for stale-reference Repairs. It was added for the completed [Repairs v1 destructive validation](repairs-v1-test-ha-validation.md).
+- **Linked devices.**
+  - Primary Home Assistant device: DL Repairs Fixture Primary.
+  - Related Home Assistant device: DL Repairs Fixture Related.
+  - Both are synthetic retained-MQTT devices; see [Synthetic Home Assistant devices](#synthetic-home-assistant-devices).
+- **No other configuration.** It has no Purchase, no Runtime, and no Replacement configuration. Its Replacement diagnostic entity stays disabled by the integration.
+- **Known-good state.** The known-good baseline has both linked external devices present. In that state:
+  - Relationships is `present`.
+  - There are 0 Device Lifecycle Repairs issues.
+- **How it is used.** It is used for controlled stale-reference and recovery tests:
+  - A reference is made stale by clearing the device's retained discovery config with an empty retained payload.
+  - It is recovered by republishing the exact original discovery payload. Home Assistant then restores the same Device Registry ID.
+  - Keep the original payloads, and verify them, before clearing anything.
+- **Afterwards.** Return the fixture to its known-good state after every test.
+- **Other Assets.** Do not use DL0001–DL0008 for destructive Repairs tests.
+
 ## Synthetic Home Assistant devices
 
 DL Lab Device 02–06 are synthetic test devices, not physical devices. They use retained MQTT discovery on the lab's existing Mosquitto broker:
@@ -104,6 +128,19 @@ DL Lab Device 02–06 are synthetic test devices, not physical devices. They use
 - model `MQTT Test Device (TEST DATA — <scenario>)`
 - each device provides a Switch, a Power, and a Temperature entity
 - discovery, state, and availability messages are retained, so the devices persist across restarts
+
+These devices remain unchanged.
+
+The DL0009 Repairs fixture adds two more synthetic retained-MQTT discovery devices on the same broker:
+
+- DL Repairs Fixture Primary, the primary device of DL0009
+- DL Repairs Fixture Related, a related device of DL0009
+- manufacturer `Device Lifecycle Lab`
+- models `MQTT Repairs Fixture Primary (TEST DATA — disposable)` and `MQTT Repairs Fixture Related (TEST DATA — disposable)`
+- each device provides one Temperature entity
+- their discovery config is retained, so they persist across restarts
+
+A separate unlinked MQTT recovery probe was used to verify same-device restoration before the destructive Asset tests. It is not part of DL0009 or the Device Lifecycle regression inventory.
 
 This is Test HA fixture infrastructure only. It is not part of Device Lifecycle's architecture, which does not depend on MQTT.
 
@@ -148,7 +185,7 @@ Reference end-user dashboard, built only from native Home Assistant cards. It te
 - **Overview** is organized around user questions rather than integration internals: Needs attention, a warranty summary, a Runtime summary, and My devices.
   - Needs attention currently covers expired warranty, retired/lost/disposed Lifecycle, replacement state, a missing linked device, and unavailable relevant data.
   - `not_deployed` on its own is intentionally not an attention condition.
-- **Devices** has one readable section per Asset. It shows only relevant data:
+- **Devices** has readable sections for the baseline Assets represented on the dashboard (DL0001–DL0008). It shows only relevant data:
   - Lifecycle, Deployment, and installation/location
   - warranty and Purchase
   - Runtime and Replacement where present
@@ -195,3 +232,4 @@ These are observations, not current defects.
 - After the smoke, compare against the baseline, and document intentional changes separately from regressions.
 - Do not require mutable Runtime values to match historical numbers.
 - Synthetic test data may change deliberately, but document each change here.
+- Run destructive Repairs tests only against DL0009. Afterwards, return it to its known-good state: both linked devices present and 0 Device Lifecycle Repairs issues.

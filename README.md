@@ -628,6 +628,7 @@ Device Lifecycle 0.7.7 does not provide a warranty editor, a searchable Asset li
 - [Architecture and persistence invariants](ARCHITECTURE.md)
 - [Optional dashboard and import instructions](dashboard/README.md)
 - [Persistent Test HA lab](docs/test-ha-lab.md)
+- [Repairs v1 destructive Test HA validation](docs/repairs-v1-test-ha-validation.md)
 - [Release history](https://github.com/ristotoivanen/home-assistant-device-lifecycle/releases)
 - [Issue tracker](https://github.com/ristotoivanen/home-assistant-device-lifecycle/issues)
 
@@ -657,21 +658,41 @@ For reproducible problems, open a [GitHub issue](https://github.com/ristotoivane
 - **Future — Documents**
 - **1.0 — Stable**
 
-### Pending validation
+### Post-release validation
 
-#### 0.7.6 post-release validation — Repairs v1 in Test HA
+#### 0.7.6 post-release validation — Repairs v1 in Test HA — complete
 
-The 0.7.6 production smoke test passed. This is not a known defect and not unfinished 0.7.6 work: production has no naturally occurring stale device reference, and the scenario is destructive, so the end-to-end check is deferred to a dedicated Test HA environment. It may be tracked alongside 0.8.x Maintenance but remains 0.7.6 validation, not a 0.8.x feature. The expected behavior is the released contract in [Home Assistant device relationships](#home-assistant-device-relationships) and [Stale external device references in Repairs](ARCHITECTURE.md#stale-external-device-references-in-repairs).
+**0.7.6 REPAIRS V1 DESTRUCTIVE TEST HA VALIDATION: COMPLETE.** Completed on 2026-09-26 in the dedicated persistent Test HA ("ha-ai-lab") with Home Assistant 2026.9.3 and the released Device Lifecycle 0.7.7 implementation; 0.7.7 did not change `stale_references.py`. This closes the 0.7.6 validation that had been deferred because production has no naturally occurring stale device reference and the scenario is destructive. It is a separate record: not a 0.7.7 release smoke and not a 0.8.x feature. The behavior checked is the released contract in [Home Assistant device relationships](#home-assistant-device-relationships) and [Stale external device references in Repairs](ARCHITECTURE.md#stale-external-device-references-in-repairs). Details are in [Repairs v1 destructive Test HA validation](docs/repairs-v1-test-ha-validation.md).
 
-In Test HA, with a disposable Asset and disposable Home Assistant devices:
+- **Fixture.** A dedicated regression Asset, DL0009 "DL Repairs Fixture — destructive test". It links one synthetic retained-MQTT primary device and one related device, and has no Purchase, Runtime, or Replacement configuration. DL0001–DL0008 were not used as destructive fixtures.
+- **Primary stale — PASS.** Removing the external primary device kept the stored relationship: nothing was cleaned up automatically and nothing was relinked.
+  - The Relationships entity changed from `present` to `missing`.
+  - Exactly one deterministic warning appeared. It is not fixable and names the Asset by name and Asset ID.
+- **Reload persistence — PASS.** An ordinary Device Lifecycle reload while the device was stale kept the same issue and its creation time.
+- **Restart re-derivation — PASS.** After a Home Assistant restart, the same issue existed again, derived from the stored relationship.
+- **Same-device recovery — PASS.** Republishing the original discovery brought the device back under the same Device Registry ID. The issue cleared by itself, without an Asset edit, a relink, or a reload.
+- **Related stale and recovery — PASS.** A related-specific warning appeared on its own, with no primary issue, and cleared when the same device returned.
+- **Simultaneous primary and related stale — PASS.** There were exactly two issues, and both stored relationships stayed unchanged.
+- **Sibling issue isolation — PASS.** Recovering the primary removed only the primary issue. The related issue stayed with the same issue ID and creation time until its own device returned.
+- **Repairs UI.** The English Repairs text named the Asset and linked to Device Lifecycle. It showed no raw Device Registry ID, issue ID, or Asset UUID.
+- **Preserved.**
+  - DL0001–DL0008 were unchanged throughout.
+  - Runtime identities were unchanged, and Runtime totals never decreased or reset.
+  - No Device Lifecycle error or traceback was logged.
+  - The lab ended with both fixture devices present and 0 Repairs issues.
 
-- [ ] Link a device as the Asset's primary device, remove it from the Device Registry, and verify one Repairs warning that names the Asset by name and Asset ID without the raw Device Registry ID.
-- [ ] Verify the stored relationship is kept, not removed, rewritten, or relinked.
-- [ ] Repeat with a related device and verify its own relationship-specific warning.
-- [ ] Repair or remove each stale relationship explicitly and verify only its warning disappears.
-- [ ] Where practical, restore the same device under the same Device Registry ID and verify the warning clears.
-- [ ] Verify the English and Finnish Repairs text and the link to Device Lifecycle.
-- [ ] If the setup allows, confirm the Home Assistant 2026.8 limitation: a restore without device information may emit no Device Registry event, so the warning can remain until Device Lifecycle is set up again (reload or restart).
+Covered by automated tests or source verification, not performed live in this run:
+
+- An explicit repair clears the issue only when the stale relationship itself is repaired. Replacing the primary clears it; deselecting the device from a Purchase alone does not.
+- Issues that Device Lifecycle does not own are never touched.
+- Unloading keeps the owned issues. Permanently removing the config entry clears only the owned issues, and foreign issues survive.
+- A silent restore is picked up by the next setup.
+- `is_persistent=False` is verified from the released source and asserted by the automated tests. Home Assistant 2026.9.3 does not expose it at runtime.
+
+Not live-tested:
+
+- The Home Assistant 2026.8 silent-restore limitation. The live run used 2026.9.3.
+- Finnish Repairs text rendering.
 
 ### Release validation
 
@@ -695,7 +716,7 @@ Not covered by this smoke:
 - Runtime accumulation across a reload while the source is actively accumulating. The source was inactive.
 - Recorder continuity in the database itself.
 - Whether the `Migrated Device Lifecycle entity` INFO log line appears.
-- The destructive stale-reference Repairs v1 checks. These remain the separate [0.7.6 pending validation](#076-post-release-validation--repairs-v1-in-test-ha) above.
+- The destructive stale-reference Repairs v1 checks. They were not part of this 0.7.7 release smoke. They were completed later, on 2026-09-26, as the separate [0.7.6 post-release validation](#076-post-release-validation--repairs-v1-in-test-ha--complete) above.
 - The optional Device Lifecycle dashboard, which was not installed.
 
 Observations for later review. None of these is a 0.7.7 release failure:
