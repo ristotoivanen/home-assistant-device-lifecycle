@@ -644,14 +644,24 @@ The concrete normal Maintenance user experience, **Maintenance UX v0.1**, is des
 
 A maintenance schedule can need an optional advance reminder that helps the person prepare for upcoming maintenance. For example, when a ventilation filter change is due in about a month, the person can be reminded to order new filters. This is a generic Maintenance use case, not a feature for one kind of device: other examples are buying consumables, obtaining a spare part, or preparing other material or tools the maintenance needs.
 
-Only these boundaries are fixed now:
+For example, a schedule "Ventilation filter change" every 6 months can have a preparation reminder 30 days before its due date with the message "Remember to order new filters". The same model applies to any preparation, such as obtaining a spare part, a service kit, a filter, a lubricant, or other maintenance supplies.
 
-- a preparation reminder is separate from the schedule's actual due and overdue state
-- a reminder must not change a schedule's due calculation or any maintenance history
-- in ordinary use a reminder is optional and very simple
-- it is not a product catalogue, inventory, web shop, or automatic ordering system
+**0.8.x uses a calendar-based preparation reminder only.** A preparation reminder:
 
-`OPEN DESIGN — deferred to Maintenance UX v0.1`: the reminder model, its lead time, notification delivery, any entities, and its storage. It is designed together with the rest of the normal Maintenance path and is not part of any current release.
+- is optional, and in ordinary use very simple
+- is expressed to the person in calendar days before the due date, for example 30 days before
+- is based only on a known calendar due date. When no calendar due date is known, no preparation reminder is active
+- has no Runtime-relative lead in 0.8.x, such as a number of Runtime hours before due
+- never changes the schedule's due state, such as `OK`, `UNKNOWN`, `DUE`, or `OVERDUE`, and never changes its due calculation
+- is a derived live projection, not Maintenance history: its activation is never stored as a historical fact, and notification delivery is not part of canonical Maintenance history
+- must not suggest that time remains before maintenance once the schedule is `DUE` or `OVERDUE`
+- is not a product catalogue, inventory, web shop, or automatic ordering system
+
+Store boundary: 0.8.x needs persistent preparation reminder configuration for the calendar lead and an optional message. The exact Store 4.x field structure is decided in the Store 4.x design.
+
+Later extension, not implemented in 0.8.x: Runtime schedules may later derive an estimated calendar due date from observed Runtime consumption rate, for example "approximately 30 days remaining". Such a date is a projection or forecast, never canonical maintenance data: it is not a maintenance event, not a baseline, and not a canonical due date, and it never changes historical data. If the estimate cannot be derived reliably, for example because observed Runtime data is missing or unreliable, it remains unknown rather than being guessed from an assumed rate.
+
+`OPEN DESIGN — deferred to Maintenance UX v0.1`: how the reminder is presented, notification delivery, and any entities. It is designed together with the rest of the normal Maintenance path and is not part of any current release.
 
 ## Planned: Asset archive and permanent deletion
 
