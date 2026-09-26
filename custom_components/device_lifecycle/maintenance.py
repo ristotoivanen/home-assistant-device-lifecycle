@@ -15,6 +15,7 @@ lock are enforced by the mutation layer, not here.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from copy import deepcopy
 from typing import Any
 
 from .canonical import (
@@ -60,8 +61,15 @@ INITIAL_ANCHOR_KEYS = frozenset({"date", "runtime_seconds"})
 PREPARATION_REMINDER_KEYS = frozenset({"lead_days", "message"})
 CALENDAR_INTERVAL_UNITS = frozenset({"days", "months", "years"})
 
+MAINTENANCE_COLLECTION_KEYS = ("maintenance_schedules", "maintenance_events")
+
+
 class MaintenanceValidationError(ValueError):
     """Persisted Maintenance data violates the frozen schema."""
+
+
+class MaintenanceCompositionError(ValueError):
+    """A Store candidate cannot receive the Maintenance collections."""
 
 
 def _canonical[T](
@@ -392,3 +400,29 @@ def can_hard_delete_schedule(
 ) -> bool:
     """Return whether no Event, including a voided Event, references a Schedule."""
     return schedule_uuid not in referenced_schedule_uuids(events)
+
+
+def add_maintenance_collections(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a copy of a pre-Maintenance Store candidate with empty collections.
+
+    This is only the Maintenance component of the future Store upgrade; it
+    does not own the upgrade order, and it is not called by any migration
+    before Store 4 activation. Every existing top-level value is carried over
+    unchanged and nothing is inferred: no Schedule, Event, or baseline is
+    derived from Purchases, Lifecycle, Runtime, or Deployment. The input is
+    never modified, and the result shares no mutable data with it.
+
+    It applies exactly once. A candidate that already has either Maintenance
+    collection is rejected rather than overwritten.
+    """
+    if not isinstance(candidate, dict):
+        raise MaintenanceCompositionError("Store candidate must be a mapping")
+    present = [key for key in MAINTENANCE_COLLECTION_KEYS if key in candidate]
+    if present:
+        raise MaintenanceCompositionError(
+            f"Store candidate already contains Maintenance collections: {present}"
+        )
+    result = deepcopy(candidate)
+    result["maintenance_schedules"] = {}
+    result["maintenance_events"] = {}
+    return result
