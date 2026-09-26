@@ -578,6 +578,8 @@ These boundaries reserve 0.8.x for Maintenance, including reversible Asset archi
 
 Status: **planning only**. Nothing in this section is implemented, and it defines no user interface, OptionsFlow structure, entity, dashboard, or Store field. It records design constraints that every 0.8.x Maintenance domain, storage, and workflow decision must satisfy.
 
+The canonical Maintenance Store schema is [Maintenance Store 4.x frozen schema](docs/maintenance-store-v4-schema.md). Status: **FROZEN** (approved 2026-09-26), not implemented, Store version number not yet assigned.
+
 **Usability is a first-class 0.8.x design constraint.** Maintenance adds growing, date- and Runtime-related history, which is internally more complex than any earlier Asset domain. That complexity belongs in the data model and the implementation, not in the person's everyday workflow. The constraints below extend the existing management rules that user-facing copy never shows internal identifiers (see [Summaries and identifier safety](#summaries-and-identifier-safety)) and that a mutation target is never chosen implicitly.
 
 ### Minimal normal path
@@ -639,7 +641,7 @@ A maintenance schedule's explicit calculation baseline, the anchor its due calcu
 
 For the person, this means the starting point of a schedule can be corrected only before the schedule's first maintenance event. After that, no baseline reset is offered; correcting and voiding events remain the historical mechanisms, and voiding does not make the baseline editable again. How this is presented is decided in the Maintenance UX v0.1 checkpoint below.
 
-Store boundary: the Store 4.x design must keep enough canonical maintenance history to determine whether a schedule has ever been referenced by any maintenance event, including voided events. The lock is derived from that canonical history. It must not be a separately stored flag that has to be kept in sync, and no field is added for it when the event-to-schedule references already answer the question. The exact Store 4.x structure is decided in the Store 4.x design.
+Store boundary: the Store 4.x design must keep enough canonical maintenance history to determine whether a schedule has ever been referenced by any maintenance event, including voided events. The lock is derived from that canonical history. It must not be a separately stored flag that has to be kept in sync, and no field is added for it when the event-to-schedule references already answer the question. The frozen Store 4.x structure is in [Maintenance Store 4.x frozen schema](docs/maintenance-store-v4-schema.md).
 
 ### Design review rule
 
@@ -652,6 +654,8 @@ If the answer is no, the design must be revised before internal complexity reach
 ### Maintenance UX v0.1 checkpoint
 
 The concrete normal Maintenance user experience, **Maintenance UX v0.1**, is designed later, as an explicit design checkpoint: after the Maintenance due and calendar semantics are sufficiently settled, and before the Store 4.x design is finally frozen, so that the storage design can still change if the workflow requires it.
+
+Superseded order: the Maintenance Store 4.x schema was frozen on 2026-09-26, before this checkpoint took place (see [Maintenance Store 4.x frozen schema](docs/maintenance-store-v4-schema.md)). Maintenance UX v0.1 is therefore designed within the frozen schema. A workflow need that the frozen schema cannot meet requires an explicit schema revision and review.
 
 ### Maintenance preparation reminder
 
@@ -670,7 +674,7 @@ For example, a schedule "Ventilation filter change" every 6 months can have a pr
 - must not suggest that time remains before maintenance once the schedule is `DUE` or `OVERDUE`
 - is not a product catalogue, inventory, web shop, or automatic ordering system
 
-Store boundary: 0.8.x needs persistent preparation reminder configuration for the calendar lead and an optional message. The exact Store 4.x field structure is decided in the Store 4.x design.
+Store boundary: 0.8.x needs persistent preparation reminder configuration for the calendar lead and an optional message. The frozen Store 4.x field structure is in [Maintenance Store 4.x frozen schema](docs/maintenance-store-v4-schema.md).
 
 Later extension, not implemented in 0.8.x: Runtime schedules may later derive an estimated calendar due date from observed Runtime consumption rate, for example "approximately 30 days remaining". Such a date is a projection or forecast, never canonical maintenance data: it is not a maintenance event, not a baseline, and not a canonical due date, and it never changes historical data. If the estimate cannot be derived reliably, for example because observed Runtime data is missing or unreliable, it remains unknown rather than being guessed from an assumed rate.
 
