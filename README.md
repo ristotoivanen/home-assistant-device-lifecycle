@@ -627,6 +627,7 @@ Device Lifecycle 0.7.7 does not provide a warranty editor, a searchable Asset li
 
 - [Architecture and persistence invariants](ARCHITECTURE.md)
 - [Optional dashboard and import instructions](dashboard/README.md)
+- [Persistent Test HA lab](docs/test-ha-lab.md)
 - [Release history](https://github.com/ristotoivanen/home-assistant-device-lifecycle/releases)
 - [Issue tracker](https://github.com/ristotoivanen/home-assistant-device-lifecycle/issues)
 
