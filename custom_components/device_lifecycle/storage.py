@@ -83,6 +83,8 @@ from .models import (
     ReplacementReason,
     ReplacementRecordData,
 )
+from .runtime_identity import primary_device_id as _primary_device_id
+from .runtime_identity import resolve_runtime_subentry_asset
 from .store_shape import (
     ASSET_KEYS_4_1,
     PURCHASE_KEYS,
@@ -477,14 +479,6 @@ def _warranty_type(data: dict[str, Any]) -> str:
     if data.get(CONF_WARRANTY_UNTIL):
         return WARRANTY_MANUAL
     return WARRANTY_NONE
-
-
-def _primary_device_id(asset: AssetData) -> str | None:
-    """Return an Asset's primary Home Assistant device reference."""
-    for reference in asset.get("ha_device_refs", []):
-        if reference.get("role") == DEVICE_ROLE_PRIMARY:
-            return str(reference.get("device_id") or "") or None
-    return None
 
 
 
@@ -3664,18 +3658,12 @@ class AssetStoreManager:
                 # do not fabricate an Asset without an identity relationship.
                 continue
 
-            asset: AssetData | None = None
-            referenced_asset_uuid = _valid_uuid(raw.get(CONF_ASSET_UUID))
-            if referenced_asset_uuid is not None:
-                candidate = data["assets"].get(referenced_asset_uuid)
-                if candidate is not None and _primary_device_id(candidate) in (
-                    None,
-                    device_id,
-                ):
-                    asset = candidate
-
-            if asset is None:
-                asset = self._find_asset_by_primary_device(data, device_id)
+            # Identity is decided by the canonical resolver; creating,
+            # refreshing, and rewriting stay here.
+            resolved_uuid = resolve_runtime_subentry_asset(data["assets"], raw)
+            asset: AssetData | None = (
+                None if resolved_uuid is None else data["assets"][resolved_uuid]
+            )
 
             device = device_registry.async_get(device_id)
             if asset is None:
