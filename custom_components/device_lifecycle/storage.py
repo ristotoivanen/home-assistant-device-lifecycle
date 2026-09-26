@@ -6,7 +6,7 @@ import asyncio
 import os
 import re
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -103,6 +103,9 @@ FIELD_SOURCES = frozenset(
 )
 
 _MutationResultT = TypeVar("_MutationResultT")
+# The active Runtime writer's strict checkpoint for one Asset. It returns only
+# after every observable Runtime delta is durably committed, or raises.
+RuntimeCheckpointCallback = Callable[[], Awaitable[Any]]
 _UNSET = object()
 _USER_EDITABLE_ASSET_FIELDS = (
     "name",
@@ -1194,6 +1197,8 @@ class AssetStoreManager:
         self._data: AssetStoreData = _empty_store_data()
         self._mutation_lock = asyncio.Lock()
         self._persistence_uncertain = False
+        # In-memory only: the active Runtime writer's checkpoint per Asset.
+        self._runtime_checkpoints: dict[str, RuntimeCheckpointCallback] = {}
 
     async def async_setup(self) -> None:
         """Load and validate persistent Asset Core data."""
@@ -1367,6 +1372,58 @@ class AssetStoreManager:
             )
 
         return await self._async_mutate(_commit)
+
+    def register_runtime_checkpoint(
+        self,
+        asset_uuid: str,
+        checkpoint: RuntimeCheckpointCallback,
+    ) -> Callable[[], None]:
+        """Register the active Runtime writer's strict checkpoint for one Asset.
+
+        The registration is in memory only and belongs to this manager, so a
+        reload starts empty. Only one writer may be registered per Asset; a
+        second registration fails closed. The returned callback removes only
+        this registration, so a stale unregister never removes a newer writer.
+        """
+        if asset_uuid in self._runtime_checkpoints:
+            raise AssetStoreError(
+                f"Asset {asset_uuid} already has an active Runtime writer",
+                code="runtime_checkpoint_writer_exists",
+            )
+        self._runtime_checkpoints[asset_uuid] = checkpoint
+
+        def _unregister() -> None:
+            if self._runtime_checkpoints.get(asset_uuid) is checkpoint:
+                del self._runtime_checkpoints[asset_uuid]
+
+        return _unregister
+
+    async def async_checkpoint_runtime(self, asset_uuid: str) -> Decimal | None:
+        """Durably persist all observable Runtime now and return the canonical total.
+
+        With an active Runtime writer, its checkpoint seals the active interval
+        without stopping tracking and commits every pending delta through
+        ``async_commit_runtime_delta``. A delta that cannot be committed stays
+        pending and the checkpoint raises; the old total is never reported as
+        a successful checkpoint. Without an active writer there is no
+        uncommitted Runtime to flush, so nothing is written and the canonical
+        total is returned as is: ``None`` while Runtime is uninitialized.
+
+        The returned value is always the canonical persisted total, the same
+        value ``runtime_total_seconds`` returns, never a display estimate.
+
+        Lock ordering: the writer's Runtime lock is taken first and this
+        manager's ``_mutation_lock`` only inside each delta commit. This method
+        never holds ``_mutation_lock`` itself, and it must never be awaited
+        while ``_mutation_lock`` is held, for example from inside a Store
+        mutation. A caller that needs the value for a later Store mutation
+        awaits the checkpoint first and starts the mutation afterwards.
+        """
+        self.runtime_total_seconds(asset_uuid)
+        checkpoint = self._runtime_checkpoints.get(asset_uuid)
+        if checkpoint is not None:
+            await checkpoint()
+        return self.runtime_total_seconds(asset_uuid)
 
     def runtime_total_seconds(self, asset_uuid: str) -> Decimal | None:
         """Return one Asset's detached canonical Runtime total."""

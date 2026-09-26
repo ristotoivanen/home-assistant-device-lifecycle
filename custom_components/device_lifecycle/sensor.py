@@ -1063,6 +1063,7 @@ class DeviceRuntimeHoursSensor(SensorEntity):
         self._unsub_source: Callable[[], None] | None = None
         self._unsub_interval: Callable[[], None] | None = None
         self._unsub_shutdown: Callable[[], None] | None = None
+        self._unsub_checkpoint: Callable[[], None] | None = None
 
     @property
     def native_value(self) -> Decimal:
@@ -1103,6 +1104,12 @@ class DeviceRuntimeHoursSensor(SensorEntity):
     async def async_added_to_hass(self) -> None:
         """Start a fresh observable interval and register Runtime listeners."""
         await super().async_added_to_hass()
+
+        # Register first so a duplicate writer fails before any listener exists.
+        self._unsub_checkpoint = self._manager.register_runtime_checkpoint(
+            self._asset_uuid,
+            self.async_checkpoint_runtime,
+        )
 
         current_state = self.hass.states.get(self._source_entity_id)
         if self._is_active(current_state, currently_active=False):
@@ -1182,6 +1189,24 @@ class DeviceRuntimeHoursSensor(SensorEntity):
             await self._async_flush_pending()
             self.async_write_ha_state()
 
+    async def async_checkpoint_runtime(self) -> Decimal:
+        """Strictly checkpoint observable Runtime on request and keep tracking.
+
+        Serialized with every other Runtime operation by the Runtime lock:
+        active elapsed time is sealed behind any existing pending deltas, the
+        interval continues from now, and all pending deltas are committed in
+        order. Unlike the best-effort background checkpoints, any delta that
+        cannot be committed stays pending and the request raises.
+        """
+        async with self._runtime_lock:
+            if self._active_since is not None:
+                self._seal_active(self._monotonic(), continue_active=True)
+            try:
+                await self._async_flush_pending(strict=True)
+            finally:
+                self.async_write_ha_state()
+            return self._committed_seconds
+
     async def _handle_shutdown(self, _event: Event) -> None:
         """Attempt a final checkpoint during normal Home Assistant shutdown."""
         async with self._runtime_lock:
@@ -1205,8 +1230,13 @@ class DeviceRuntimeHoursSensor(SensorEntity):
 
         self._active_since = now if continue_active else None
 
-    async def _async_flush_pending(self) -> None:
-        """Commit pending deltas in order, retaining every failed delta."""
+    async def _async_flush_pending(self, *, strict: bool = False) -> None:
+        """Commit pending deltas in order, retaining every failed delta.
+
+        Background checkpoints are best effort: a failure is logged and the
+        delta is retried later. With ``strict`` the failure also raises, so an
+        explicit checkpoint never reports an uncommitted delta as durable.
+        """
         while self._pending:
             pending = self._pending[0]
             try:
@@ -1226,6 +1256,12 @@ class DeviceRuntimeHoursSensor(SensorEntity):
                     ),
                     err,
                 )
+                if strict:
+                    raise AssetStoreError(
+                        f"Runtime checkpoint for Asset {self._asset_uuid} could "
+                        "not be persisted; the Runtime remains pending",
+                        code="runtime_checkpoint_failed",
+                    ) from err
                 return
 
             expected_committed = pending.expected_total + pending.delta
@@ -1235,6 +1271,12 @@ class DeviceRuntimeHoursSensor(SensorEntity):
                     "the delta remains pending",
                     self._asset_uuid,
                 )
+                if strict:
+                    raise AssetStoreError(
+                        f"Runtime checkpoint for Asset {self._asset_uuid} returned "
+                        "an unexpected total; the Runtime remains pending",
+                        code="runtime_checkpoint_failed",
+                    )
                 return
             self._committed_seconds = committed
             self._pending.pop(0)
@@ -1245,6 +1287,7 @@ class DeviceRuntimeHoursSensor(SensorEntity):
             "_unsub_source",
             "_unsub_interval",
             "_unsub_shutdown",
+            "_unsub_checkpoint",
         ):
             unsubscribe = getattr(self, attribute)
             if unsubscribe is not None:
