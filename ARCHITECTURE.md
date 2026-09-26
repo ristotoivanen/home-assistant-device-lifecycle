@@ -628,6 +628,19 @@ Unknown starting information is not a validation error. The person must be able 
 
 without being forced to guess a date or a Runtime value. UNKNOWN is then a deliberate and safe state, consistent with how Lifecycle `unknown`, Deployment `unknown`, and an uninitialized Runtime total (`null`, never zero) are already treated. How a schedule with an unknown baseline reports its due state is part of the due and calendar semantics.
 
+### Schedule baseline lock
+
+A maintenance schedule's explicit calculation baseline, the anchor its due calculation starts from (`initial_anchor` in the internal examples above), may be changed only while the schedule has never been referenced by any maintenance event, including a voided event.
+
+- A new schedule with no history may still change where its counting starts.
+- Once any maintenance event has referenced the schedule, the baseline is locked.
+- A voided event still counts as a historical reference. Voiding an event never makes a schedule unused again and never unlocks the baseline.
+- Changing the baseline must not become a hidden way to reset a schedule or restart its countdown. Once maintenance history exists, a new cycle starts from a maintenance event, never from moving the baseline.
+
+For the person, this means the starting point of a schedule can be corrected only before the schedule's first maintenance event. After that, no baseline reset is offered; correcting and voiding events remain the historical mechanisms, and voiding does not make the baseline editable again. How this is presented is decided in the Maintenance UX v0.1 checkpoint below.
+
+Store boundary: the Store 4.x design must keep enough canonical maintenance history to determine whether a schedule has ever been referenced by any maintenance event, including voided events. The lock is derived from that canonical history. It must not be a separately stored flag that has to be kept in sync, and no field is added for it when the event-to-schedule references already answer the question. The exact Store 4.x structure is decided in the Store 4.x design.
+
 ### Design review rule
 
 Every new 0.8.x domain and storage decision is also judged by one question:
