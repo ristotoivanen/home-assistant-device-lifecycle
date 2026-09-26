@@ -6,7 +6,9 @@
 | Schema baseline | `73234167ec88723879df92dc4ddc3e3e7b54281c` |
 | Pre-activation core | IMPLEMENTED on the branch (`bf7a110` … `21fc765`); not reachable from production |
 | Gate 5 (Archive and Store version) | RESOLVED AT DESIGN LEVEL (2026-09-26): Store 4.1, see [Asset Archive and Store 4.1 frozen architecture](asset-archive-store-v4.md) |
-| Store 4.1 activation | NOT IMPLEMENTED |
+| Store 4.1 activation | NOT IMPLEMENTED; sequenced in [Store 4.1 implementation plan](store-4-1-implementation-plan.md) |
+
+**Superseded remaining phases.** The remaining production work of this plan, commits 7–9 in section 11, the activation strategy, and Gates 4–7 in section 14, is replaced by the coordinated [Store 4.1 implementation plan](store-4-1-implementation-plan.md), the single activation sequence for Store 4.1, Asset Archive, and Maintenance. This plan remains the record of the implemented Maintenance core and the Maintenance user-interface and entity requirements in section 9, which that plan implements in its WP16 and WP17.
 
 The authoritative schema is [Maintenance Store 4.x frozen schema](maintenance-store-v4-schema.md). The complete Store 4.1 target, Asset Archive, and the migration pipeline are canonical in [Asset Archive and Store 4.1 frozen architecture](asset-archive-store-v4.md). This plan does not restate it: every record shape, canonical representation, invariant, mutation rule, and projection rule referenced here is defined there. Where this plan and the schema disagree, the schema wins and the plan is corrected.
 
@@ -210,6 +212,8 @@ Updates come from the refresh after each Store change (Archive and Restore use t
 
 ## 11. Commit sequence
 
+Rows 7–9, the next activation prerequisites, and the activation strategy below are superseded by the [Store 4.1 implementation plan](store-4-1-implementation-plan.md); they are kept as the historical plan.
+
 Every commit keeps the full test suite green on the minimum and baseline Home Assistant versions. Nothing is merged to `main` or released before Gate 6.
 
 | # | Purpose | Files | Status |
@@ -278,6 +282,8 @@ Every commit keeps the full test suite green on the minimum and baseline Home As
 | Unreachability regression | A pre-activation commit exposes Maintenance | Reachability test | Classes only; wiring only in commit 8 | Low |
 
 ## 14. Gates
+
+Gates 4–7 are superseded by the Gates S1–S7 of the [Store 4.1 implementation plan](store-4-1-implementation-plan.md#4-gate-model).
 
 | Gate | Evidence required | Status |
 |---|---|---|
