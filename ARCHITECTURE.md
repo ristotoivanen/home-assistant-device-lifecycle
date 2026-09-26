@@ -572,7 +572,102 @@ Examples from the existing roadmap include:
 
 Growing histories do not belong in ConfigSubentries. ConfigSubentries remain suitable for active user configuration; persistent history belongs in explicitly versioned Device Lifecycle storage.
 
-These boundaries reserve 0.8.x for Maintenance, 0.9.x for Portability & Hardening, and a later release for Documents. None is represented by placeholder 3.1 records.
+These boundaries reserve 0.8.x for Maintenance, including reversible Asset archive and restore, 0.9.x for Portability, Data Safety & Hardening, including controlled permanent Asset deletion, and a later release for Documents. None is represented by placeholder 3.1 records. See [Planned: Asset archive and permanent deletion](#planned-asset-archive-and-permanent-deletion).
+
+## Planned: Asset archive and permanent deletion
+
+Status: **planning only**. Nothing in this section is implemented. Device Lifecycle 0.7.7 provides neither Asset archive nor Asset deletion, Store 3.1 contains no archive or deletion state, and ConfigEntry remains version 4. This section records the semantics and release boundary that later designs must follow. Where a detail is not yet decided, it is marked `OPEN DESIGN` with the release whose design owns it.
+
+Two different operations are planned, in two different releases:
+
+| | Archive Asset | Permanent deletion (purge) |
+|---|---|---|
+| Purpose | take an Asset out of active use while keeping it | remove a record that must not be kept even archived |
+| Reversible | yes, through restore | never |
+| Identity | preserved | retired permanently, never reused |
+| History | preserved | removed, except the minimal historical reference below |
+| Release | 0.8.x — Maintenance | 0.9.x — Portability, Data Safety & Hardening |
+
+Neither operation changes the [identity invariants](#identity-invariants): an Asset is one physical item, `asset_uuid` is its canonical technical identity, `DLxxxx` is its permanent human-facing identity, Asset IDs are allocated monotonically, and neither identifier is ever recycled. A Home Assistant device, Purchase, Runtime configuration, Deployment, Lifecycle, Replacement, or Maintenance record never defines or redefines Asset identity, and archive or purge must not introduce such a rule.
+
+### Archive Asset (0.8.x)
+
+Archive is a normal user operation. It removes an Asset from active use without destroying its identity or history. Maintenance history, planned for 0.8.x, is growing Asset-owned history, so 0.8.x needs a way to retire Assets that keeps that history intact rather than a way to destroy it.
+
+Locked semantics:
+
+1. Archive preserves `asset_uuid`.
+2. Archive preserves the `DLxxxx` Asset ID and never releases it for reuse. `next_asset_number` is unchanged.
+3. Archive preserves all historical data: Purchase membership and relationship provenance, the Lifecycle event chain, every Replacement record including voided records, the canonical Runtime total, and future Maintenance history.
+4. Archive is reversible. Restoring an archived Asset returns the same Asset: it keeps the same `asset_uuid` and `DLxxxx`, allocates nothing, and does not behave as a newly created Asset.
+5. Entity `unique_id` values must remain stable across archive and restore. Archive and restore must not silently break Recorder continuity: any case in which the chosen design cannot keep an entity's history continuous must be explicit and documented. This rule does not claim that Recorder continuity can always be guaranteed; the guarantees themselves are open design below.
+6. Archive is not a Lifecycle status. Lifecycle `disposed`, `retired`, and `lost` describe the physical item; archive describes whether Device Lifecycle keeps the record in active use. Archiving is neither `disposed` nor a replacement for it, and recording a Lifecycle status never archives an Asset.
+7. Archive is not permanent deletion. An archived Asset remains a complete canonical Asset.
+8. Archive and restore are explicit user mutations. Device Lifecycle never archives or restores an Asset automatically, for example because its Home Assistant device is missing, its Lifecycle status changed, or it has been replaced.
+9. Archive state is canonical Store data and therefore requires an explicit, versioned Store migration. The Store 3.1 schema does not represent it.
+
+Archive must not succeed in a state where it would leave the Asset or its relationships inconsistent. At minimum, an Asset with an active dependency must not be archivable until that dependency is resolved, for example:
+
+- a Deployment that still records the Asset as installed (`deployed`)
+- active Runtime tracking by a Runtime configuration
+- any other active relationship whose archiving would leave that relationship inconsistent
+
+`OPEN DESIGN — deferred to 0.8.x design`:
+
+- the exact dependency matrix, including how primary and related Home Assistant device relationships, Purchase configurations, active replacement relationships, and Maintenance schedules are treated
+- whether any Lifecycle status is required before archive, given that archive itself never changes Lifecycle
+- the Store representation of archive state, its migration, and any archive or restore history
+- how an archived Asset is exposed in Home Assistant: its Asset Device and its entities
+- the Entity Registry lifecycle during archive: whether an archived Asset's entities are removed, disabled, or retained
+- which `entity_id` preservation guarantees archive and restore give
+- which Recorder and history continuity guarantees archive and restore give. If archive removes an Entity Registry entry, whether restore gets the same `entity_id` back can depend on Home Assistant's retention of deleted entities, which is time-limited. This section does not assume that retention for any archive design
+- how archived Assets appear in Asset management, Quick Add targets, replacement targets, and Repairs
+- how the optional dashboard's existing "Archived" inventory group relates to archive state. Today that group is only a presentation of Lifecycle `retired`, `disposed`, and `lost` and has no connection to this planned operation
+
+### Permanent deletion / purge (0.9.x)
+
+Permanent deletion is out of scope for 0.8.x. It belongs to **0.9.x — Portability, Data Safety & Hardening**, because irreversible data destruction must not be introduced before export, recovery, and historical-reference semantics exist.
+
+Purge is an exceptional, explicit, and irreversible operation for records that must not be kept even archived, for example an Asset created by mistake or a test Asset.
+
+Locked principles:
+
+1. An Asset must be archived before it can be purged.
+2. An Asset must not be purged while its Deployment records it as installed.
+3. Active Runtime tracking must be resolved before purge.
+4. Active Maintenance schedule dependencies must be resolved before purge.
+5. Home Assistant device relationships must be removed or explicitly handled before purge. Purge never mutates an external Home Assistant device.
+6. Replacement relationships must be resolved in a defined way before purge. History must not become inconsistent (see below).
+7. The user must be shown what data will be removed before confirming.
+8. Purge requires an explicit confirmation.
+9. Purge is irreversible. Restore does not apply to a purged Asset.
+10. The purged `DLxxxx` is never reused. `next_asset_number` never decreases, so it stays greater than every Asset number ever allocated, including purged ones.
+11. The purged `asset_uuid` is never reused. No later creation, including an idempotent Quick Create replay that carries that UUID, may recreate an Asset under it.
+
+`OPEN DESIGN — deferred to 0.9.x design`: the user flow, the storage implementation and migration, exactly which Asset-owned data is removed and which is kept, how Purchase membership, Lifecycle events, Replacement records, Runtime totals, and Maintenance history that belong to or reference the Asset are handled, what happens to the Asset Device and entities, and how export and recovery relate to purge.
+
+### Historical references to purged Assets
+
+Purge must not make history inconsistent. Records that remain after a purge can still refer to the purged Asset: a Purchase once contained it, and a Replacement record names it as predecessor or successor. The whole-Store validation that today requires every referenced Asset to exist must be able to interpret such a reference, and the identity invariants must remain provable after the Asset record is gone.
+
+The preferred design direction is a minimal historical tombstone, a persistent reference that keeps only the identity needed to interpret history. Semantically:
+
+```text
+DeletedAssetReference
+├── asset_uuid
+├── asset_id
+└── deleted_at
+```
+
+A tombstone:
+
+- is not an active Asset and is never restored as one
+- must not create Device Lifecycle entities
+- must not create a Home Assistant Device Registry device
+- must not take part in Runtime, Maintenance, Deployment, or normal Asset management logic
+- carries no name, metadata, or history beyond the fields needed to interpret a reference
+
+`OPEN DESIGN — deferred to 0.9.x design`: the exact tombstone storage model, its fields beyond the minimal identity above, its Store migration, and how history that references a tombstone is presented.
 
 ## 0.7.5 Asset management flow and setup resilience
 

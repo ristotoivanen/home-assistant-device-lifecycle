@@ -653,9 +653,16 @@ For reproducible problems, open a [GitHub issue](https://github.com/ristotoivane
 - **0.7.6 — Stale device references in Repairs**
 - **0.7.7 — Entity Registry placement hardening**
 - **0.8.x — Maintenance**
-- **0.9.x — Portability & Hardening**
+  - Maintenance schedules, history, and status/workflows
+  - reversible Asset archive and restore that keeps the Asset ID, internal identity, and history
+- **0.9.x — Portability, Data Safety & Hardening**
+  - export/import and recovery semantics
+  - controlled permanent Asset deletion (purge), with historical references for deleted Assets; Asset IDs are never reused
+  - compatibility and hardening work
 - **Future — Documents**
 - **1.0 — Stable**
+
+Asset archive and permanent deletion are planned only; see [Planned: Asset archive and permanent deletion](ARCHITECTURE.md#planned-asset-archive-and-permanent-deletion).
 
 ### Pending validation
 
