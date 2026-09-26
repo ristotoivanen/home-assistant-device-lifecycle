@@ -1106,11 +1106,15 @@ def test_module_has_no_home_assistant_clock_or_store_dependencies() -> None:
     assert not any(isinstance(node, ast.AsyncFunctionDef) for node in ast.walk(tree))
 
 
+# Unwired pre-activation library modules that may build on the projection.
+_PRE_ACTIVATION_LIBRARY = {"maintenance_mutations.py"}
+
+
 def test_projection_is_not_wired_into_production() -> None:
     """No production module imports the projection before activation."""
     package = MODULE_PATH.parent
     for path in package.glob("*.py"):
-        if path == MODULE_PATH:
+        if path == MODULE_PATH or path.name in _PRE_ACTIVATION_LIBRARY:
             continue
         assert "maintenance_projection" not in _imports(
             ast.parse(path.read_text(encoding="utf-8"))
