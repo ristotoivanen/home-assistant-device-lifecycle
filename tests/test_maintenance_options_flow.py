@@ -12,13 +12,17 @@ from __future__ import annotations
 from copy import deepcopy
 from decimal import Decimal
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import entity_registry as er
 
-from custom_components.device_lifecycle.config_flow import NOT_SELECTED
+from custom_components.device_lifecycle.config_flow import (
+    NOT_SELECTED,
+    _short_name,
+    _unique_labels,
+)
 from custom_components.device_lifecycle.const import (
     CONF_ASSET_UUID,
     CONF_CALENDAR_UNIT,
@@ -2252,3 +2256,145 @@ async def test_identical_event_labels_get_a_stable_identity_only_when_needed(
     events = manager._data["maintenance_events"]
     assert events[second]["voided_at"] is not None
     assert events[first]["voided_at"] is None
+
+
+# --- Final labels are unique even when a suffix meets user text ---------------------
+
+
+def _unique(labels: dict[str, str]) -> bool:
+    return len({label.casefold() for label in labels.values()}) == len(labels)
+
+
+def test_a_suffix_that_meets_user_text_is_separated_again() -> None:
+    """The reviewer's example: C is named exactly like A's first fallback."""
+    interval = "every 6 month(s)"
+    ordinary = {
+        CAL: "Filter",
+        TWIN: "Filter",
+        RUN: f"Filter ({interval}) ({CAL})",
+    }
+
+    labels = _unique_labels(ordinary, lambda _uuid: interval)
+
+    assert _unique(labels)
+    assert labels == {
+        CAL: f"Filter ({interval}) ({CAL}) ({CAL})",
+        TWIN: f"Filter ({interval}) ({TWIN})",
+        RUN: f"Filter ({interval}) ({CAL}) ({RUN})",
+    }
+    # The same result from any order of the same data.
+    assert (
+        _unique_labels(dict(reversed(ordinary.items())), lambda _: interval) == labels
+    )
+
+
+def test_chained_forgeries_and_case_still_end_unique() -> None:
+    """Each forged label matches the next fallback; case is ignored."""
+    ordinary = {
+        CAL: "Filter",
+        TWIN: "FILTER",
+        RUN: f"filter ({CAL})",
+        BOTH: f"Filter ({CAL}) ({CAL})",
+        OTHER_ASSET_SCHEDULE: "Belt",
+    }
+
+    labels = _unique_labels(ordinary)
+
+    assert _unique(labels)
+    assert labels[OTHER_ASSET_SCHEDULE] == "Belt"
+    assert labels[TWIN] == f"FILTER ({TWIN})"
+    for order in (reversed(ordinary.items()), sorted(ordinary.items())):
+        assert _unique_labels(dict(order)) == labels
+
+
+def test_event_shaped_labels_forged_after_a_fallback_end_unique() -> None:
+    first = "e0000000-0000-4000-8000-000000000001"
+    second = "e0000000-0000-4000-8000-000000000002"
+    third = "e0000000-0000-4000-8000-000000000003"
+    plain = "10 Aug 2026 · Service · Active"
+    ordinary = {first: plain, second: plain, third: f"{plain} ({first})"}
+
+    labels = _unique_labels(ordinary)
+
+    assert _unique(labels)
+    assert labels[second] == f"{plain} ({second})"
+    assert labels[first] != labels[third]
+    assert _unique_labels({third: "9 Aug 2026 · Other · Active"}) == {
+        third: "9 Aug 2026 · Other · Active"
+    }
+
+
+async def test_a_schedule_named_like_a_fallback_label_stays_distinct_in_the_flow(
+    hass: HomeAssistant, asset_store_data: AssetStoreData, freezer: Any
+) -> None:
+    """Names are normally cut to fit a row; without the cut, the reviewer's
+    example is reachable through the flow, and the labels stay distinct."""
+    forged = f"Filter (every 6 month(s)) ({CAL})"
+    data = _data(
+        asset_store_data,
+        _schedule(CAL, "Filter"),
+        _schedule(TWIN, "Filter"),
+        _schedule(RUN, forged),
+    )
+    flow, _entry, manager = await _flow(hass, freezer, data)
+    with patch(
+        "custom_components.device_lifecycle.config_flow._short_name",
+        side_effect=lambda text, *_args: str(text),
+    ):
+        labels = _labels(
+            await flow.async_step_maintenance_open_schedule(), CONF_SCHEDULE_UUID
+        )
+        record = _labels(
+            await flow.async_step_maintenance_record(), CONF_SCHEDULE_UUIDS
+        )
+        manager._data["maintenance_schedules"] = dict(
+            reversed(list(manager._data["maintenance_schedules"].items()))
+        )
+        again = _labels(
+            await flow.async_step_maintenance_open_schedule(), CONF_SCHEDULE_UUID
+        )
+
+    assert _unique(labels)
+    assert labels[RUN] != labels[CAL]
+    assert labels[TWIN] == f"Filter (every 6 month(s)) ({TWIN})"
+    assert record == labels == again
+    view = await _open(flow, RUN)
+    assert view["description_placeholders"]["schedule"] == _short_name(forged)
+
+
+async def test_an_event_titled_like_a_fallback_label_stays_distinct(
+    hass: HomeAssistant, asset_store_data: AssetStoreData, freezer: Any
+) -> None:
+    first = "e0000000-0000-4000-8000-000000000001"
+    second = "e0000000-0000-4000-8000-000000000002"
+    crafted = _event(
+        "e0000000-0000-4000-8000-000000000003",
+        "2026-08-10",
+        schedules=[],
+        title=f"Service · Active ({first})",
+    )
+    data = _data(
+        asset_store_data,
+        events=(
+            _event(first, "2026-08-10", schedules=[]),
+            _event(second, "2026-08-10", schedules=[]),
+            crafted,
+        ),
+    )
+    flow, _entry, _unused = await _flow(hass, freezer, data)
+    await flow.async_step_maintenance_void_event()
+    with patch(
+        "custom_components.device_lifecycle.config_flow._short_name",
+        side_effect=lambda text, *_args: str(text),
+    ):
+        labels = _labels(
+            await flow.async_step_maintenance_history_filter({}), CONF_EVENT_UUID
+        )
+
+    assert _unique(labels)
+    assert labels[first] == f"10 Aug 2026 · Service · Active ({first})"
+    assert labels[second] == f"10 Aug 2026 · Service · Active ({second})"
+    # Its ordinary label is unique, so it is unchanged.
+    assert labels[crafted["event_uuid"]] == (
+        f"10 Aug 2026 · Service · Active ({first}) · Active"
+    )

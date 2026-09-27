@@ -756,19 +756,40 @@ _SECONDS_PER_HOUR = Decimal(3600)
 _HOURS_DISPLAY = Decimal("0.000001")
 
 
-def _disambiguated(
-    labels: dict[str, str], detail: Callable[[str], str]
-) -> dict[str, str]:
-    """Add ``detail(value)`` to exactly the labels that read alike.
-
-    Labels are compared as people read them, ignoring case. The result
-    depends only on the values and labels given, never on their order.
-    """
+def _colliding(labels: dict[str, str]) -> set[str]:
+    """The values whose labels read alike, compared ignoring case."""
     counts = Counter(label.casefold() for label in labels.values())
-    return {
-        value: f"{label} ({detail(value)})" if counts[label.casefold()] > 1 else label
-        for value, label in labels.items()
-    }
+    return {value for value, label in labels.items() if counts[label.casefold()] > 1}
+
+
+def _unique_labels(
+    labels: dict[str, str],
+    readable: Callable[[str], str] | None = None,
+) -> dict[str, str]:
+    """Make every label distinct, touching only labels that read alike.
+
+    ``labels`` maps a canonical UUID to its ordinary label. Labels that read
+    alike first get ``readable(value)``, once. Then, while any labels still
+    read alike, each of them gets its own UUID, and the whole set is checked
+    again.
+
+    This ends with every label distinct: two labels that read alike and
+    both get their own, different UUID appended differ right after their
+    common text, and later passes only append, so that pair never reads
+    alike again. Every pass therefore separates at least one pair that has
+    never been separated before; with n values there are at most
+    n * (n - 1) / 2 such pairs, so the loop stops, and it stops only when
+    no two labels read alike. The result depends only on the values and
+    their labels, never on their order.
+    """
+    result = dict(labels)
+    if readable is not None:
+        for value in _colliding(result):
+            result[value] = f"{result[value]} ({readable(value)})"
+    while colliding := _colliding(result):
+        for value in colliding:
+            result[value] = f"{result[value]} ({value})"
+    return result
 
 
 def _hours_selector() -> selector.NumberSelector:
@@ -5184,11 +5205,10 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         """
         schedules = self._manager.maintenance_schedules_for_asset(asset["asset_uuid"])
         by_uuid = {schedule["schedule_uuid"]: schedule for schedule in schedules}
-        labels = _disambiguated(
+        labels = _unique_labels(
             {uuid: _short_name(schedule["name"]) for uuid, schedule in by_uuid.items()},
             lambda uuid: self._schedule_interval_text(by_uuid[uuid]),
         )
-        labels = _disambiguated(labels, lambda uuid: uuid)
         return [
             selector.SelectOptionDict(value=uuid, label=labels[uuid])
             for uuid in by_uuid
@@ -6800,9 +6820,8 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         events = self._manager.maintenance_events_for_asset(asset["asset_uuid"])
         matching = self._events_newest_first(asset, date_from=date_from, date_to=date_to)
         # Records alike in date, title, and state get their identity.
-        labels = _disambiguated(
-            {event["event_uuid"]: self._event_label(event, events) for event in matching},
-            lambda uuid: uuid,
+        labels = _unique_labels(
+            {event["event_uuid"]: self._event_label(event, events) for event in matching}
         )
         options = [
             self._not_selected_option(),
