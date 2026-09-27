@@ -4,14 +4,14 @@
 |---|---|
 | Status | **FROZEN** |
 | Schema freeze approved | 2026-09-26 |
-| Implementation status | not implemented |
+| Implementation status | implemented for 0.8.0: persisted from Store 4.1 activation in `abfdc7b` (WP9), manager API `5523e53` (WP11), entities `afd809e` (WP16), user interface `5377c8b` (WP17); see the [Store 4.1 implementation plan](store-4-1-implementation-plan.md#12-implementation-and-gate-status) |
 | Store version number | Store 4.1 (`STORAGE_VERSION = 4`, `STORAGE_MINOR_VERSION = 1`), assigned 2026-09-26 by the coordinated [Asset Archive and Store 4.1 frozen architecture](asset-archive-store-v4.md) |
 | Archive coordination 2026-09-26 | Archived-Asset projection and mutation rules added; see [Archived Assets](#archived-assets). No persisted Maintenance record shape or Maintenance load invariant changed. |
 | Projection erratum 2026-09-26 | Future effective calendar anchors project UNKNOWN; see [Future calendar anchor](#future-calendar-anchor). No persisted schema fields or load invariants changed. |
 
 This document is the canonical persisted schema for 0.8.x Maintenance. It is implementation-independent. It freezes the persisted record shapes, their canonical representations, the whole-Store load invariants, the mutation rules that protect them, and the derived projection semantics that the persisted data must support. A change to anything in this document is a schema revision and needs an explicit review; it is not an implementation detail.
 
-The design constraints this schema satisfies are in [ARCHITECTURE.md: Planned: 0.8.x Maintenance usability constraints](../ARCHITECTURE.md#planned-08x-maintenance-usability-constraints). The Asset identity, persistence, and migration rules in [ARCHITECTURE.md](../ARCHITECTURE.md) apply unchanged.
+The design constraints this schema satisfies are in [ARCHITECTURE.md: 0.8.x Maintenance usability constraints](../ARCHITECTURE.md#08x-maintenance-usability-constraints). The Asset identity, persistence, and migration rules in [ARCHITECTURE.md](../ARCHITECTURE.md) apply unchanged.
 
 ## Concepts
 

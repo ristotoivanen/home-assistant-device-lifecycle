@@ -2,9 +2,9 @@
 
 | | |
 |---|---|
-| Status | **APPROVED FOR IMPLEMENTATION** (planning document) |
+| Status | **IMPLEMENTED**: WP1–WP18 complete, all gates closed; see [12. Implementation and gate status](#12-implementation-and-gate-status). The sections below are the plan as approved. |
 | Code baseline | `5494942` (`docs: freeze coordinated Store 4.1 archive design`) |
-| Production Store | 3.1 (`STORAGE_VERSION = 3`, `STORAGE_MINOR_VERSION = 1`) |
+| Production Store | 3.1 at the plan baseline; 4.1 since WP9 (`abfdc7b`) |
 | Target Store | 4.1, frozen in [Asset Archive and Store 4.1 frozen architecture](asset-archive-store-v4.md) |
 | Maintenance schema | [Maintenance Store 4.x frozen schema](maintenance-store-v4-schema.md) |
 
@@ -311,7 +311,7 @@ Each work package is one commit. Every commit keeps the full test suite green on
     - `AssetStoreManager.archive_blockers(entry, asset_uuid) -> tuple[str, ...]`, a read-only preview for the user interface that is never authoritative
     - Runtime binding reservations are kept per ConfigEntry in `hass.data` under a `HassKey` (in memory only), so they survive a manager replacement by reload.
     - `RuntimeWriter` gains three capabilities next to `checkpoint` and `prepare_unload`: `durability`, a synchronous probe returning `RuntimeWriterDurability(observing: bool, pending: bool, committed_seconds: Decimal)`; `finalize`, a strict flush of already-pending deltas that never seals new time; and `retire`, described below. `register_runtime_checkpoint` takes them as keyword arguments and rejects registration for an archived Asset.
-    - `AssetStoreManager._runtime_archive_eligibility(data, asset_uuid) -> RuntimeArchiveEligibility`, a manager-private synchronous helper (see [Runtime Archive eligibility](#runtime-archive-eligibility)).
+    - `AssetStoreManager._runtime_archive_eligibility(data, asset_uuid) -> RuntimeArchiveEligibility`, a manager-private synchronous helper (see **Runtime Archive eligibility** in [WP13](#wp13--archive-and-restore-manager-api-and-runtime-serialization)).
     - `AssetStoreManager.async_finalize_runtime(asset_uuid)`: calls the writer's `finalize`; never holds `_mutation_lock` around it; raises and keeps every pending delta on failure.
     - `AssetStoreManager.async_retire_orphaned_runtime_writers(entry)`: for every registered writer whose Asset no longer has a resolving Runtime subentry (`runtime_subentries_resolving_to`), calls the writer's `retire`. Failures are logged and leave the writer quiesced with its pending deltas; they never block the reload that follows.
   - `sensor.py` (`DeviceRuntimeHoursSensor`), all under the existing `_runtime_lock`:
@@ -721,3 +721,43 @@ No generic domain event bus, migration framework, archive engine, cross-store tr
 | Maintenance `disabled` presentation value and preparation `binary_sensor` in 0.8.0 | Owner | Before WP16 starts | WP16, WP17 |
 
 Everything else in this plan is decided.
+
+## 12. Implementation and gate status
+
+All work packages are implemented on `claude/admiring-turing-yqbbb9`:
+
+| WP | Commit |
+|---|---|
+| WP1 — exact record shapes and migration-source preflight | `5d64c9d` |
+| WP2 — Archive Store transform and state validation | `2424c10` |
+| WP3 — inactive Store 4.1 validator and migration step | `8507cc5` |
+| WP4 — Archive and Restore snapshot mutations | `636da9c` |
+| WP5 — archived-aware Maintenance pure domain | `5325a4c` |
+| WP6 — canonical Runtime subentry identity resolver | `aa4d724` |
+| WP7 — parent-owned Runtime Entity Registry identity | `0a30142` |
+| WP8 — Test HA gate evidence (5.2, 5.3) | `0f9b21f`, `898d01a` |
+| WP9 — Store 4.1 activation | `abfdc7b` |
+| WP10 — current-management guards | `1bd28b4` |
+| WP11 — Maintenance manager API with replay recovery | `5523e53` |
+| WP12 — archived Runtime subentry quarantine | `e253203` |
+| WP13 — Archive and Restore manager API and Runtime serialization | `1af56ff` |
+| WP14 — Store publish refresh without reload | `17068bb` |
+| WP15 — Archive and Restore user interface | `a93cd96` |
+| WP16 — Maintenance entities | `afd809e` |
+| WP17 — Maintenance user interface | `5377c8b`, with selector-label corrections `0f36f1d` and `ff8652e` |
+| WP18 — release documentation | the commit that adds this section |
+
+The owner decisions of section 11 were all made: 5.2 and 5.3 passed before WP9, the Archive wording was approved in the WP15 review, the Maintenance status sensor includes the `disabled` presentation value, and the preparation `binary_sensor` ships in 0.8.0 (a disabled Schedule presents preparation as `off`; preparation UNKNOWN stays Home Assistant unknown). Gate 5.4 passed on the release candidate `ff8652e` with Home Assistant Core 2026.9.3 and Home Assistant OS 18.3; the evidence is in [Persistent Test HA lab: Gate 5.4](test-ha-lab.md#gate-54--store-41-upgrade-and-smoke).
+
+| Gate | Status |
+|---|---|
+| S1 — migration-source safety | CLOSED |
+| S2 — pure Store 4.1 model | CLOSED |
+| S3 — Runtime identity continuity | CLOSED |
+| S4 — Store 4.1 activation | CLOSED |
+| S5 — production mutation persistence | CLOSED |
+| S6 — Runtime/Archive HA safety | CLOSED |
+| Gate 5.4 — Store 4.1 upgrade and smoke | CLOSED (PASS) |
+| S7 — Home Assistant surface and release readiness | CLOSED with WP18 |
+
+Closing S7 means the branch meets every defined implementation and external validation gate. Tagging, publishing the release, and merging are separate steps not covered by these gates. The integration manifest still reports version `0.7.7`; the version change for the 0.8.0 release is part of the release preparation, not of WP18.

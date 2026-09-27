@@ -228,6 +228,103 @@ Gate 5.3: **PASS**.
 | S4 — Store 4.1 activation | NOT STARTED; its preconditions S1–S3 are now met |
 | Gate 5.4 — Store 4.1 upgrade and smoke | PENDING; required before the branch is merged or released (Gate S7) |
 
+## Gate 5.4 — Store 4.1 upgrade and smoke
+
+Owner-run check of section 5.4 and the S7 smoke of the [Store 4.1 implementation plan](store-4-1-implementation-plan.md#54-store-41-upgrade-branch-build-with-wp9-or-later), on 2026-09-27, after a Home Assistant backup. As for the earlier gates, only key names, counts, Asset IDs, states, and outcomes are recorded. The one Runtime identity below is synthetic lab evidence named by the gate itself.
+
+### Environment
+
+| | |
+|---|---|
+| Home Assistant Core | 2026.9.3 |
+| Home Assistant OS | 18.3 |
+| Release candidate | `ff8652ec29e5b90433604cd4d40601f63a617176` on `claude/admiring-turing-yqbbb9` |
+| Pre-upgrade Store | version 3, minor version 1; 9 Assets, 4 Purchases |
+
+### Pre-upgrade source inspection (5.2 repeated)
+
+- exact Store 3.1 top-level shape: PASS
+- exact Asset source shape: PASS
+- exact Purchase source shape: PASS
+- the inspection was read-only, and the live Store's SHA-256 was unchanged across it
+
+### Migration
+
+- the Store reported version 4, minor version 1
+- exactly the seven Store 4.1 top-level keys: PASS
+- every Asset gained `archived_at: null`
+- both Maintenance collections were initially empty
+- all 9 Assets and 4 Purchases were preserved
+- the pre-existing data compared equal to the pre-upgrade copy after projecting the 4.1 additions (`archived_at` and the Maintenance collections) away, except for the canonical Runtime total of DL0003, which kept accumulating live while tracking ran between the two reads. With canonical Runtime totals excluded from the comparison, the data was byte-for-byte identical. The DL0003 difference is live Runtime accumulation, not a change made by the migration.
+
+### Archive and Restore
+
+- **DL0008.** The Archive preview correctly blocked Archive because the Asset was installed (`deployed`). No automatic undeploy was performed.
+- **DL0005.** Archive succeeded. The Asset kept Asset ID DL0005, Lifecycle stayed `active`, and Deployment stayed `not_deployed`. The restricted archived view appeared. Restore succeeded: `archived_at` returned to `null`, the Asset returned to active management, and no Repairs issue remained.
+
+### Runtime identity continuity (DL0002)
+
+| | |
+|---|---|
+| Runtime entity | `sensor.dl_lab_device_01_runtime_hours` |
+| Unique ID | `eaa208df-88f9-4ec3-b165-2f6058faad39_runtime_hours` |
+| Canonical `runtime.total_seconds` before and after remove and re-add | `42.2740369420207573874` |
+
+- Runtime tracking was removed, and the Runtime Entity Registry entry remained.
+- The canonical total did not reset.
+- Runtime tracking was added again: the same `entity_id` and unique ID were reused, `config_subentry_id` stayed `null`, and there was exactly one matching registry entry, with no `_2` duplicate.
+- No Runtime was invented for the time without tracking.
+
+### Maintenance (DL0009)
+
+Schedule "Gate 5.4 daily maintenance": calendar interval 1 day, initial anchor 2026-09-25, preparation reminder 1 day.
+
+| Step | Result | Status | Next due |
+|---|---|---|---|
+| Create | schedule created | OVERDUE | 2026-09-26 |
+| Mark done, Just now | the starting-point lock notice was shown and needed explicit confirmation before saving | OK | 2026-09-28 |
+| Correct | the original 2026-09-27 Event was kept as Corrected; the new 2026-09-26 Event is Active with Runtime left unknown | DUE | 2026-09-27 |
+| Select the Corrected Event again | rejected safely | — | — |
+| Void the active corrected Event | the 2026-09-26 Event became Voided; the projection fell back to the initial anchor | OVERDUE | 2026-09-26 |
+| Disable | the schedule showed Disabled; history was kept | Disabled | — |
+
+After the final restart the Schedule was still `enabled: false`, with the 1-day calendar interval and the 2026-09-25 initial anchor. Both Maintenance Events were preserved and voided (the original by the correction, the correction manually), and the correction Event still referenced the original through `corrects_event_uuid`.
+
+### Final restart
+
+| | |
+|---|---|
+| Store | 4.1; 9 Assets, 4 Purchases, 1 Maintenance schedule, 2 Maintenance events |
+| DL0005 | active, `archived_at: null`, Lifecycle `active`, Deployment `not_deployed` |
+| DL0002 | Runtime total preserved; same `entity_id` and unique ID; `config_subentry_id` null |
+| Maintenance | schedule disabled; history persisted |
+| Repairs | **Settings → System → Repairs**: "There are currently no repairs pending." No Device Lifecycle Repairs issue remained after the Gate 5.4 sequence. |
+
+Gate 5.4: **PASS**.
+
+## External gate summary
+
+| Gate | Build | Home Assistant | Result |
+|---|---|---|---|
+| 5.2 — Store 3.1 source shape | production Store 3.1, before activation | Test HA lab | PASS (2026-09-27), repeated before the 5.4 upgrade: PASS |
+| 5.3 — Runtime identity continuity | `0a30142` (WP7), Store 3.1 | Test HA lab | PASS (2026-09-27) |
+| 5.4 — Store 4.1 upgrade and smoke | `ff8652e` (release candidate, WP1–WP17) | Core 2026.9.3, OS 18.3 | PASS (2026-09-27) |
+
+The [gate table recorded after 5.2 and 5.3](#gate-status-after-these-checks) is kept as it was at that time. Current status:
+
+| Gate | Status |
+|---|---|
+| S1 — migration-source safety | CLOSED |
+| S2 — pure Store 4.1 model | CLOSED |
+| S3 — Runtime identity continuity | CLOSED |
+| S4 — Store 4.1 activation | CLOSED (WP9) |
+| S5 — production mutation persistence | CLOSED (WP10, WP11, WP13) |
+| S6 — Runtime/Archive Home Assistant safety | CLOSED (WP12, WP13) |
+| Gate 5.4 — Store 4.1 upgrade and smoke | CLOSED: PASS above |
+| S7 — Home Assistant surface and release readiness | CLOSED: WP14–WP17, Gate 5.4, and the WP18 release documentation |
+
+Closing S7 means the branch has met every defined implementation and external validation gate. It does not mean that a tag exists, a release is published, or the branch is merged.
+
 ## Observations for later review
 
 These are observations, not current defects.

@@ -2,11 +2,11 @@
 
 | | |
 |---|---|
-| Status | **APPROVED IMPLEMENTATION PLAN** |
+| Status | **HISTORICAL**: the Maintenance core below was implemented as planned; production integration was completed through the [Store 4.1 implementation plan](store-4-1-implementation-plan.md) for 0.8.0. Statuses in the body ("not implemented", "Not started", "NOT READY") describe the state when this plan was written. |
 | Schema baseline | `73234167ec88723879df92dc4ddc3e3e7b54281c` |
 | Pre-activation core | IMPLEMENTED on the branch (`bf7a110` … `21fc765`); not reachable from production |
 | Gate 5 (Archive and Store version) | RESOLVED AT DESIGN LEVEL (2026-09-26): Store 4.1, see [Asset Archive and Store 4.1 frozen architecture](asset-archive-store-v4.md) |
-| Store 4.1 activation | NOT IMPLEMENTED; sequenced in [Store 4.1 implementation plan](store-4-1-implementation-plan.md) |
+| Store 4.1 activation | IMPLEMENTED in `abfdc7b` (WP9 of the [Store 4.1 implementation plan](store-4-1-implementation-plan.md)) |
 
 **Superseded remaining phases.** The remaining production work of this plan, commits 7–9 in section 11, the activation strategy, and Gates 4–7 in section 14, is replaced by the coordinated [Store 4.1 implementation plan](store-4-1-implementation-plan.md), the single activation sequence for Store 4.1, Asset Archive, and Maintenance. This plan remains the record of the implemented Maintenance core and the Maintenance user-interface and entity requirements in section 9, which that plan implements in its WP16 and WP17.
 

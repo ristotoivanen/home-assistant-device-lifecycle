@@ -5,10 +5,10 @@
 | Status | **FROZEN** |
 | Architecture freeze approved | 2026-09-26 |
 | Store target | `STORAGE_VERSION = 4`, `STORAGE_MINOR_VERSION = 1` (Store 4.1) |
-| Implementation status | not implemented; the production constants are still Store 3.1 |
+| Implementation status | implemented for 0.8.0: Store 4.1 activated in `abfdc7b` (WP9), Archive and Restore in `1af56ff` (WP13) and `a93cd96` (WP15); see the [Store 4.1 implementation plan](store-4-1-implementation-plan.md#12-implementation-and-gate-status). This document remains the frozen design; statements written for the future are kept as written. |
 | Maintenance schema | [Maintenance Store 4.x frozen schema](maintenance-store-v4-schema.md), persisted shapes unchanged by this document |
 
-This document is the canonical architecture for 0.8.x Asset Archive and for the complete Store 4.1 target that Maintenance and Archive share. It supersedes the `OPEN DESIGN` items for Archive that [ARCHITECTURE.md](../ARCHITECTURE.md#planned-asset-archive-and-permanent-deletion) previously listed, and it assigns the Store version that the Maintenance schema left open. The Maintenance record shapes, invariants, mutation rules, and projection rules remain defined only in the Maintenance schema; this document adds the Archive coordination rules that apply to them.
+This document is the canonical architecture for 0.8.x Asset Archive and for the complete Store 4.1 target that Maintenance and Archive share. It supersedes the `OPEN DESIGN` items for Archive that [ARCHITECTURE.md](../ARCHITECTURE.md#asset-archive-and-permanent-deletion) previously listed, and it assigns the Store version that the Maintenance schema left open. The Maintenance record shapes, invariants, mutation rules, and projection rules remain defined only in the Maintenance schema; this document adds the Archive coordination rules that apply to them.
 
 A change to anything in this document is an architecture revision and needs an explicit review. The freeze authorizes implementation against this contract. It does not claim that any part of it exists; see [Not yet implemented](#not-yet-implemented).
 

@@ -43,7 +43,7 @@ Asset Core uses one private, atomic, versioned Home Assistant Store:
 device_lifecycle.assets
 ```
 
-Device Lifecycle 0.7.7 uses Store major version `3`, minor version `1`, and parent ConfigEntry version `4`. Asset Exposure remains derived and adds no stored projection IDs, exposure state, workflow drafts, or alternate Asset identity. Versions 0.7.1 through 0.7.7 require no Store or ConfigEntry migration.
+Device Lifecycle 0.7.1 through 0.7.7 use Store major version `3`, minor version `1`, and parent ConfigEntry version `4`, with no Store or ConfigEntry migration between them. Asset Exposure remains derived and adds no stored projection IDs, exposure state, workflow drafts, or alternate Asset identity. Device Lifecycle 0.8.0 migrates this schema to **Store 4.1**, which keeps every record below and adds `archived_at` to each Asset and the two Maintenance collections; see [Store 4.1, Asset Archive, and Maintenance (0.8.0)](#store-41-asset-archive-and-maintenance-080). ConfigEntry remains version `4`.
 
 Conceptual payload:
 
@@ -559,6 +559,54 @@ Before 0.7.7 the migration also attached each Lifecycle entity to the external H
 
 The stale-device warning is unchanged: the migration still logs it once for each Purchase- or Runtime-listed device that Home Assistant would not attach an entity to, per setup, with the same text, now as its own step rather than as a side effect of computing a device link. The migration's `Migrated Device Lifecycle entity` informational log line now appears only when a unique ID actually moves.
 
+## Store 4.1, Asset Archive, and Maintenance (0.8.0)
+
+Status: **implemented** for 0.8.0 on the branch that carries the [Store 4.1 implementation plan](docs/store-4-1-implementation-plan.md) (WP1–WP18). The canonical contracts are the frozen [Asset Archive and Store 4.1 architecture](docs/asset-archive-store-v4.md) and [Maintenance Store 4.x schema](docs/maintenance-store-v4-schema.md); this section summarizes the production boundaries and does not restate or change them.
+
+### Store 4.1
+
+`STORAGE_VERSION = 4`, `STORAGE_MINOR_VERSION = 1`. The payload has exactly seven top-level keys:
+
+```text
+next_asset_number
+purchases
+assets
+lifecycle_events
+replacement_records
+maintenance_schedules
+maintenance_events
+```
+
+Every Asset has exactly the 20 Store 3.1 keys plus `archived_at` (`null` for an active Asset, a canonical UTC timestamp when archived). Purchase records keep their 12 keys as an exact set. Nothing derived is persisted: no due state, next due date, preparation state, `disabled` presentation value, entity metadata, flow draft, or idempotency metadata.
+
+The Store 3.1 → 4.1 step runs only after a read-only exact-shape preflight of the 3.1 source and validates the complete 4.1 candidate before the single atomic save; the written file is read back and compared before it is published. A failed preflight or validation leaves the 3.1 file byte-identical. Every 0.7.x release refuses a 4.1 file, and there is no automatic downgrade; see [README: Upgrading from 0.7.x to 0.8.0](README.md#upgrading-from-07x-to-080).
+
+### Asset archive state
+
+`archived_at` is canonical Store data changed only by the explicit Archive and Restore mutations. Archive requires that the Asset is not `deployed`, that no Runtime ConfigSubentry resolves to it, and that no Runtime writer holds undurable Runtime; it never undeploys or removes Runtime tracking itself. Identity and reconciliation lookups see every Asset; current-management candidates are only active Assets and are re-checked at every final submit, and a current-management mutation of an archived Asset is refused with `asset_archived`. Correcting or voiding persisted history (Maintenance Correct and Void, Replacement void) stays available while archived.
+
+### Runtime quarantine and Runtime/Archive serialization
+
+Runtime create and rebind reserve the Asset binding and revalidate it against the Archive state, and Archive checks the same reservation, so an archived Asset never ends up with a resolving Runtime ConfigSubentry. A Runtime subentry that resolves to an archived Asset at setup (for example after restoring an older backup) is quarantined: no Runtime writer starts for it, nothing is deleted, and a `runtime_archived_asset` Repairs issue explains it, while the rest of the entry loads normally. The Runtime entity's Entity Registry identity is parent/Asset-owned (see [Canonical Runtime ownership](#canonical-runtime-ownership)), so removing and re-adding Runtime tracking keeps the entity, its unique ID, and the canonical total.
+
+### Maintenance persistence and projection
+
+Maintenance writes go through `AssetStoreManager.async_mutate_maintenance`, which runs the pure snapshot mutation (`maintenance_mutations.py`) inside the same locked, validated, atomic save and readback pipeline as every other mutation. Pre-generated Schedule and Event UUIDs make retries idempotent: an identical replay is `REPLAY`, a changed one is a conflict, and an ambiguous save is resolved against the persisted Store. Runtime is read, never written: a "just now" Runtime is taken from `async_checkpoint_runtime` before the Maintenance mutation starts, never while the mutation lock is held.
+
+The current due state, next calendar due date, and preparation state are derived by the pure projection (`maintenance_projection.py`) through `AssetStoreManager.maintenance_projection`, from the Schedule, the Asset's Events, the canonical Runtime total, the Archive state, and Home Assistant's local date. An archived Asset has no active projection.
+
+### Refresh without a parent reload
+
+After each verified Store commit the manager publishes the snapshot and tells its publish listeners which Assets changed. Asset entities re-read their snapshots, Maintenance entities recompute their projections, and stale-reference Repairs are re-derived. Archive, Restore, and Maintenance mutations therefore need no ConfigEntry reload; other Asset management changes keep their established reload.
+
+### Maintenance entities
+
+Each Schedule has a status `sensor` (`ENUM`: `ok`, `unknown`, `due`, `overdue`, `disabled`), a next-maintenance `sensor` (`DATE`), and, only with a preparation reminder, a preparation `binary_sensor` (`on`, `off`, or unknown). Their unique IDs are `<schedule_uuid>_maintenance_status`, `<schedule_uuid>_maintenance_due_date`, and `<schedule_uuid>_maintenance_preparation`; they sit on the Asset Device and are parent-owned. While the Asset is archived they are unavailable, never `off` or `disabled`. They refresh on Store publish and at local midnight. A hard-deleted Schedule's entities and a removed reminder's preparation entity are removed from the Entity Registry; nothing else removes them, and `disabled_by` is never written.
+
+### Maintenance OptionsFlow
+
+The Asset hub's **Maintenance** row (active Assets only) offers schedule management, Record maintenance, Mark done, and History; an archived Asset's view offers only History with Correct and Void. The flow keeps only identities and draft input between steps, shows the pure preflight's baseline-lock and same-day Runtime guards before saving, requires an explicit confirmation before a locked starting-point component is destroyed, and converts entered hours with `decimal_from_input(value) * Decimal(3600)`. History correction and voiding reach every Event through a date-range filter, independent of the summary limit.
+
 ## Extension rules
 
 Future functionality attaches to `asset_uuid`; it must not introduce another physical-device identity.
@@ -566,7 +614,7 @@ Future functionality attaches to `asset_uuid`; it must not introduce another phy
 Examples from the existing roadmap include:
 
 - Quick Asset Entry -> one composite canonical Store transaction using the same snapshot primitives; no alternate Asset identity or Store
-- maintenance schedules and history -> Asset UUID, with growing history in a future explicit Store schema
+- maintenance schedules and history -> Asset UUID, with growing history in the explicit Store 4.1 schema (implemented in 0.8.0)
 - Asset-owned Runtime totals and any future corrections -> Asset UUID
 - future RMA cases -> replacement UUID, without redefining Purchase or Asset identity
 - documents -> Purchase UUID or Asset UUID according to scope
@@ -574,13 +622,13 @@ Examples from the existing roadmap include:
 
 Growing histories do not belong in ConfigSubentries. ConfigSubentries remain suitable for active user configuration; persistent history belongs in explicitly versioned Device Lifecycle storage.
 
-These boundaries reserve 0.8.x for Maintenance, including reversible Asset archive and restore, 0.9.x for Portability, Data Safety & Hardening, including controlled permanent Asset deletion, and a later release for Documents. None is represented by placeholder 3.1 records. See [Planned: Asset archive and permanent deletion](#planned-asset-archive-and-permanent-deletion).
+These boundaries put Maintenance and reversible Asset archive and restore in 0.8.x (implemented in 0.8.0), 0.9.x for Portability, Data Safety & Hardening, including controlled permanent Asset deletion, and a later release for Documents. Nothing for 0.9.x or later is represented by placeholder records in Store 4.1. See [Asset archive and permanent deletion](#asset-archive-and-permanent-deletion).
 
-## Planned: 0.8.x Maintenance usability constraints
+## 0.8.x Maintenance usability constraints
 
-Status: **planning only**. Nothing in this section is implemented, and it defines no user interface, OptionsFlow structure, entity, dashboard, or Store field. It records design constraints that every 0.8.x Maintenance domain, storage, and workflow decision must satisfy.
+Status: **design constraints, applied by the 0.8.0 implementation**. This section defines no user interface, OptionsFlow structure, entity, dashboard, or Store field itself; it records the constraints every 0.8.x Maintenance domain, storage, and workflow decision had to satisfy. It was written before the implementation, and its planning language is kept as that record. The implemented behavior is summarized in [Store 4.1, Asset Archive, and Maintenance (0.8.0)](#store-41-asset-archive-and-maintenance-080).
 
-The canonical Maintenance Store schema is [Maintenance Store 4.x frozen schema](docs/maintenance-store-v4-schema.md). Status: **FROZEN** (approved 2026-09-26), not implemented. The Store target is Store 4.1, coordinated with Asset Archive in [Asset Archive and Store 4.1 frozen architecture](docs/asset-archive-store-v4.md). The implementation order and activation boundary are in [Maintenance implementation plan](docs/maintenance-implementation-plan.md).
+The canonical Maintenance Store schema is [Maintenance Store 4.x frozen schema](docs/maintenance-store-v4-schema.md). Status: **FROZEN** (approved 2026-09-26), implemented in 0.8.0. The Store is Store 4.1, coordinated with Asset Archive in [Asset Archive and Store 4.1 frozen architecture](docs/asset-archive-store-v4.md). The implementation order and activation boundary are in [Maintenance implementation plan](docs/maintenance-implementation-plan.md) and [Store 4.1 implementation plan](docs/store-4-1-implementation-plan.md).
 
 **Usability is a first-class 0.8.x design constraint.** Maintenance adds growing, date- and Runtime-related history, which is internally more complex than any earlier Asset domain. That complexity belongs in the data model and the implementation, not in the person's everyday workflow. The constraints below extend the existing management rules that user-facing copy never shows internal identifiers (see [Summaries and identifier safety](#summaries-and-identifier-safety)) and that a mutation target is never chosen implicitly.
 
@@ -680,13 +728,13 @@ Store boundary: 0.8.x needs persistent preparation reminder configuration for th
 
 Later extension, not implemented in 0.8.x: Runtime schedules may later derive an estimated calendar due date from observed Runtime consumption rate, for example "approximately 30 days remaining". Such a date is a projection or forecast, never canonical maintenance data: it is not a maintenance event, not a baseline, and not a canonical due date, and it never changes historical data. If the estimate cannot be derived reliably, for example because observed Runtime data is missing or unreliable, it remains unknown rather than being guessed from an assumed rate.
 
-`OPEN DESIGN — deferred to Maintenance UX v0.1`: how the reminder is presented, notification delivery, and any entities. It is designed together with the rest of the normal Maintenance path and is not part of any current release.
+Resolved in 0.8.0: the reminder is configured in the Maintenance flow and presented as the preparation `binary_sensor` (see [Maintenance entities](#maintenance-entities)). Notification delivery is not part of 0.8.0; automations can use the entity.
 
-## Planned: Asset archive and permanent deletion
+## Asset archive and permanent deletion
 
-Status: **planning only**. Nothing in this section is implemented. Device Lifecycle 0.7.7 provides neither Asset archive nor Asset deletion, Store 3.1 contains no archive or deletion state, and ConfigEntry remains version 4. This section records the semantics and release boundary that later designs must follow. The 0.8.x Archive design is frozen in [Asset Archive and Store 4.1 frozen architecture](docs/asset-archive-store-v4.md). Where a 0.9.x purge detail is not yet decided, it is marked `OPEN DESIGN` with the release whose design owns it.
+Status: **Archive implemented in 0.8.0; permanent deletion planned for 0.9.x.** Store 4.1 holds the Archive state and no deletion state, and ConfigEntry remains version 4. This section records the semantics and release boundary; it was written before the implementation, and its planning language for Archive is kept as that record. The 0.8.x Archive design is frozen in [Asset Archive and Store 4.1 frozen architecture](docs/asset-archive-store-v4.md). Where a 0.9.x purge detail is not yet decided, it is marked `OPEN DESIGN` with the release whose design owns it.
 
-Two different operations are planned, in two different releases:
+Two different operations belong to two different releases:
 
 | | Archive Asset | Permanent deletion (purge) |
 |---|---|---|
@@ -700,9 +748,9 @@ Neither operation changes the [identity invariants](#identity-invariants): an As
 
 ### Archive Asset (0.8.x)
 
-Archive is a normal user operation. It removes an Asset from active/current management without destroying its identity or history. Maintenance history, planned for 0.8.x, is growing Asset-owned history, so 0.8.x needs a way to retire Assets that keeps that history intact rather than a way to destroy it.
+Archive is a normal user operation. It removes an Asset from active/current management without destroying its identity or history. Maintenance history, added in 0.8.x, is growing Asset-owned history, so 0.8.x needs a way to retire Assets that keeps that history intact rather than a way to destroy it.
 
-The Archive design is **FROZEN** (2026-09-26). The canonical contract, including the complete Store 4.1 shape, is [Asset Archive and Store 4.1 frozen architecture](docs/asset-archive-store-v4.md). It is not implemented. The `OPEN DESIGN` questions this section listed before the freeze are superseded by that document; this section keeps only the locked principles and a summary.
+The Archive design is **FROZEN** (2026-09-26). The canonical contract, including the complete Store 4.1 shape, is [Asset Archive and Store 4.1 frozen architecture](docs/asset-archive-store-v4.md). It is implemented in 0.8.0. The `OPEN DESIGN` questions this section listed before the freeze are superseded by that document; this section keeps only the locked principles and a summary.
 
 Locked semantics:
 
@@ -727,9 +775,9 @@ Frozen summary (the canonical document is authoritative):
 - **Home Assistant.** Archive and Restore refresh entities and Repairs through an integration-local refresh, without a parent ConfigEntry reload. Maintenance entities of an archived Asset report no active projection, never a false `off`. Stale-reference Repairs are suppressed while archived. An archived Asset with a resolving Runtime ConfigSubentry at setup is quarantined with its own Repair instead of failing the entry. The Runtime entity's registry identity becomes Asset/parent-owned so it survives removal of the Runtime ConfigSubentry.
 - **Migration.** Store 3.1 migrates to Store 4.1 after a read-only exact-shape preflight of the Store 3.1 Asset and Purchase records. Every Asset receives `archived_at = null` and Maintenance starts empty.
 
-Until the implementation lands, the current behavior described elsewhere in this document is unchanged, including the reload after each saved change. The Runtime entity's parent-owned Entity Registry identity is already in effect (WP7); see [Exposure registry migration and recovery](#exposure-registry-migration-and-recovery).
+Archive and Restore refresh entities and Repairs without a reload; other Asset management changes keep the reload after each saved change. The Runtime entity's parent-owned Entity Registry identity has been in effect since WP7; see [Exposure registry migration and recovery](#exposure-registry-migration-and-recovery).
 
-The dashboard's existing "Archived" inventory group is only a presentation of Lifecycle `retired`, `disposed`, and `lost` and has no connection to Asset Archive. A future user interface uses distinct labels for the two concepts.
+The dashboard's existing "Archived" inventory group is only a presentation of Lifecycle `retired`, `disposed`, and `lost` and has no connection to Asset Archive. The Asset management flow uses distinct labels for Asset Archive (**Archive this device**, **Archived devices**, **Restore to active management**).
 
 ### Permanent deletion / purge (0.9.x)
 
