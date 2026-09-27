@@ -391,6 +391,50 @@ class DeviceLifecycleStore(Store[AssetStoreData]):
         return cast(AssetStoreData, deepcopy(persisted["data"]))
 
 
+def _changed_asset_uuids(
+    old: Mapping[str, Any],
+    new: Mapping[str, Any],
+) -> frozenset[str]:
+    """Return the Assets whose published data differs between two snapshots.
+
+    An Asset counts when its own record changed, or a record it owns or takes
+    part in changed: a Maintenance Schedule or Event, a Lifecycle Event, a
+    Replacement, or Purchase membership. Ownership of a record is read from
+    both sides, so an added, removed, or reassigned record names every Asset
+    involved. Derived from the snapshots only, never from a request.
+    """
+    changed: set[str] = set()
+
+    def _differing(key: str) -> list[tuple[Any, Any]]:
+        before = old.get(key) or {}
+        after = new.get(key) or {}
+        return [
+            (before.get(record_id), after.get(record_id))
+            for record_id in set(before) | set(after)
+            if before.get(record_id) != after.get(record_id)
+        ]
+
+    changed.update(
+        asset_uuid
+        for asset_uuid in set(old.get("assets") or {}) | set(new.get("assets") or {})
+        if (old.get("assets") or {}).get(asset_uuid)
+        != (new.get("assets") or {}).get(asset_uuid)
+    )
+    for key in ("maintenance_schedules", "maintenance_events", "lifecycle_events"):
+        for pair in _differing(key):
+            changed.update(record["asset_uuid"] for record in pair if record)
+    for pair in _differing("replacement_records"):
+        for record in pair:
+            if record:
+                changed.add(record["predecessor_asset_uuid"])
+                changed.add(record["successor_asset_uuid"])
+    for pair in _differing("purchases"):
+        for record in pair:
+            if record:
+                changed.update(record.get("asset_uuids") or ())
+    return frozenset(changed)
+
+
 def _empty_store_data() -> AssetStoreData:
     """Return an empty Store 4.1 Asset Core payload."""
     return {
@@ -1431,6 +1475,9 @@ class AssetStoreManager:
         # apply_runtime_quarantine and never persisted.
         self.runtime_quarantine: frozenset[str] = frozenset()
         self._runtime_quarantine_assets: dict[str, str] = {}
+        # Synchronous in-memory callbacks told which Assets a newly published
+        # snapshot changed; see async_add_publish_listener.
+        self._publish_listeners: list[Callable[[frozenset[str]], None]] = []
 
     async def async_setup(self) -> None:
         """Load and validate persistent Asset Core data."""
@@ -1475,10 +1522,52 @@ class AssetStoreManager:
                 raise AssetStoreError(
                     "Asset Core persistence disappeared during recovery"
                 )
-        else:
-            _validate_store_data(persisted)
-            self._data = persisted
+            self._persistence_uncertain = False
+            return
+        _validate_store_data(persisted)
         self._persistence_uncertain = False
+        self._publish(persisted)
+
+    def async_add_publish_listener(
+        self,
+        listener: Callable[[frozenset[str]], None],
+    ) -> Callable[[], None]:
+        """Call ``listener`` after each publish of a changed snapshot.
+
+        The listener is called synchronously, in registration order, with the
+        Asset UUIDs the newly published snapshot changed, once the snapshot is
+        this manager's canonical data. It must not await. An exception is
+        logged and never affects the committed snapshot or other listeners.
+        The returned callback removes the listener and is safe to call again.
+        """
+        self._publish_listeners.append(listener)
+
+        def _remove() -> None:
+            if listener in self._publish_listeners:
+                self._publish_listeners.remove(listener)
+
+        return _remove
+
+    def _publish(self, data: AssetStoreData) -> None:
+        """Make a verified snapshot canonical, then tell the listeners.
+
+        The only place a mutation, a resolution, or a recovery publishes, so
+        no path can forget the refresh. An identical snapshot notifies no one.
+        """
+        previous = self._data
+        self._data = data
+        changed = _changed_asset_uuids(previous, data)
+        if not changed:
+            return
+        for listener in tuple(self._publish_listeners):
+            try:
+                listener(changed)
+            except Exception:
+                # The Store commit is authoritative; a refresh never undoes it.
+                _LOGGER.exception(
+                    "Device Lifecycle refresh after a Store commit failed; the "
+                    "committed data is unaffected"
+                )
 
     async def _async_mutate(
         self,
@@ -1532,7 +1621,7 @@ class AssetStoreManager:
 
             # Publish only after the complete snapshot has been validated and
             # durably saved. A mutation or save exception leaves _data untouched.
-            self._data = data
+            self._publish(data)
             return deepcopy(result), changed
 
     async def _async_resolve_ambiguous_persistence(
@@ -1561,8 +1650,8 @@ class AssetStoreManager:
             raise error from err
 
         resolved = resolve_ambiguous(deepcopy(persisted))
-        self._data = persisted
         self._persistence_uncertain = False
+        self._publish(persisted)
         if resolved is None:
             raise AssetStorePersistenceError(
                 "Asset Core mutation was not persisted"
@@ -3124,8 +3213,8 @@ class AssetStoreManager:
                     _validate_store_data(persisted)
                 except AssetStorePersistenceError:
                     raise
-                self._data = persisted
                 self._persistence_uncertain = False
+                self._publish(persisted)
                 if request.asset_uuid not in persisted["assets"]:
                     raise AssetStorePersistenceError(
                         "Quick Create was not persisted"
@@ -3136,7 +3225,7 @@ class AssetStoreManager:
                     "Quick Create could not be persisted"
                 ) from err
 
-            self._data = data
+            self._publish(data)
             return deepcopy(result)
 
     async def async_set_asset_lifecycle(
@@ -4417,6 +4506,11 @@ class AssetStoreManager:
             return None
         asset = self._data["assets"].get(asset_uuid)
         return deepcopy(asset) if asset is not None else None
+
+    def asset_archived(self, asset_uuid: str) -> bool:
+        """Return whether an existing Asset is archived."""
+        asset = self._data["assets"].get(asset_uuid)
+        return asset is not None and asset_is_archived(asset)
 
     def asset_for_primary_device_id(self, device_id: str) -> AssetData | None:
         """Return a detached Asset snapshot for a primary HA device."""

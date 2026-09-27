@@ -55,6 +55,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # entry deletes them.
     async_sync_stale_reference_issues(hass, manager)
     entry.async_on_unload(async_track_stale_reference_issues(hass, manager))
+    # A Store commit (Archive and Restore among them) re-derives them at once,
+    # without a reload. A failing sync is logged by the manager and never
+    # affects the commit; the next sync or setup converges.
+    entry.async_on_unload(
+        manager.async_add_publish_listener(
+            lambda _changed: async_sync_stale_reference_issues(hass, manager)
+        )
+    )
     async_sync_runtime_conflict_issues(hass, manager, quarantined)
 
     entry.runtime_data = manager

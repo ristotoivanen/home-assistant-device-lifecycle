@@ -907,6 +907,7 @@ def test_archive_state_is_read_only_through_the_archive_authority() -> None:
             "AssetStoreManager.maintenance_projection",
             "AssetStoreManager.quarantined_runtime_subentries",
             "AssetStoreManager.register_runtime_checkpoint",
+            "AssetStoreManager.asset_archived",
         }
     }
 

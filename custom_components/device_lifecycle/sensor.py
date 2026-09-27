@@ -277,6 +277,7 @@ async def async_setup_entry(
         deployment = DeviceDeploymentSensor(
             asset=asset,
             device_entry=device_entry,
+            manager=manager,
         )
         parent_entities.extend(
             (
@@ -286,15 +287,19 @@ async def async_setup_entry(
                     device_entry=device_entry,
                     unique_id=lifecycle_unique_id(asset["asset_uuid"]),
                     purchase_title=purchase_title,
+                    manager=manager,
                 ),
                 deployment,
                 DeviceInstallationDateSensor(
                     asset=asset,
                     device_entry=device_entry,
+                    manager=manager,
                 ),
                 DeviceAssetIdSensor(
                     asset=asset,
                     device_entry=device_entry,
+                    manager=manager,
+                    archived=manager.asset_archived(asset["asset_uuid"]),
                 ),
                 DeviceLifecycleStatusSensor(
                     asset=asset,
@@ -302,6 +307,7 @@ async def async_setup_entry(
                         asset["lifecycle"]["current_event_uuid"]
                     ),
                     device_entry=device_entry,
+                    manager=manager,
                 ),
                 DeviceReplacementSensor(
                     asset=asset,
@@ -312,6 +318,7 @@ async def async_setup_entry(
                         asset["asset_uuid"]
                     ),
                     device_entry=device_entry,
+                    manager=manager,
                 ),
             )
         )
@@ -320,6 +327,7 @@ async def async_setup_entry(
             asset=asset,
             device_entry=device_entry,
             device_registry=device_registry,
+            manager=manager,
         )
         parent_entities.append(relationships)
         relationship_entities.append(relationships)
@@ -478,7 +486,57 @@ def _remove_unexpected_subentry_entities(
             entity_registry.async_remove(registry_entry.entity_id)
 
 
-class DeviceLifecycleSensor(SensorEntity):
+class _AssetSnapshotEntity(SensorEntity):
+    """An Asset entity that re-reads its canonical snapshot after a commit.
+
+    It subscribes to the Store manager's publish listener while added, and
+    when a published snapshot changed its Asset it re-reads the detached
+    canonical Asset (and whatever related snapshot it renders) before it
+    writes its state. Without a manager the entity is a static projection.
+    """
+
+    _snapshot_manager: AssetStoreManager | None = None
+    _snapshot_asset_uuid: str | None = None
+    _unsub_publish: Callable[[], None] | None = None
+
+    def _bind_snapshot(
+        self, manager: AssetStoreManager | None, asset_uuid: str
+    ) -> None:
+        self._snapshot_manager = manager
+        self._snapshot_asset_uuid = asset_uuid
+
+    async def async_added_to_hass(self) -> None:
+        """Follow the canonical Store while this entity is added."""
+        await super().async_added_to_hass()
+        if self._snapshot_manager is not None:
+            self._unsub_publish = self._snapshot_manager.async_add_publish_listener(
+                self._handle_store_publish
+            )
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Stop following the Store."""
+        if self._unsub_publish is not None:
+            self._unsub_publish()
+            self._unsub_publish = None
+        await super().async_will_remove_from_hass()
+
+    @callback
+    def _handle_store_publish(self, changed: frozenset[str]) -> None:
+        manager = self._snapshot_manager
+        if manager is None or self._snapshot_asset_uuid not in changed:
+            return
+        asset = manager.asset(self._snapshot_asset_uuid)
+        if asset is None:
+            return
+        self._refresh_snapshot(manager, asset)
+        self.async_write_ha_state()
+
+    def _refresh_snapshot(self, manager: AssetStoreManager, asset: AssetData) -> None:
+        """Replace the rendered snapshots with the canonical ones."""
+        raise NotImplementedError
+
+
+class DeviceLifecycleSensor(_AssetSnapshotEntity):
     """Lifecycle information for one persistent physical Asset."""
 
     _attr_has_entity_name = True
@@ -493,6 +551,7 @@ class DeviceLifecycleSensor(SensorEntity):
         device_entry: dr.DeviceEntry,
         unique_id: str,
         purchase_title: str | None,
+        manager: AssetStoreManager | None = None,
     ) -> None:
         """Initialize lifecycle sensor."""
         self._asset = asset
@@ -500,6 +559,22 @@ class DeviceLifecycleSensor(SensorEntity):
         self._purchase_title = purchase_title
         self.device_entry = device_entry
         self._attr_unique_id = unique_id
+        self._bind_snapshot(manager, asset["asset_uuid"])
+
+    def _refresh_snapshot(self, manager: AssetStoreManager, asset: AssetData) -> None:
+        purchase = manager.purchase(asset.get("purchase_uuid"))
+        previous = self._purchase
+        if purchase is None:
+            self._purchase_title = None
+        elif (
+            previous is None
+            or previous["purchase_uuid"] != purchase["purchase_uuid"]
+        ):
+            self._purchase_title = str(
+                purchase.get("name") or purchase["purchase_uuid"]
+            )
+        self._asset = asset
+        self._purchase = purchase
 
     @property
     def icon(self) -> str:
@@ -651,7 +726,7 @@ def _device_display_name(device: dr.DeviceEntry | None) -> str | None:
     return str(value) if value not in (None, "") else None
 
 
-class DeviceDeploymentSensor(SensorEntity):
+class DeviceDeploymentSensor(_AssetSnapshotEntity):
     """Projection of one Asset's canonical deployment state."""
 
     _attr_has_entity_name = True
@@ -666,11 +741,16 @@ class DeviceDeploymentSensor(SensorEntity):
         *,
         asset: AssetData,
         device_entry: dr.DeviceEntry,
+        manager: AssetStoreManager | None = None,
     ) -> None:
         """Initialize a Deployment projection."""
         self._asset = asset
         self.device_entry = device_entry
         self._attr_unique_id = deployment_unique_id(asset["asset_uuid"])
+        self._bind_snapshot(manager, asset["asset_uuid"])
+
+    def _refresh_snapshot(self, manager: AssetStoreManager, asset: AssetData) -> None:
+        self._asset = asset
 
     @property
     def stored_area_id(self) -> str | None:
@@ -706,7 +786,7 @@ class DeviceDeploymentSensor(SensorEntity):
         }
 
 
-class DeviceInstallationDateSensor(SensorEntity):
+class DeviceInstallationDateSensor(_AssetSnapshotEntity):
     """Native date projection of one Asset's canonical installation date."""
 
     _attr_has_entity_name = True
@@ -720,11 +800,16 @@ class DeviceInstallationDateSensor(SensorEntity):
         *,
         asset: AssetData,
         device_entry: dr.DeviceEntry,
+        manager: AssetStoreManager | None = None,
     ) -> None:
         """Initialize an Installation Date projection."""
         self._asset = asset
         self.device_entry = device_entry
         self._attr_unique_id = installed_date_unique_id(asset["asset_uuid"])
+        self._bind_snapshot(manager, asset["asset_uuid"])
+
+    def _refresh_snapshot(self, manager: AssetStoreManager, asset: AssetData) -> None:
+        self._asset = asset
 
     @property
     def native_value(self) -> date | None:
@@ -773,7 +858,7 @@ class _DeploymentAreaRegistryCoordinator:
         )
 
 
-class DeviceRelationshipsSensor(SensorEntity):
+class DeviceRelationshipsSensor(_AssetSnapshotEntity):
     """Read-only projection of exact external Device Registry references."""
 
     _attr_has_entity_name = True
@@ -791,12 +876,20 @@ class DeviceRelationshipsSensor(SensorEntity):
         asset: AssetData,
         device_entry: dr.DeviceEntry,
         device_registry: dr.DeviceRegistry,
+        manager: AssetStoreManager | None = None,
     ) -> None:
         """Initialize a Relationships projection."""
         self._asset = asset
         self._device_registry = device_registry
         self.device_entry = device_entry
         self._attr_unique_id = relationships_unique_id(asset["asset_uuid"])
+        self.referenced_device_ids = frozenset(
+            str(reference["device_id"]) for reference in asset.get("ha_device_refs", [])
+        )
+        self._bind_snapshot(manager, asset["asset_uuid"])
+
+    def _refresh_snapshot(self, manager: AssetStoreManager, asset: AssetData) -> None:
+        self._asset = asset
         self.referenced_device_ids = frozenset(
             str(reference["device_id"]) for reference in asset.get("ha_device_refs", [])
         )
@@ -862,7 +955,7 @@ class DeviceRelationshipsSensor(SensorEntity):
         }
 
 
-class DeviceAssetIdSensor(SensorEntity):
+class DeviceAssetIdSensor(_AssetSnapshotEntity):
     """Diagnostic projection of one permanent human-facing Asset ID."""
 
     _attr_has_entity_name = True
@@ -877,19 +970,32 @@ class DeviceAssetIdSensor(SensorEntity):
         *,
         asset: AssetData,
         device_entry: dr.DeviceEntry,
+        manager: AssetStoreManager | None = None,
+        archived: bool = False,
     ) -> None:
         """Initialize an Asset ID projection."""
         self._asset_id = asset["asset_id"]
+        self._archived = archived
         self.device_entry = device_entry
         self._attr_unique_id = asset_id_unique_id(asset["asset_uuid"])
+        self._bind_snapshot(manager, asset["asset_uuid"])
+
+    def _refresh_snapshot(self, manager: AssetStoreManager, asset: AssetData) -> None:
+        self._asset_id = asset["asset_id"]
+        self._archived = manager.asset_archived(asset["asset_uuid"])
 
     @property
     def native_value(self) -> str:
         """Return the permanent DLxxxx identity."""
         return self._asset_id
 
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Report whether the Asset is archived; its identity never changes."""
+        return {"archived": self._archived}
 
-class DeviceLifecycleStatusSensor(SensorEntity):
+
+class DeviceLifecycleStatusSensor(_AssetSnapshotEntity):
     """Projection of one Asset's canonical current lifecycle status."""
 
     _attr_has_entity_name = True
@@ -905,6 +1011,7 @@ class DeviceLifecycleStatusSensor(SensorEntity):
         asset: AssetData,
         current_event: LifecycleEventData | None,
         device_entry: dr.DeviceEntry,
+        manager: AssetStoreManager | None = None,
     ) -> None:
         """Initialize a Lifecycle Status projection."""
         self._status = asset["lifecycle"]["status"]
@@ -913,6 +1020,16 @@ class DeviceLifecycleStatusSensor(SensorEntity):
         )
         self.device_entry = device_entry
         self._attr_unique_id = lifecycle_status_unique_id(asset["asset_uuid"])
+        self._bind_snapshot(manager, asset["asset_uuid"])
+
+    def _refresh_snapshot(self, manager: AssetStoreManager, asset: AssetData) -> None:
+        current_event = manager.lifecycle_event(
+            asset["lifecycle"]["current_event_uuid"]
+        )
+        self._status = asset["lifecycle"]["status"]
+        self._effective_date = (
+            current_event["effective_date"] if current_event is not None else None
+        )
 
     @property
     def native_value(self) -> str:
@@ -925,7 +1042,7 @@ class DeviceLifecycleStatusSensor(SensorEntity):
         return {"effective_date": self._effective_date}
 
 
-class DeviceReplacementSensor(SensorEntity):
+class DeviceReplacementSensor(_AssetSnapshotEntity):
     """Projection of one Asset's current active replacement graph context."""
 
     _attr_has_entity_name = True
@@ -943,19 +1060,32 @@ class DeviceReplacementSensor(SensorEntity):
         predecessor: AssetData | None,
         successor: AssetData | None,
         device_entry: dr.DeviceEntry,
+        manager: AssetStoreManager | None = None,
     ) -> None:
         """Initialize a Replacement projection."""
+        self._set_replacements(predecessor, successor)
+        self._attr_entity_registry_enabled_default = (
+            predecessor is not None or successor is not None
+        )
+        self.device_entry = device_entry
+        self._attr_unique_id = replacement_unique_id(asset["asset_uuid"])
+        self._bind_snapshot(manager, asset["asset_uuid"])
+
+    def _set_replacements(
+        self, predecessor: AssetData | None, successor: AssetData | None
+    ) -> None:
         self._predecessor_asset_ids = (
             [predecessor["asset_id"]] if predecessor is not None else []
         )
         self._successor_asset_ids = (
             [successor["asset_id"]] if successor is not None else []
         )
-        self._attr_entity_registry_enabled_default = (
-            predecessor is not None or successor is not None
+
+    def _refresh_snapshot(self, manager: AssetStoreManager, asset: AssetData) -> None:
+        self._set_replacements(
+            manager.active_replacement_predecessor(asset["asset_uuid"]),
+            manager.active_replacement_successor(asset["asset_uuid"]),
         )
-        self.device_entry = device_entry
-        self._attr_unique_id = replacement_unique_id(asset["asset_uuid"])
 
     @property
     def native_value(self) -> str:
@@ -1016,7 +1146,7 @@ class _RelationshipsRegistryCoordinator:
         )
 
 
-class DeviceRuntimeHoursSensor(SensorEntity):
+class DeviceRuntimeHoursSensor(_AssetSnapshotEntity):
     """Projection of one Asset's canonical cumulative Runtime total."""
 
     _attr_has_entity_name = True
@@ -1051,6 +1181,7 @@ class DeviceRuntimeHoursSensor(SensorEntity):
         self._monotonic = monotonic
         self.device_entry = device_entry
         self._attr_unique_id = unique_id
+        self._bind_snapshot(manager, self._asset_uuid)
 
         self._source_entity_id = str(data[CONF_SOURCE_ENTITY_ID])
         self._runtime_mode = str(data[CONF_RUNTIME_MODE])
@@ -1071,6 +1202,14 @@ class DeviceRuntimeHoursSensor(SensorEntity):
         self._unsub_interval: Callable[[], None] | None = None
         self._unsub_shutdown: Callable[[], None] | None = None
         self._unsub_checkpoint: Callable[[], None] | None = None
+
+    def _refresh_snapshot(self, manager: AssetStoreManager, asset: AssetData) -> None:
+        """Re-read the Asset identity; Runtime accounting is never touched.
+
+        The committed total, pending deltas, and the active interval belong
+        to this writer and change only through its own Runtime operations.
+        """
+        self._asset_id = asset["asset_id"]
 
     @property
     def native_value(self) -> Decimal:

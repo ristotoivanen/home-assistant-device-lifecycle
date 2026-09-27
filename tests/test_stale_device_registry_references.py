@@ -751,7 +751,9 @@ def test_no_new_broad_exception_handler() -> None:
     """A missing device is handled by name; nothing swallows every error.
 
     The only broad handlers are the exposure rollback's, which must keep
-    unwinding whatever failed and re-raise it.
+    unwinding whatever failed and re-raise it, and the Store publish
+    listener isolation, which runs only after a commit is canonical so that
+    one failing refresh never affects the commit or the other listeners.
     """
     broad: list[tuple[str, str]] = []
     for path in sorted(INTEGRATION.glob("*.py")):
@@ -777,4 +779,5 @@ def test_no_new_broad_exception_handler() -> None:
     assert sorted(set(broad)) == [
         ("exposure.py", "_rollback_exposure_registry"),
         ("exposure.py", "async_reconcile_exposure_registry"),
+        ("storage.py", "_publish"),
     ]
