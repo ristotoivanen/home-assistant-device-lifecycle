@@ -181,7 +181,7 @@ The [baseline](#baseline) above is historical: it was 8 Assets after the 0.7.7 r
 
 ### Gate 5.2 — Store 3.1 source shape
 
-The section 5.2 script inspected a copy of `/config/.storage/device_lifecycle.assets`.
+Because the Test HA core-ssh environment did not provide Python, the owner ran an equivalent read-only `jq` inspection implementing the section 5.2 shape checks against a copy of `/config/.storage/device_lifecycle.assets` in `/tmp`.
 
 | Check | Observed |
 |---|---|
