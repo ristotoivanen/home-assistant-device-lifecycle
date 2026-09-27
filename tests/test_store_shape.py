@@ -1,4 +1,4 @@
-"""Exact Store record shapes and the Store 3.1 migration-source preflight (WP1)."""
+"""Exact Store record shapes and the Store 3.1 migration-source preflight."""
 
 from __future__ import annotations
 
@@ -36,7 +36,9 @@ from custom_components.device_lifecycle.storage import (
     QuickAssetCreateRequest,
     _empty_store_data,
     _migrate_v1_to_v2_1,
+    _migrate_v2_1_to_v3_1,
     _validate_store_data,
+    _validate_store_v3_1_data,
 )
 from custom_components.device_lifecycle.store_shape import (
     ASSET_KEYS_3_1,
@@ -50,7 +52,7 @@ from custom_components.device_lifecycle.store_shape import (
 )
 
 from .conftest import ASSET_UUID, DEVICE_ID, PURCHASE_UUID
-from .test_store_v4_1_validation import INACTIVE_STORE_4_1, referencing_scopes
+from .test_store_v4_1_validation import STORE_4_1_SCOPES, referencing_scopes
 
 QUICK_UUID = "44444444-4444-4444-8444-444444444444"
 SECOND_UUID = "55555555-5555-4555-8555-555555555555"
@@ -94,6 +96,15 @@ def _assert_exact_3_1_records(data: AssetStoreData) -> None:
     preflight_store_3_1_record_shapes(data)
 
 
+def _assert_exact_4_1_records(data: AssetStoreData) -> None:
+    assert data["assets"]
+    require_exact_record_keys(data["assets"], ASSET_KEYS_4_1, kind="assets")
+    require_exact_record_keys(data["purchases"], PURCHASE_KEYS, kind="purchases")
+    for asset in data["assets"].values():
+        assert asset["archived_at"] is None
+    _validate_store_data(data)
+
+
 # Frozen constants
 
 
@@ -118,22 +129,22 @@ def test_constant_sizes_and_relations() -> None:
         assert isinstance(constant, frozenset)
 
 
-def test_store_3_1_top_level_keys_match_production() -> None:
-    assert STORE_3_1_TOP_LEVEL_KEYS == STORE_TOP_LEVEL_KEYS
+def test_store_4_1_top_level_keys_match_production() -> None:
+    assert STORE_4_1_TOP_LEVEL_KEYS == STORE_TOP_LEVEL_KEYS
 
 
 # Producer conformance: the constants are what production actually writes
 
 
-async def test_manual_asset_creation_matches_asset_3_1(hass: HomeAssistant) -> None:
+async def test_manual_asset_creation_matches_asset_4_1(hass: HomeAssistant) -> None:
     manager = _manager(hass)
     asset = await manager.async_create_manual_asset(name="Manual Asset", notes="n")
-    assert set(asset) == ASSET_KEYS_3_1
-    assert "archived_at" not in asset
-    _assert_exact_3_1_records(manager._data)
+    assert set(asset) == ASSET_KEYS_4_1
+    assert asset["archived_at"] is None
+    _assert_exact_4_1_records(manager._data)
 
 
-async def test_quick_asset_creation_matches_asset_3_1(hass: HomeAssistant) -> None:
+async def test_quick_asset_creation_matches_asset_4_1(hass: HomeAssistant) -> None:
     manager = _manager(hass)
     result = await manager.async_quick_create_asset(
         QuickAssetCreateRequest(
@@ -161,8 +172,8 @@ async def test_quick_asset_creation_matches_asset_3_1(hass: HomeAssistant) -> No
             purchase_uuid=None,
         )
     )
-    assert set(result.asset) == ASSET_KEYS_3_1
-    _assert_exact_3_1_records(manager._data)
+    assert set(result.asset) == ASSET_KEYS_4_1
+    _assert_exact_4_1_records(manager._data)
 
 
 async def test_purchase_reconciliation_creates_exact_purchase_and_asset(
@@ -195,7 +206,7 @@ async def test_purchase_reconciliation_creates_exact_purchase_and_asset(
     data = manager._data
     assert len(data["purchases"]) == 1
     assert len(data["assets"]) == 2
-    _assert_exact_3_1_records(data)
+    _assert_exact_4_1_records(data)
 
 
 async def test_reconciliation_update_of_existing_purchase_keeps_exact_shape(
@@ -215,14 +226,16 @@ async def test_reconciliation_update_of_existing_purchase_keeps_exact_shape(
     assert manager._data["assets"][ASSET_UUID]["ha_device_refs"][0]["device_id"] == (
         DEVICE_ID
     )
-    _assert_exact_3_1_records(manager._data)
+    _assert_exact_4_1_records(manager._data)
 
 
-async def test_representative_store_3_1_fixture_matches(
+async def test_representative_store_fixtures_match(
     asset_store_data: AssetStoreData,
+    asset_store_data_v3_1: AssetStoreData,
 ) -> None:
-    _validate_store_data(asset_store_data)
-    _assert_exact_3_1_records(asset_store_data)
+    _assert_exact_4_1_records(asset_store_data)
+    _validate_store_v3_1_data(asset_store_data_v3_1)
+    _assert_exact_3_1_records(asset_store_data_v3_1)
 
 
 @pytest.mark.parametrize(
@@ -235,12 +248,20 @@ async def test_existing_1_x_migrations_produce_exact_records(
     version: tuple[int, int],
     fixture_name: str,
 ) -> None:
-    """The real Store migration callback, not a parallel implementation."""
+    """The real Store migration callback, not a parallel implementation.
+
+    The historical steps produce an exact Store 3.1 source, and the callback
+    turns it into exact Store 4.1 records.
+    """
     source = request.getfixturevalue(fixture_name)
+    store_3_1 = _migrate_v2_1_to_v3_1(
+        _migrate_v1_to_v2_1(deepcopy(source), version[1])
+    )
+    _assert_exact_3_1_records(store_3_1)
     migrated = await DeviceLifecycleStore(hass)._async_migrate_func(
         *version, deepcopy(source)
     )
-    _assert_exact_3_1_records(migrated)
+    _assert_exact_4_1_records(migrated)
 
 
 async def test_existing_2_1_migration_produces_exact_records(
@@ -249,15 +270,16 @@ async def test_existing_2_1_migration_produces_exact_records(
 ) -> None:
     """A 2.1 payload is what the production 1.x -> 2.1 step produces."""
     store_2_1 = _migrate_v1_to_v2_1(deepcopy(asset_store_data_v1_2), 2)
+    _assert_exact_3_1_records(_migrate_v2_1_to_v3_1(deepcopy(store_2_1)))
     migrated = await DeviceLifecycleStore(hass)._async_migrate_func(2, 1, store_2_1)
-    _assert_exact_3_1_records(migrated)
+    _assert_exact_4_1_records(migrated)
 
 
 # Fail-closed behavior
 
 
-def _asset(asset_store_data: AssetStoreData, asset_uuid: str) -> dict[str, Any]:
-    asset = deepcopy(asset_store_data["assets"][ASSET_UUID])
+def _asset(asset_store_data_v3_1: AssetStoreData, asset_uuid: str) -> dict[str, Any]:
+    asset = deepcopy(asset_store_data_v3_1["assets"][ASSET_UUID])
     asset["asset_uuid"] = asset_uuid
     return asset
 
@@ -280,12 +302,12 @@ def _asset(asset_store_data: AssetStoreData, asset_uuid: str) -> dict[str, Any]:
     ],
 )
 def test_invalid_asset_key_set_fails_closed(
-    asset_store_data: AssetStoreData,
+    asset_store_data_v3_1: AssetStoreData,
     change: Any,
     missing: tuple[str, ...],
     unexpected: tuple[str, ...],
 ) -> None:
-    data = deepcopy(asset_store_data)
+    data = deepcopy(asset_store_data_v3_1)
     change(data["assets"][ASSET_UUID])
     before, snapshot = _serialized(data), deepcopy(data)
     with pytest.raises(StoreShapeError) as err:
@@ -307,12 +329,12 @@ def test_invalid_asset_key_set_fails_closed(
     ],
 )
 def test_invalid_purchase_key_set_fails_closed(
-    asset_store_data: AssetStoreData,
+    asset_store_data_v3_1: AssetStoreData,
     change: Any,
     missing: tuple[str, ...],
     unexpected: tuple[str, ...],
 ) -> None:
-    data = deepcopy(asset_store_data)
+    data = deepcopy(asset_store_data_v3_1)
     change(data["purchases"][PURCHASE_UUID])
     before, snapshot = _serialized(data), deepcopy(data)
     with pytest.raises(StoreShapeError) as err:
@@ -327,9 +349,9 @@ def test_invalid_purchase_key_set_fails_closed(
 @pytest.mark.parametrize("kind", ["assets", "purchases"])
 @pytest.mark.parametrize("value", [None, [], "record", 1])
 def test_non_mapping_record_fails_closed(
-    asset_store_data: AssetStoreData, kind: str, value: Any
+    asset_store_data_v3_1: AssetStoreData, kind: str, value: Any
 ) -> None:
-    data = deepcopy(asset_store_data)
+    data = deepcopy(asset_store_data_v3_1)
     record_id = ASSET_UUID if kind == "assets" else PURCHASE_UUID
     data[kind][record_id] = value
     before, snapshot = _serialized(data), deepcopy(data)
@@ -345,12 +367,12 @@ def test_non_mapping_record_fails_closed(
     [(SECOND_UUID, THIRD_UUID), (THIRD_UUID, SECOND_UUID)],
 )
 def test_first_invalid_asset_is_chosen_by_sorted_key_not_insertion(
-    asset_store_data: AssetStoreData, order: tuple[str, str]
+    asset_store_data_v3_1: AssetStoreData, order: tuple[str, str]
 ) -> None:
-    data = deepcopy(asset_store_data)
+    data = deepcopy(asset_store_data_v3_1)
     invalid = {
-        SECOND_UUID: {**_asset(asset_store_data, SECOND_UUID), "second": 1},
-        THIRD_UUID: {**_asset(asset_store_data, THIRD_UUID), "third": 1},
+        SECOND_UUID: {**_asset(asset_store_data_v3_1, SECOND_UUID), "second": 1},
+        THIRD_UUID: {**_asset(asset_store_data_v3_1, THIRD_UUID), "third": 1},
     }
     assets = {uuid: invalid[uuid] for uuid in order}
     assets[ASSET_UUID] = data["assets"][ASSET_UUID]
@@ -366,9 +388,9 @@ def test_first_invalid_asset_is_chosen_by_sorted_key_not_insertion(
     [(SECOND_UUID, THIRD_UUID), (THIRD_UUID, SECOND_UUID)],
 )
 def test_first_invalid_purchase_is_chosen_by_sorted_key_not_insertion(
-    asset_store_data: AssetStoreData, order: tuple[str, str]
+    asset_store_data_v3_1: AssetStoreData, order: tuple[str, str]
 ) -> None:
-    data = deepcopy(asset_store_data)
+    data = deepcopy(asset_store_data_v3_1)
     base = data["purchases"][PURCHASE_UUID]
     invalid = {
         SECOND_UUID: {**deepcopy(base), "purchase_uuid": SECOND_UUID, "second": 1},
@@ -380,8 +402,8 @@ def test_first_invalid_purchase_is_chosen_by_sorted_key_not_insertion(
     assert err.value.record_id == SECOND_UUID
 
 
-def test_assets_are_checked_before_purchases(asset_store_data: AssetStoreData) -> None:
-    data = deepcopy(asset_store_data)
+def test_assets_are_checked_before_purchases(asset_store_data_v3_1: AssetStoreData) -> None:
+    data = deepcopy(asset_store_data_v3_1)
     data["assets"][ASSET_UUID]["asset_extra"] = 1
     data["purchases"][PURCHASE_UUID]["purchase_extra"] = 1
     with pytest.raises(StoreShapeError) as err:
@@ -398,9 +420,9 @@ def test_non_mapping_payload_fails_closed(data: Any) -> None:
 
 @pytest.mark.parametrize("kind", ["assets", "purchases"])
 def test_missing_collection_fails_closed(
-    asset_store_data: AssetStoreData, kind: str
+    asset_store_data_v3_1: AssetStoreData, kind: str
 ) -> None:
-    data = deepcopy(asset_store_data)
+    data = deepcopy(asset_store_data_v3_1)
     del data[kind]
     before, snapshot = _serialized(data), deepcopy(data)
     with pytest.raises(StoreShapeError, match="missing") as err:
@@ -412,9 +434,9 @@ def test_missing_collection_fails_closed(
 @pytest.mark.parametrize("kind", ["assets", "purchases"])
 @pytest.mark.parametrize("value", [None, [], "collection", 0])
 def test_non_mapping_collection_fails_closed(
-    asset_store_data: AssetStoreData, kind: str, value: Any
+    asset_store_data_v3_1: AssetStoreData, kind: str, value: Any
 ) -> None:
-    data = deepcopy(asset_store_data)
+    data = deepcopy(asset_store_data_v3_1)
     data[kind] = value
     with pytest.raises(StoreShapeError, match="collection is not a mapping") as err:
         preflight_store_3_1_record_shapes(data)
@@ -429,8 +451,8 @@ def test_non_string_record_keys_are_ordered_deterministically() -> None:
     assert err.value.unexpected == ("b",)
 
 
-def test_error_carries_no_field_values(asset_store_data: AssetStoreData) -> None:
-    data = deepcopy(asset_store_data)
+def test_error_carries_no_field_values(asset_store_data_v3_1: AssetStoreData) -> None:
+    data = deepcopy(asset_store_data_v3_1)
     secret = "private-serial-value-123"
     data["assets"][ASSET_UUID]["serial_number"] = secret
     data["assets"][ASSET_UUID]["mystery_field"] = "private-mystery-value"
@@ -455,9 +477,9 @@ def test_error_carries_no_field_values(asset_store_data: AssetStoreData) -> None
     [("assets", ASSET_UUID), ("purchases", PURCHASE_UUID)],
 )
 def test_unknown_field_survives_rejection(
-    asset_store_data: AssetStoreData, kind: str, record_id: str
+    asset_store_data_v3_1: AssetStoreData, kind: str, record_id: str
 ) -> None:
-    data = deepcopy(asset_store_data)
+    data = deepcopy(asset_store_data_v3_1)
     evidence = {"nested": ["kept", 1]}
     data[kind][record_id]["mystery_field"] = evidence
     before, snapshot = _serialized(data), deepcopy(data)
@@ -471,14 +493,14 @@ def test_unknown_field_survives_rejection(
 # Non-mutation of accepted input and read-only inputs
 
 
-def test_accepted_input_is_unchanged(asset_store_data: AssetStoreData) -> None:
-    data = deepcopy(asset_store_data)
+def test_accepted_input_is_unchanged(asset_store_data_v3_1: AssetStoreData) -> None:
+    data = deepcopy(asset_store_data_v3_1)
     before, snapshot = _serialized(data), deepcopy(data)
     assert preflight_store_3_1_record_shapes(data) is None
     _assert_unchanged(before, snapshot, data)
 
 
-def test_read_only_mappings_are_accepted(asset_store_data: AssetStoreData) -> None:
+def test_read_only_mappings_are_accepted(asset_store_data_v3_1: AssetStoreData) -> None:
     frozen = MappingProxyType(
         {
             key: (
@@ -491,15 +513,15 @@ def test_read_only_mappings_are_accepted(asset_store_data: AssetStoreData) -> No
                 if key in ("assets", "purchases")
                 else value
             )
-            for key, value in deepcopy(asset_store_data).items()
+            for key, value in deepcopy(asset_store_data_v3_1).items()
         }
     )
     preflight_store_3_1_record_shapes(frozen)
 
 
-def test_only_record_shapes_are_checked(asset_store_data: AssetStoreData) -> None:
+def test_only_record_shapes_are_checked(asset_store_data_v3_1: AssetStoreData) -> None:
     """Semantic Store 3.1 validation stays with _validate_store_data."""
-    data = deepcopy(asset_store_data)
+    data = deepcopy(asset_store_data_v3_1)
     data["assets"][ASSET_UUID]["asset_id"] = "not-an-asset-id"
     data["purchases"][PURCHASE_UUID]["asset_uuids"] = ["missing"]
     data["extra_top_level"] = {}
@@ -511,7 +533,7 @@ def test_empty_collections_pass() -> None:
     preflight_store_3_1_record_shapes(_empty_store_data())
 
 
-# Production boundary: Store 3.1 unchanged, WP1 code unreachable
+# Production boundary: Store 4.1 active, shape helpers only in Store code
 
 
 def _imported_modules(path: Path) -> set[str]:
@@ -526,8 +548,9 @@ def _imported_modules(path: Path) -> set[str]:
     return names
 
 
-def test_store_shape_is_reachable_only_through_inactive_store_4_1_code() -> None:
-    """Since WP3 only storage.py imports store_shape, and only for 4.1 code."""
+def test_store_shape_is_reachable_only_through_the_store_validators() -> None:
+    """Only storage.py imports store_shape, and only for Store validation
+    and migration."""
     public = {
         name
         for name in vars(store_shape)
@@ -547,8 +570,12 @@ def test_store_shape_is_reachable_only_through_inactive_store_4_1_code() -> None
         for symbol in public:
             assert symbol not in source, (path.name, symbol)
     tree = ast.parse((PACKAGE / "storage.py").read_text(encoding="utf-8"))
+    allowed = {
+        "STORE_3_1_TOP_LEVEL_KEYS": {"_validate_store_v3_1_data"},
+        "STORE_4_1_TOP_LEVEL_KEYS": set(STORE_4_1_SCOPES) | {"<module>"},
+    }
     for symbol, scopes in referencing_scopes(tree, frozenset(public)).items():
-        assert scopes <= INACTIVE_STORE_4_1, (symbol, scopes)
+        assert scopes <= allowed.get(symbol, STORE_4_1_SCOPES), (symbol, scopes)
 
 
 def test_store_shape_is_pure() -> None:
@@ -563,12 +590,11 @@ def test_store_shape_is_pure() -> None:
     }
 
 
-def test_production_store_is_still_3_1(hass: HomeAssistant) -> None:
-    assert (STORAGE_VERSION, STORAGE_MINOR_VERSION) == (3, 1)
+def test_production_store_is_4_1(hass: HomeAssistant) -> None:
+    assert (STORAGE_VERSION, STORAGE_MINOR_VERSION) == (4, 1)
     store = DeviceLifecycleStore(hass)
-    assert (store.version, store.minor_version) == (3, 1)
+    assert (store.version, store.minor_version) == (4, 1)
     empty = _empty_store_data()
-    assert set(empty) == STORE_3_1_TOP_LEVEL_KEYS
-    assert "maintenance_schedules" not in empty
-    assert "maintenance_events" not in empty
-    assert storage.STORE_TOP_LEVEL_KEYS == STORE_3_1_TOP_LEVEL_KEYS
+    assert set(empty) == STORE_4_1_TOP_LEVEL_KEYS
+    assert empty["maintenance_schedules"] == empty["maintenance_events"] == {}
+    assert storage.STORE_TOP_LEVEL_KEYS == STORE_4_1_TOP_LEVEL_KEYS

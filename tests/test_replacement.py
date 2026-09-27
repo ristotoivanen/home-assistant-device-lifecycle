@@ -46,6 +46,7 @@ def _large_replacement_graph(*, size: int, cycle: bool) -> dict:
             "notes": None,
             "field_sources": {"name": "user"},
             "ha_device_refs": [],
+            "archived_at": None,
         }
         for index, asset_uuid in enumerate(asset_uuids)
     }
@@ -72,6 +73,8 @@ def _large_replacement_graph(*, size: int, cycle: bool) -> dict:
         "assets": assets,
         "lifecycle_events": {},
         "replacement_records": replacement_records,
+        "maintenance_schedules": {},
+        "maintenance_events": {},
     }
 
 

@@ -1,8 +1,8 @@
 """Exact Store record shapes and the Store 3.1 migration-source preflight.
 
-Inactive library code for the Store 4.1 upgrade: no production module
-imports it yet, and the production Store is still 3.1. The canonical target
-is docs/asset-archive-store-v4.md.
+The shape authority for the production Store 4.1 validator and the
+3.1 -> 4.1 migration step in storage.py. The canonical target is
+docs/asset-archive-store-v4.md.
 
 Store 3.1 already enforces its exact top-level shape, but it has never
 enforced exact Asset and Purchase record key sets. Before any Store 4.1

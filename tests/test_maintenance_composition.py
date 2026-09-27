@@ -1,4 +1,4 @@
-"""The Maintenance component of the future Store upgrade, as inactive library code."""
+"""The Maintenance component of the Store 3.1 -> 4.1 migration step."""
 
 from __future__ import annotations
 
@@ -23,10 +23,12 @@ from custom_components.device_lifecycle.storage import (
     STORAGE_VERSION,
     STORE_TOP_LEVEL_KEYS,
     AssetStoreError,
+    _migrate_v3_1_to_v4_1,
     _validate_store_data,
+    _validate_store_v3_1_data,
 )
 
-from .conftest import ASSET_UUID
+from .conftest import ASSET_UUID, as_store_3_1_source
 from .test_lifecycle import _manager
 from .test_store_v4_1_validation import referencing_scopes
 
@@ -40,12 +42,13 @@ STORE_3_1_KEYS = (
 
 
 async def _rich_store(hass: HomeAssistant, data: AssetStoreData) -> dict[str, Any]:
-    """A valid Store 3.1 payload with Purchase, Runtime, Deployment, and Lifecycle."""
-    manager = _manager(hass, data)
+    """A valid Store 3.1 source with Purchase, Runtime, Deployment, and
+    Lifecycle, built through the production mutations."""
+    manager = _manager(hass, _migrate_v3_1_to_v4_1(deepcopy(data)))
     await manager.async_import_legacy_runtime(ASSET_UUID, Decimal("7200.5"))
     await manager.async_create_manual_asset(name="Second Asset")
-    rich = deepcopy(manager._data)
-    _validate_store_data(rich)
+    rich = as_store_3_1_source(manager._data)
+    _validate_store_v3_1_data(rich)
     assert rich["purchases"]
     assert rich["lifecycle_events"]
     assert rich["assets"][ASSET_UUID]["runtime"] == {"total_seconds": "7200.5"}
@@ -54,10 +57,10 @@ async def _rich_store(hass: HomeAssistant, data: AssetStoreData) -> dict[str, An
 
 
 async def test_adds_only_empty_collections_and_preserves_everything(
-    hass: HomeAssistant, asset_store_data: AssetStoreData
+    hass: HomeAssistant, asset_store_data_v3_1: AssetStoreData
 ) -> None:
     """Nothing is inferred from Purchase, Runtime, Deployment, or Lifecycle."""
-    original = await _rich_store(hass, asset_store_data)
+    original = await _rich_store(hass, asset_store_data_v3_1)
 
     result = add_maintenance_collections(original)
 
@@ -72,9 +75,9 @@ async def test_adds_only_empty_collections_and_preserves_everything(
 
 
 async def test_input_is_untouched_and_result_is_not_aliased(
-    hass: HomeAssistant, asset_store_data: AssetStoreData
+    hass: HomeAssistant, asset_store_data_v3_1: AssetStoreData
 ) -> None:
-    original = await _rich_store(hass, asset_store_data)
+    original = await _rich_store(hass, asset_store_data_v3_1)
     snapshot = deepcopy(original)
 
     result = add_maintenance_collections(original)
@@ -94,9 +97,9 @@ async def test_input_is_untouched_and_result_is_not_aliased(
 
 
 async def test_deterministic(
-    hass: HomeAssistant, asset_store_data: AssetStoreData
+    hass: HomeAssistant, asset_store_data_v3_1: AssetStoreData
 ) -> None:
-    original = await _rich_store(hass, asset_store_data)
+    original = await _rich_store(hass, asset_store_data_v3_1)
     first = add_maintenance_collections(original)
     second = add_maintenance_collections(original)
     assert first == second
@@ -114,18 +117,18 @@ async def test_deterministic(
     ],
 )
 def test_existing_maintenance_collections_fail_closed(
-    asset_store_data: AssetStoreData, existing: dict[str, Any]
+    asset_store_data_v3_1: AssetStoreData, existing: dict[str, Any]
 ) -> None:
     """Applies exactly once; existing or partial Maintenance data is never overwritten."""
-    candidate: dict[str, Any] = {**deepcopy(asset_store_data), **deepcopy(existing)}
+    candidate: dict[str, Any] = {**deepcopy(asset_store_data_v3_1), **deepcopy(existing)}
     before = deepcopy(candidate)
     with pytest.raises(MaintenanceCompositionError, match="already contains"):
         add_maintenance_collections(candidate)
     assert candidate == before
 
 
-def test_applying_twice_fails_closed(asset_store_data: AssetStoreData) -> None:
-    once = add_maintenance_collections(asset_store_data)
+def test_applying_twice_fails_closed(asset_store_data_v3_1: AssetStoreData) -> None:
+    once = add_maintenance_collections(asset_store_data_v3_1)
     with pytest.raises(MaintenanceCompositionError):
         add_maintenance_collections(once)
 
@@ -137,18 +140,18 @@ def test_non_mapping_candidate_is_rejected(candidate: Any) -> None:
 
 
 def test_composable_with_other_top_level_components(
-    asset_store_data: AssetStoreData,
+    asset_store_data_v3_1: AssetStoreData,
 ) -> None:
     """The helper does not own the order or the final shape of the upgrade."""
-    archived = {**deepcopy(asset_store_data), "future_component": {"kept": True}}
+    archived = {**deepcopy(asset_store_data_v3_1), "future_component": {"kept": True}}
     result = add_maintenance_collections(archived)
     assert result["future_component"] == {"kept": True}
 
 
 async def test_added_collections_pass_maintenance_validation(
-    hass: HomeAssistant, asset_store_data: AssetStoreData
+    hass: HomeAssistant, asset_store_data_v3_1: AssetStoreData
 ) -> None:
-    result = add_maintenance_collections(await _rich_store(hass, asset_store_data))
+    result = add_maintenance_collections(await _rich_store(hass, asset_store_data_v3_1))
     validate_maintenance_collections(
         result["assets"],
         result["maintenance_schedules"],
@@ -156,24 +159,29 @@ async def test_added_collections_pass_maintenance_validation(
     )
 
 
-async def test_store_3_1_activation_boundary_stays_real(
-    hass: HomeAssistant, asset_store_data: AssetStoreData
+async def test_store_3_1_source_boundary_stays_real(
+    hass: HomeAssistant, asset_store_data_v3_1: AssetStoreData
 ) -> None:
-    """The original is valid 3.1; the composed candidate deliberately is not."""
-    original = await _rich_store(hass, asset_store_data)
-    _validate_store_data(original)
+    """The source is valid 3.1 and the composed candidate is not; the
+    production Store 4.1 carries both Maintenance collections."""
+    original = await _rich_store(hass, asset_store_data_v3_1)
+    _validate_store_v3_1_data(original)
     result = add_maintenance_collections(original)
     with pytest.raises(AssetStoreError, match="invalid top-level shape"):
-        _validate_store_data(result)  # type: ignore[arg-type]
-    assert (STORAGE_VERSION, STORAGE_MINOR_VERSION) == (3, 1)
-    assert set(STORE_3_1_KEYS) == STORE_TOP_LEVEL_KEYS
+        _validate_store_v3_1_data(result)  # type: ignore[arg-type]
+    assert (STORAGE_VERSION, STORAGE_MINOR_VERSION) == (4, 1)
+    assert STORE_TOP_LEVEL_KEYS == set(STORE_3_1_KEYS) | {
+        "maintenance_schedules",
+        "maintenance_events",
+    }
+    _validate_store_data(_migrate_v3_1_to_v4_1(original))
 
 
-def test_helper_is_pure_and_not_wired_into_production() -> None:
+def test_helper_is_pure_and_reached_only_through_the_migration_step() -> None:
     """No HA, I/O, clock, or migration dependency.
 
-    Since WP3 the inactive Store 3.1 -> 4.1 step exists and composes this
-    helper, but no production path dispatches to it before activation.
+    The Store 3.1 -> 4.1 step composes this helper, and only the Store
+    migration callback dispatches to that step.
     """
     module_path = Path(maintenance.__file__)
     tree = ast.parse(module_path.read_text(encoding="utf-8"))
@@ -199,8 +207,9 @@ def test_helper_is_pure_and_not_wired_into_production() -> None:
         storage_tree,
         frozenset({"add_maintenance_collections", "_migrate_v3_1_to_v4_1"}),
     )
-    # The step exists and composes the helper ...
+    # The step composes the helper, and only the migration callback runs it.
     assert scopes["add_maintenance_collections"] == {"_migrate_v3_1_to_v4_1"}
     assert hasattr(storage, "_migrate_v3_1_to_v4_1")
-    # ... but nothing, including the Store migration callback, calls the step.
-    assert scopes.get("_migrate_v3_1_to_v4_1", set()) == set()
+    assert scopes["_migrate_v3_1_to_v4_1"] == {
+        "DeviceLifecycleStore._async_migrate_func"
+    }

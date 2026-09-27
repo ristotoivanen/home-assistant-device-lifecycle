@@ -391,5 +391,5 @@ async def test_remove_and_readd_tracking_keeps_one_identity(
     )
 
 
-def test_store_is_still_3_1() -> None:
-    assert (STORAGE_VERSION, STORAGE_MINOR_VERSION) == (3, 1)
+def test_store_is_4_1() -> None:
+    assert (STORAGE_VERSION, STORAGE_MINOR_VERSION) == (4, 1)

@@ -91,6 +91,8 @@ def _store_with_purchase(*, configured: bool = True) -> AssetStoreData:
         "assets": {},
         "lifecycle_events": {},
         "replacement_records": {},
+        "maintenance_schedules": {},
+        "maintenance_events": {},
     }
 
 

@@ -88,28 +88,24 @@ from .runtime_identity import resolve_runtime_subentry_asset
 from .store_shape import (
     ASSET_KEYS_4_1,
     PURCHASE_KEYS,
+    STORE_3_1_TOP_LEVEL_KEYS,
     STORE_4_1_TOP_LEVEL_KEYS,
     StoreShapeError,
     preflight_store_3_1_record_shapes,
     require_exact_record_keys,
 )
 
-STORAGE_VERSION = 3
+# Store 4.1 is the production schema (docs/asset-archive-store-v4.md). Once
+# an installation has written it, releases that read Store 3.1 refuse the
+# file; returning to them requires restoring the pre-upgrade backup.
+STORAGE_VERSION = 4
 STORAGE_MINOR_VERSION = 1
 STORAGE_KEY = f"{DOMAIN}.assets"
 
-# The exact top-level shape of the Store 3.1 payload. The Store version names
-# one exact schema, so a key outside this set is not a forward-compatible
+# The exact top-level shape of the production Store payload. The Store version
+# names one exact schema, so a key outside this set is not a forward-compatible
 # extension: it belongs to a different schema and fails closed.
-STORE_TOP_LEVEL_KEYS = frozenset(
-    {
-        "next_asset_number",
-        "purchases",
-        "assets",
-        "lifecycle_events",
-        "replacement_records",
-    }
-)
+STORE_TOP_LEVEL_KEYS = STORE_4_1_TOP_LEVEL_KEYS
 
 ASSET_ID_PATTERN = re.compile(r"^DL([0-9]{4})$")
 MAX_ASSET_NUMBER = 9999
@@ -248,7 +244,15 @@ class DeviceLifecycleStore(Store[AssetStoreData]):
         old_minor_version: int,
         old_data: AssetStoreData,
     ) -> AssetStoreData:
-        """Migrate Asset Core storage without changing persistent identity."""
+        """Migrate Asset Core storage without changing persistent identity.
+
+        Supported sources are 1.1, 1.2, 2.1, 3.1, and 4.1. Older sources
+        reach exact Store 3.1 through the existing steps, and 3.1 reaches
+        4.1 only through ``_migrate_v3_1_to_v4_1``. Home Assistant saves the
+        result through ``async_save``, which verifies it by direct readback
+        before ``async_load`` returns, so nothing unverified is published.
+        A newer major version is refused by Home Assistant itself.
+        """
         data = deepcopy(old_data)
 
         if old_major_version == STORAGE_VERSION:
@@ -261,6 +265,9 @@ class DeviceLifecycleStore(Store[AssetStoreData]):
             _validate_store_data(data)
             return data
 
+        if old_major_version == 3 and old_minor_version == 1:
+            return _migrate_v3_1_to_v4_1(data)
+
         if old_major_version == 1 and old_minor_version in (1, 2):
             data = _migrate_v1_to_v2_1(data, old_minor_version)
         elif old_major_version == 2 and old_minor_version == 1:
@@ -269,12 +276,10 @@ class DeviceLifecycleStore(Store[AssetStoreData]):
             raise AssetStoreError(
                 "Unsupported Asset Core Store version "
                 f"{old_major_version}.{old_minor_version}; expected one of "
-                "1.1, 1.2, 2.1, or 3.1"
+                "1.1, 1.2, 2.1, 3.1, or 4.1"
             )
 
-        data = _migrate_v2_1_to_v3_1(data)
-        _validate_store_data(data)
-        return data
+        return _migrate_v3_1_to_v4_1(_migrate_v2_1_to_v3_1(data))
 
     async def async_save(self, data: AssetStoreData) -> None:
         """Save and verify the exact Store envelope from the persisted file."""
@@ -311,7 +316,7 @@ class DeviceLifecycleStore(Store[AssetStoreData]):
             )
 
     async def async_load_persisted_snapshot(self) -> AssetStoreData | None:
-        """Read the current v3.1 payload directly, bypassing Store caches."""
+        """Read the current Store payload directly, bypassing Store caches."""
         try:
             persisted = await self.hass.async_add_executor_job(
                 json_util.load_json,
@@ -344,13 +349,15 @@ class DeviceLifecycleStore(Store[AssetStoreData]):
 
 
 def _empty_store_data() -> AssetStoreData:
-    """Return an empty Store 3.1 Asset Core payload."""
+    """Return an empty Store 4.1 Asset Core payload."""
     return {
         "next_asset_number": 1,
         "purchases": {},
         "assets": {},
         "lifecycle_events": {},
         "replacement_records": {},
+        "maintenance_schedules": {},
+        "maintenance_events": {},
     }
 
 
@@ -971,23 +978,23 @@ def _validate_replacement_graph(data: AssetStoreData) -> None:
         visited.update(path)
 
 
-def _validate_store_data(data: AssetStoreData) -> None:
-    """Validate a production Store 3.1 payload.
+def _validate_store_v3_1_data(data: AssetStoreData) -> None:
+    """Validate a Store 3.1 migration source.
 
     The exact Store 3.1 top-level shape, then the domain invariants shared
-    with Store 4.1. This is the only validator the production Store uses
-    until Store 4.1 is activated.
+    with Store 4.1. Since Store 4.1 activation it is used only to validate a
+    3.1 source before ``_migrate_v3_1_to_v4_1`` transforms it.
     """
     if not isinstance(data, dict):
         raise AssetStoreError("Asset Core storage payload is not a mapping")
     keys = set(data)
-    if keys != STORE_TOP_LEVEL_KEYS:
+    if keys != STORE_3_1_TOP_LEVEL_KEYS:
         # Name the keys only; the payload itself is never logged.
-        missing = sorted(STORE_TOP_LEVEL_KEYS - keys)
-        unexpected = sorted(str(key) for key in keys - STORE_TOP_LEVEL_KEYS)
+        missing = sorted(STORE_3_1_TOP_LEVEL_KEYS - keys)
+        unexpected = sorted(str(key) for key in keys - STORE_3_1_TOP_LEVEL_KEYS)
         raise AssetStoreError(
-            f"Asset Core Store {STORAGE_VERSION}.{STORAGE_MINOR_VERSION} has an "
-            f"invalid top-level shape: missing={missing}, unexpected={unexpected}"
+            "Asset Core Store 3.1 has an invalid top-level shape: "
+            f"missing={missing}, unexpected={unexpected}"
         )
 
     _validate_store_payload(data)
@@ -1217,13 +1224,10 @@ def _validate_store_payload(data: Mapping[str, Any]) -> None:
     _validate_replacement_graph(data)
 
 
-# Store 4.1 support below is inactive: the production Store is 3.1, and no
-# setup, migration dispatch, recovery, or mutation path calls it until the
-# Store 4.1 activation commit. The target is docs/asset-archive-store-v4.md.
+def _validate_store_data(data: Mapping[str, Any]) -> None:
+    """Validate a complete production Store 4.1 payload.
 
-
-def _validate_store_v4_1_data(data: Mapping[str, Any]) -> None:
-    """Validate a complete Store 4.1 payload by composing the authorities.
+    It composes the authorities; see docs/asset-archive-store-v4.md.
 
     Exact top-level keys, collection types, exact Asset and Purchase record
     shapes, the shared Store invariants, the Asset Archive state, and the
@@ -1282,7 +1286,7 @@ def _validate_store_v4_1_data(data: Mapping[str, Any]) -> None:
         ) from err
 
 
-def _migrate_v3_1_to_v4_1(old_data: AssetStoreData) -> dict[str, Any]:
+def _migrate_v3_1_to_v4_1(old_data: AssetStoreData) -> AssetStoreData:
     """Return the Store 4.1 payload for an exact, valid Store 3.1 payload.
 
     Validate Store 3.1, prove the exact Asset and Purchase source shapes,
@@ -1291,7 +1295,7 @@ def _migrate_v3_1_to_v4_1(old_data: AssetStoreData) -> dict[str, Any]:
     persisted, or read from a clock, and the input is never modified.
     """
     data = deepcopy(old_data)
-    _validate_store_data(data)
+    _validate_store_v3_1_data(data)
     try:
         preflight_store_3_1_record_shapes(data)
     except StoreShapeError as err:
@@ -1307,8 +1311,8 @@ def _migrate_v3_1_to_v4_1(old_data: AssetStoreData) -> dict[str, Any]:
             f"Asset Core Store 3.1 cannot be migrated to 4.1: {err}",
             code="store_migration_composition_failed",
         ) from err
-    _validate_store_v4_1_data(candidate)
-    return candidate
+    _validate_store_data(candidate)
+    return cast(AssetStoreData, candidate)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1814,6 +1818,7 @@ class AssetStoreManager:
             "hw_version": metadata.get("hw_version"),
             "notes": metadata.get("notes"),
             "field_sources": dict(field_sources),
+            "archived_at": None,
             "ha_device_refs": (
                 []
                 if primary_device_id is None

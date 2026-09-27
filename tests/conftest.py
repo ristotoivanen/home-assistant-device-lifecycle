@@ -273,8 +273,8 @@ def asset_store_data_v1_2(
 
 
 @pytest.fixture
-def asset_store_data(asset_store_data_v1_1: AssetStoreData) -> AssetStoreData:
-    """Return the representative payload after migration to schema 3.1."""
+def asset_store_data_v3_1(asset_store_data_v1_1: AssetStoreData) -> AssetStoreData:
+    """Return the representative payload as a historical Store 3.1 source."""
     data = deepcopy(asset_store_data_v1_1)
     asset = data["assets"][ASSET_UUID]
     asset[CONF_DEPLOYMENT_STATE] = DEPLOYMENT_STATE_UNKNOWN
@@ -287,6 +287,30 @@ def asset_store_data(asset_store_data_v1_1: AssetStoreData) -> AssetStoreData:
     asset["field_sources"]["purchase_uuid"] = "purchase"
     data["lifecycle_events"] = {}
     data["replacement_records"] = {}
+    return data
+
+
+def as_store_3_1_source(data: Mapping[str, Any]) -> AssetStoreData:
+    """Return a Store 4.1 payload as the historical Store 3.1 it came from.
+
+    Only valid for a payload whose Assets are active and whose Maintenance
+    collections are empty; the 4.1 additions are dropped, nothing else.
+    """
+    source: dict[str, Any] = deepcopy(dict(data))
+    assert source.pop("maintenance_schedules") == {}
+    assert source.pop("maintenance_events") == {}
+    for asset in source["assets"].values():
+        assert asset.pop("archived_at") is None
+    return source  # type: ignore[return-value]
+
+
+@pytest.fixture
+def asset_store_data(asset_store_data_v3_1: AssetStoreData) -> AssetStoreData:
+    """Return the representative current production payload (Store 4.1)."""
+    data = deepcopy(asset_store_data_v3_1)
+    data["assets"][ASSET_UUID]["archived_at"] = None
+    data["maintenance_schedules"] = {}
+    data["maintenance_events"] = {}
     return data
 
 

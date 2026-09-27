@@ -262,6 +262,8 @@ async def test_quick_add_reload_exposes_device_and_seven_entities(
             "assets": {},
             "lifecycle_events": {},
             "replacement_records": {},
+            "maintenance_schedules": {},
+            "maintenance_events": {},
         },
     )
     initial = await hass.config_entries.options.async_init(entry.entry_id)
@@ -378,6 +380,8 @@ async def test_quick_add_replay_reload_leaves_registries_unchanged(
             "assets": {},
             "lifecycle_events": {},
             "replacement_records": {},
+            "maintenance_schedules": {},
+            "maintenance_events": {},
         },
     )
     flow = DeviceLifecycleConfigFlow.async_get_options_flow(entry)
@@ -507,6 +511,8 @@ async def test_quick_add_ambiguous_persistence_replay_reload_exposes_asset(
             "assets": {},
             "lifecycle_events": {},
             "replacement_records": {},
+            "maintenance_schedules": {},
+            "maintenance_events": {},
         },
     )
     flow = DeviceLifecycleConfigFlow.async_get_options_flow(entry)

@@ -1,10 +1,9 @@
 """Asset Archive state: the Store transform and the Archive load invariants.
 
-Inactive library code for the Store 4.1 upgrade: the production Store is
-still 3.1, only the inactive Store 4.1 validator and migration step in
-storage.py use the transform and the validator, and nothing in production
-uses the Archive and Restore mutations yet. The canonical contract is
-docs/asset-archive-store-v4.md.
+Since Store 4.1 activation the production Store validator and the 3.1 -> 4.1
+migration step in storage.py use the transform and the validator. Nothing
+in production uses the Archive and Restore mutations yet. The canonical
+contract is docs/asset-archive-store-v4.md.
 
 An Asset's Archive state is one field, ``archived_at``: ``None`` while the
 Asset is in active/current management, a canonical UTC timestamp while it is

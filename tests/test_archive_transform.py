@@ -34,7 +34,9 @@ from custom_components.device_lifecycle.storage import (
     STORAGE_VERSION,
     AssetStoreError,
     _empty_store_data,
+    _migrate_v3_1_to_v4_1,
     _validate_store_data,
+    _validate_store_v3_1_data,
 )
 from custom_components.device_lifecycle.store_shape import (
     ASSET_KEYS_3_1,
@@ -44,9 +46,9 @@ from custom_components.device_lifecycle.store_shape import (
     preflight_store_3_1_record_shapes,
 )
 
-from .conftest import ASSET_UUID, DEVICE_ID, PURCHASE_UUID
+from .conftest import ASSET_UUID, DEVICE_ID, PURCHASE_UUID, as_store_3_1_source
 from .test_lifecycle import _manager
-from .test_store_v4_1_validation import INACTIVE_STORE_4_1, referencing_scopes
+from .test_store_v4_1_validation import STORE_4_1_SCOPES, referencing_scopes
 
 SECOND_UUID = "55555555-5555-4555-8555-555555555555"
 THIRD_UUID = "66666666-6666-4666-8666-666666666666"
@@ -59,9 +61,10 @@ def _serialized(data: Any) -> str:
 
 
 async def _rich_store(hass: HomeAssistant, data: AssetStoreData) -> dict[str, Any]:
-    """A valid Store 3.1 payload with Purchase, Runtime, Deployment, HA refs,
-    Lifecycle history, and a Replacement."""
-    manager = _manager(hass, data)
+    """A valid Store 3.1 source with Purchase, Runtime, Deployment, HA refs,
+    Lifecycle history, and a Replacement, built through the production
+    mutations and returned as the Store 3.1 it would have been."""
+    manager = _manager(hass, _migrate_v3_1_to_v4_1(deepcopy(data)))
     await manager.async_import_legacy_runtime(ASSET_UUID, Decimal("7200.5"))
     await manager.async_set_asset_deployment(
         ASSET_UUID, deployment_state=DEPLOYMENT_STATE_DEPLOYED
@@ -74,8 +77,8 @@ async def _rich_store(hass: HomeAssistant, data: AssetStoreData) -> dict[str, An
         effective_date=None,
         notes=None,
     )
-    rich = deepcopy(manager._data)
-    _validate_store_data(rich)
+    rich = as_store_3_1_source(manager._data)
+    _validate_store_v3_1_data(rich)
     assert len(rich["assets"]) == 2
     assert rich["purchases"][PURCHASE_UUID]["asset_uuids"] == [ASSET_UUID]
     assert rich["assets"][ASSET_UUID]["runtime"] == {"total_seconds": "7200.5"}
@@ -86,8 +89,8 @@ async def _rich_store(hass: HomeAssistant, data: AssetStoreData) -> dict[str, An
     return rich
 
 
-def _store_4_1_asset(asset_store_data: AssetStoreData, **fields: Any) -> dict[str, Any]:
-    asset = deepcopy(asset_store_data["assets"][ASSET_UUID])
+def _store_4_1_asset(asset_store_data_v3_1: AssetStoreData, **fields: Any) -> dict[str, Any]:
+    asset = deepcopy(asset_store_data_v3_1["assets"][ASSET_UUID])
     asset[ARCHIVED_AT] = None
     asset.update(fields)
     return asset
@@ -97,9 +100,9 @@ def _store_4_1_asset(asset_store_data: AssetStoreData, **fields: Any) -> dict[st
 
 
 async def test_every_asset_gains_only_archived_at_none(
-    hass: HomeAssistant, asset_store_data: AssetStoreData
+    hass: HomeAssistant, asset_store_data_v3_1: AssetStoreData
 ) -> None:
-    source = await _rich_store(hass, asset_store_data)
+    source = await _rich_store(hass, asset_store_data_v3_1)
     result = add_asset_archive_state(source)
 
     assert list(result) == list(source)
@@ -115,10 +118,10 @@ async def test_every_asset_gains_only_archived_at_none(
 
 
 async def test_deployed_asset_becomes_active_not_archived(
-    hass: HomeAssistant, asset_store_data: AssetStoreData
+    hass: HomeAssistant, asset_store_data_v3_1: AssetStoreData
 ) -> None:
     """Composition, not validation: active + deployed is valid and not inferred."""
-    result = add_asset_archive_state(await _rich_store(hass, asset_store_data))
+    result = add_asset_archive_state(await _rich_store(hass, asset_store_data_v3_1))
     asset = result["assets"][ASSET_UUID]
     assert asset["deployment_state"] == DEPLOYMENT_STATE_DEPLOYED
     assert asset[ARCHIVED_AT] is None
@@ -134,14 +137,14 @@ def test_empty_assets_mapping() -> None:
     assert result["assets"] is not source["assets"]
 
 
-def test_one_asset(asset_store_data: AssetStoreData) -> None:
-    result = add_asset_archive_state(asset_store_data)
+def test_one_asset(asset_store_data_v3_1: AssetStoreData) -> None:
+    result = add_asset_archive_state(asset_store_data_v3_1)
     assert result["assets"][ASSET_UUID][ARCHIVED_AT] is None
     assert len(result["assets"]) == 1
 
 
-def test_read_only_mapping_input(asset_store_data: AssetStoreData) -> None:
-    source = deepcopy(asset_store_data)
+def test_read_only_mapping_input(asset_store_data_v3_1: AssetStoreData) -> None:
+    source = deepcopy(asset_store_data_v3_1)
     frozen = MappingProxyType(
         {
             **source,
@@ -160,9 +163,9 @@ def test_read_only_mapping_input(asset_store_data: AssetStoreData) -> None:
 
 
 async def test_input_is_unchanged_and_result_is_not_aliased(
-    hass: HomeAssistant, asset_store_data: AssetStoreData
+    hass: HomeAssistant, asset_store_data_v3_1: AssetStoreData
 ) -> None:
-    source = await _rich_store(hass, asset_store_data)
+    source = await _rich_store(hass, asset_store_data_v3_1)
     snapshot, before = deepcopy(source), _serialized(source)
 
     result = add_asset_archive_state(source)
@@ -198,18 +201,18 @@ async def test_input_is_unchanged_and_result_is_not_aliased(
     assert fresh == fresh_snapshot
 
 
-def test_deterministic(asset_store_data: AssetStoreData) -> None:
-    first = add_asset_archive_state(asset_store_data)
-    second = add_asset_archive_state(asset_store_data)
+def test_deterministic(asset_store_data_v3_1: AssetStoreData) -> None:
+    first = add_asset_archive_state(asset_store_data_v3_1)
+    second = add_asset_archive_state(asset_store_data_v3_1)
     assert first == second
     assert _serialized(first) == _serialized(second)
 
 
 @pytest.mark.parametrize("existing", [None, ARCHIVED, "", 0])
 def test_existing_archived_at_fails_closed(
-    asset_store_data: AssetStoreData, existing: Any
+    asset_store_data_v3_1: AssetStoreData, existing: Any
 ) -> None:
-    source = deepcopy(asset_store_data)
+    source = deepcopy(asset_store_data_v3_1)
     source["assets"][ASSET_UUID][ARCHIVED_AT] = existing
     snapshot, before = deepcopy(source), _serialized(source)
     with pytest.raises(ArchiveCompositionError, match="already contains") as err:
@@ -220,9 +223,9 @@ def test_existing_archived_at_fails_closed(
     assert _serialized(source) == before
 
 
-def test_applying_twice_fails_closed(asset_store_data: AssetStoreData) -> None:
+def test_applying_twice_fails_closed(asset_store_data_v3_1: AssetStoreData) -> None:
     with pytest.raises(ArchiveCompositionError):
-        add_asset_archive_state(add_asset_archive_state(asset_store_data))
+        add_asset_archive_state(add_asset_archive_state(asset_store_data_v3_1))
 
 
 @pytest.mark.parametrize("candidate", [None, [], "store", 3])
@@ -231,8 +234,8 @@ def test_non_mapping_candidate_fails_closed(candidate: Any) -> None:
         add_asset_archive_state(candidate)
 
 
-def test_missing_assets_fails_closed(asset_store_data: AssetStoreData) -> None:
-    source = deepcopy(asset_store_data)
+def test_missing_assets_fails_closed(asset_store_data_v3_1: AssetStoreData) -> None:
+    source = deepcopy(asset_store_data_v3_1)
     del source["assets"]
     snapshot = deepcopy(source)
     with pytest.raises(ArchiveCompositionError, match="no assets"):
@@ -242,18 +245,18 @@ def test_missing_assets_fails_closed(asset_store_data: AssetStoreData) -> None:
 
 @pytest.mark.parametrize("assets", [None, [], "assets", 1])
 def test_non_mapping_assets_fails_closed(
-    asset_store_data: AssetStoreData, assets: Any
+    asset_store_data_v3_1: AssetStoreData, assets: Any
 ) -> None:
-    source = {**deepcopy(asset_store_data), "assets": assets}
+    source = {**deepcopy(asset_store_data_v3_1), "assets": assets}
     with pytest.raises(ArchiveCompositionError, match="not a mapping"):
         add_asset_archive_state(source)
 
 
 @pytest.mark.parametrize("record", [None, [], "asset", 1])
 def test_non_mapping_asset_fails_closed(
-    asset_store_data: AssetStoreData, record: Any
+    asset_store_data_v3_1: AssetStoreData, record: Any
 ) -> None:
-    source = deepcopy(asset_store_data)
+    source = deepcopy(asset_store_data_v3_1)
     source["assets"][SECOND_UUID] = record
     snapshot = deepcopy(source)
     with pytest.raises(ArchiveCompositionError, match=f"Asset {SECOND_UUID}"):
@@ -265,9 +268,9 @@ def test_non_mapping_asset_fails_closed(
     "order", [(SECOND_UUID, THIRD_UUID), (THIRD_UUID, SECOND_UUID)]
 )
 def test_first_invalid_asset_is_chosen_by_sorted_key(
-    asset_store_data: AssetStoreData, order: tuple[str, str]
+    asset_store_data_v3_1: AssetStoreData, order: tuple[str, str]
 ) -> None:
-    source = deepcopy(asset_store_data)
+    source = deepcopy(asset_store_data_v3_1)
     invalid = {
         SECOND_UUID: {**deepcopy(source["assets"][ASSET_UUID]), ARCHIVED_AT: None},
         THIRD_UUID: [],
@@ -295,19 +298,19 @@ def test_transform_reads_no_clock_and_infers_nothing() -> None:
 # asset_is_archived
 
 
-def test_asset_is_archived(asset_store_data: AssetStoreData) -> None:
-    assert asset_is_archived(_store_4_1_asset(asset_store_data)) is False
+def test_asset_is_archived(asset_store_data_v3_1: AssetStoreData) -> None:
+    assert asset_is_archived(_store_4_1_asset(asset_store_data_v3_1)) is False
     assert (
-        asset_is_archived(_store_4_1_asset(asset_store_data, archived_at=ARCHIVED))
+        asset_is_archived(_store_4_1_asset(asset_store_data_v3_1, archived_at=ARCHIVED))
         is True
     )
 
 
 def test_missing_archived_at_is_never_read_as_active(
-    asset_store_data: AssetStoreData,
+    asset_store_data_v3_1: AssetStoreData,
 ) -> None:
     with pytest.raises(KeyError):
-        asset_is_archived(asset_store_data["assets"][ASSET_UUID])
+        asset_is_archived(asset_store_data_v3_1["assets"][ASSET_UUID])
 
 
 # validate_asset_archive_state
@@ -323,9 +326,9 @@ def test_missing_archived_at_is_never_read_as_active(
     ],
 )
 def test_valid_archive_states(
-    asset_store_data: AssetStoreData, archived_at: str | None
+    asset_store_data_v3_1: AssetStoreData, archived_at: str | None
 ) -> None:
-    assets = {ASSET_UUID: _store_4_1_asset(asset_store_data, archived_at=archived_at)}
+    assets = {ASSET_UUID: _store_4_1_asset(asset_store_data_v3_1, archived_at=archived_at)}
     snapshot, before = deepcopy(assets), _serialized(assets)
     validate_asset_archive_state(assets)
     assert assets == snapshot
@@ -333,11 +336,11 @@ def test_valid_archive_states(
 
 
 def test_future_archived_at_is_valid_without_a_clock_comparison(
-    asset_store_data: AssetStoreData,
+    asset_store_data_v3_1: AssetStoreData,
 ) -> None:
     assets = {
         ASSET_UUID: _store_4_1_asset(
-            asset_store_data, archived_at="2999-01-01T00:00:00+00:00"
+            asset_store_data_v3_1, archived_at="2999-01-01T00:00:00+00:00"
         )
     }
     validate_asset_archive_state(assets)
@@ -362,11 +365,11 @@ def test_future_archived_at_is_valid_without_a_clock_comparison(
     ],
 )
 def test_non_canonical_archived_at_fails_closed(
-    asset_store_data: AssetStoreData, archived_at: Any
+    asset_store_data_v3_1: AssetStoreData, archived_at: Any
 ) -> None:
     assets = {
         ASSET_UUID: _store_4_1_asset(
-            asset_store_data,
+            asset_store_data_v3_1,
             archived_at=archived_at,
             deployment_state=DEPLOYMENT_STATE_NOT_DEPLOYED,
         )
@@ -381,16 +384,16 @@ def test_non_canonical_archived_at_fails_closed(
     assert assets == snapshot
 
 
-def test_missing_archived_at_fails_validation(asset_store_data: AssetStoreData) -> None:
-    assets = deepcopy(asset_store_data["assets"])
+def test_missing_archived_at_fails_validation(asset_store_data_v3_1: AssetStoreData) -> None:
+    assets = deepcopy(asset_store_data_v3_1["assets"])
     with pytest.raises(ArchiveValidationError, match="has no archived_at"):
         validate_asset_archive_state(assets)
 
 
-def test_archived_and_deployed_fails_closed(asset_store_data: AssetStoreData) -> None:
+def test_archived_and_deployed_fails_closed(asset_store_data_v3_1: AssetStoreData) -> None:
     assets = {
         ASSET_UUID: _store_4_1_asset(
-            asset_store_data,
+            asset_store_data_v3_1,
             archived_at=ARCHIVED,
             deployment_state=DEPLOYMENT_STATE_DEPLOYED,
         )
@@ -411,12 +414,12 @@ def test_archived_and_deployed_fails_closed(asset_store_data: AssetStoreData) ->
     ],
 )
 def test_active_asset_accepts_every_deployment_state(
-    asset_store_data: AssetStoreData, deployment_state: str
+    asset_store_data_v3_1: AssetStoreData, deployment_state: str
 ) -> None:
     validate_asset_archive_state(
         {
             ASSET_UUID: _store_4_1_asset(
-                asset_store_data, deployment_state=deployment_state
+                asset_store_data_v3_1, deployment_state=deployment_state
             )
         }
     )
@@ -426,12 +429,12 @@ def test_active_asset_accepts_every_deployment_state(
     "deployment_state", [DEPLOYMENT_STATE_NOT_DEPLOYED, DEPLOYMENT_STATE_UNKNOWN]
 )
 def test_archived_asset_accepts_non_deployed_states(
-    asset_store_data: AssetStoreData, deployment_state: str
+    asset_store_data_v3_1: AssetStoreData, deployment_state: str
 ) -> None:
     validate_asset_archive_state(
         {
             ASSET_UUID: _store_4_1_asset(
-                asset_store_data,
+                asset_store_data_v3_1,
                 archived_at=ARCHIVED,
                 deployment_state=deployment_state,
             )
@@ -439,9 +442,9 @@ def test_archived_asset_accepts_non_deployed_states(
     )
 
 
-def test_validation_owns_only_archive_state(asset_store_data: AssetStoreData) -> None:
+def test_validation_owns_only_archive_state(asset_store_data_v3_1: AssetStoreData) -> None:
     """Other Asset rules belong to the whole-Store validator."""
-    asset = _store_4_1_asset(asset_store_data)
+    asset = _store_4_1_asset(asset_store_data_v3_1)
     asset["asset_id"] = "not-an-id"
     asset["runtime"] = "invalid"
     asset["unexpected"] = True
@@ -454,10 +457,10 @@ def test_non_mapping_assets_fails_validation(assets: Any) -> None:
         validate_asset_archive_state(assets)
 
 
-def test_non_mapping_asset_fails_validation(asset_store_data: AssetStoreData) -> None:
+def test_non_mapping_asset_fails_validation(asset_store_data_v3_1: AssetStoreData) -> None:
     with pytest.raises(ArchiveValidationError, match=f"Asset {SECOND_UUID}"):
         validate_asset_archive_state(
-            {ASSET_UUID: _store_4_1_asset(asset_store_data), SECOND_UUID: []}
+            {ASSET_UUID: _store_4_1_asset(asset_store_data_v3_1), SECOND_UUID: []}
         )
 
 
@@ -465,15 +468,15 @@ def test_non_mapping_asset_fails_validation(asset_store_data: AssetStoreData) ->
     "order", [(SECOND_UUID, THIRD_UUID), (THIRD_UUID, SECOND_UUID)]
 )
 def test_first_invalid_state_is_chosen_by_sorted_key(
-    asset_store_data: AssetStoreData, order: tuple[str, str]
+    asset_store_data_v3_1: AssetStoreData, order: tuple[str, str]
 ) -> None:
     invalid = {
         SECOND_UUID: _store_4_1_asset(
-            asset_store_data,
+            asset_store_data_v3_1,
             archived_at=ARCHIVED,
             deployment_state=DEPLOYMENT_STATE_DEPLOYED,
         ),
-        THIRD_UUID: _store_4_1_asset(asset_store_data, archived_at="bad"),
+        THIRD_UUID: _store_4_1_asset(asset_store_data_v3_1, archived_at="bad"),
     }
     with pytest.raises(
         ArchiveValidationError, match=f"Asset {SECOND_UUID} is archived"
@@ -482,9 +485,9 @@ def test_first_invalid_state_is_chosen_by_sorted_key(
 
 
 def test_validation_error_carries_no_field_values(
-    asset_store_data: AssetStoreData,
+    asset_store_data_v3_1: AssetStoreData,
 ) -> None:
-    asset = _store_4_1_asset(asset_store_data, archived_at="private-value-2026")
+    asset = _store_4_1_asset(asset_store_data_v3_1, archived_at="private-value-2026")
     with pytest.raises(ArchiveValidationError) as err:
         validate_asset_archive_state({ASSET_UUID: asset})
     assert "private-value-2026" not in str(err.value)
@@ -495,9 +498,9 @@ def test_validation_error_carries_no_field_values(
 
 
 async def test_transforms_commute(
-    hass: HomeAssistant, asset_store_data: AssetStoreData
+    hass: HomeAssistant, asset_store_data_v3_1: AssetStoreData
 ) -> None:
-    source = await _rich_store(hass, asset_store_data)
+    source = await _rich_store(hass, asset_store_data_v3_1)
     snapshot, before = deepcopy(source), _serialized(source)
 
     archive_then_maintenance = add_maintenance_collections(
@@ -516,11 +519,11 @@ async def test_transforms_commute(
 
 
 async def test_pipeline_produces_the_store_4_1_candidate_shape(
-    hass: HomeAssistant, asset_store_data: AssetStoreData
+    hass: HomeAssistant, asset_store_data_v3_1: AssetStoreData
 ) -> None:
-    """3.1 validation -> WP1 preflight -> A -> M; final 4.1 validation is WP3."""
-    source = await _rich_store(hass, asset_store_data)
-    _validate_store_data(source)
+    """3.1 validation -> WP1 preflight -> A -> M -> 4.1 validation."""
+    source = await _rich_store(hass, asset_store_data_v3_1)
+    _validate_store_v3_1_data(source)
     preflight_store_3_1_record_shapes(source)
 
     candidate = add_maintenance_collections(add_asset_archive_state(source))
@@ -535,9 +538,10 @@ async def test_pipeline_produces_the_store_4_1_candidate_shape(
         assert asset[ARCHIVED_AT] is None
     validate_asset_archive_state(candidate["assets"])
 
-    # The candidate is deliberately not a valid production Store 3.1 payload.
+    # The candidate is the production Store 4.1 payload, never a 3.1 one.
+    _validate_store_data(candidate)
     with pytest.raises(AssetStoreError, match="invalid top-level shape"):
-        _validate_store_data(candidate)  # type: ignore[arg-type]
+        _validate_store_v3_1_data(candidate)  # type: ignore[arg-type]
 
 
 # Production boundary
@@ -580,13 +584,13 @@ def test_archive_module_is_pure() -> None:
     }
 
 
-def test_archive_is_reachable_only_through_inactive_store_4_1_code() -> None:
-    """Since WP3 only storage.py imports archive, and only for 4.1 code.
+def test_archive_is_reachable_only_through_the_store_4_1_code() -> None:
+    """Only storage.py imports archive, and only for the Store 4.1 scopes.
 
     Since WP5 the pure, unwired Maintenance mutation library also imports
     ``asset_is_archived``; its own tests prove nothing in production calls
-    it. ``ARCHIVED_AT`` is used by no production module, and no production
-    module spells ``"archived_at"``.
+    it. ``ARCHIVED_AT`` is used by no production module, and only storage.py
+    spells ``"archived_at"``: a new Asset is created active.
     """
     future_only = frozenset(
         {
@@ -601,7 +605,11 @@ def test_archive_is_reachable_only_through_inactive_store_4_1_code() -> None:
         if path.name in {"archive.py", "store_shape.py"}:
             continue
         source = path.read_text(encoding="utf-8")
-        assert f'"{ARCHIVED_AT}"' not in source, path.name
+        if path.name == "storage.py":
+            assert source.count(f'"{ARCHIVED_AT}": None') == 1
+            assert source.count(f'"{ARCHIVED_AT}"') == 1
+        else:
+            assert f'"{ARCHIVED_AT}"' not in source, path.name
         if path.name == "maintenance_mutations.py":
             assert _imported_modules(path) & {"archive", "archive.asset_is_archived"}
             assert "ARCHIVED_AT" not in source
@@ -620,24 +628,28 @@ def test_archive_is_reachable_only_through_inactive_store_4_1_code() -> None:
             assert symbol not in source, (path.name, symbol)
     tree = ast.parse((PACKAGE / "storage.py").read_text(encoding="utf-8"))
     for symbol, scopes in referencing_scopes(tree, future_only).items():
-        assert scopes <= INACTIVE_STORE_4_1, (symbol, scopes)
+        assert scopes <= STORE_4_1_SCOPES, (symbol, scopes)
 
 
-async def test_production_store_is_still_3_1(hass: HomeAssistant) -> None:
-    assert (STORAGE_VERSION, STORAGE_MINOR_VERSION) == (3, 1)
-    assert set(_empty_store_data()) == STORE_3_1_TOP_LEVEL_KEYS
-    assert storage.STORE_TOP_LEVEL_KEYS == STORE_3_1_TOP_LEVEL_KEYS
+async def test_production_store_is_4_1_and_new_assets_are_active(
+    hass: HomeAssistant,
+) -> None:
+    assert (STORAGE_VERSION, STORAGE_MINOR_VERSION) == (4, 1)
+    assert set(_empty_store_data()) == STORE_4_1_TOP_LEVEL_KEYS
+    assert storage.STORE_TOP_LEVEL_KEYS == STORE_4_1_TOP_LEVEL_KEYS
 
-    manager = _manager(hass)
+    manager = _manager(hass, _empty_store_data())
     asset = await manager.async_create_manual_asset(name="Production Asset")
-    assert set(asset) == ASSET_KEYS_3_1
-    assert len(asset) == 20
-    assert ARCHIVED_AT not in asset
+    assert set(asset) == ASSET_KEYS_4_1
+    assert len(asset) == 21
+    assert asset[ARCHIVED_AT] is None
+    assert asset_is_archived(asset) is False
+    _validate_store_data(manager._data)
 
-    with_maintenance = {
-        **_empty_store_data(),
-        "maintenance_schedules": {},
-        "maintenance_events": {},
+    without_maintenance = {
+        key: value
+        for key, value in _empty_store_data().items()
+        if not key.startswith("maintenance_")
     }
     with pytest.raises(AssetStoreError, match="invalid top-level shape"):
-        _validate_store_data(with_maintenance)  # type: ignore[arg-type]
+        _validate_store_data(without_maintenance)

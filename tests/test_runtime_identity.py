@@ -464,12 +464,14 @@ def test_reconciliation_has_one_copy_of_the_rule() -> None:
     assert 'resolve_runtime_subentry_asset(data["assets"], raw)' in source
 
 
-def test_production_store_is_still_3_1() -> None:
-    assert (STORAGE_VERSION, STORAGE_MINOR_VERSION) == (3, 1)
+def test_production_store_is_4_1() -> None:
+    assert (STORAGE_VERSION, STORAGE_MINOR_VERSION) == (4, 1)
     assert set(_empty_store_data()) == {
         "next_asset_number",
         "purchases",
         "assets",
         "lifecycle_events",
         "replacement_records",
+        "maintenance_schedules",
+        "maintenance_events",
     }

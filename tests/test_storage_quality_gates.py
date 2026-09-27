@@ -1,4 +1,4 @@
-"""Focused Store 3.1 validation and history failure quality gates."""
+"""Focused Store validation and history failure quality gates."""
 
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ from custom_components.device_lifecycle.storage import (
     _normalize_price,
     _runtime_seconds,
     _validate_store_data,
+    _validate_store_v3_1_data,
     _warranty_type,
 )
 
@@ -880,19 +881,21 @@ async def test_ambiguous_recovery_refuses_disappeared_nonempty_store(
     manager._store.async_save.assert_not_awaited()
 
 
-def test_store_3_1_top_level_key_set_is_exact() -> None:
-    """The Store 3.1 payload shape is exactly the frozen set of five keys."""
+def test_store_4_1_top_level_key_set_is_exact() -> None:
+    """The Store 4.1 payload shape is exactly the frozen set of seven keys."""
     assert STORE_TOP_LEVEL_KEYS == {
         "next_asset_number",
         "purchases",
         "assets",
         "lifecycle_events",
         "replacement_records",
+        "maintenance_schedules",
+        "maintenance_events",
     }
     assert set(_empty_store_data()) == STORE_TOP_LEVEL_KEYS
 
 
-def test_exact_store_3_1_top_level_shape_is_accepted(
+def test_exact_store_4_1_top_level_shape_is_accepted(
     asset_store_data: AssetStoreData,
 ) -> None:
     """A payload with exactly the frozen top-level keys validates."""
@@ -944,21 +947,48 @@ def test_unknown_top_level_key_is_rejected(
         ("maintenance_events", "maintenance_schedules"),
     ],
 )
-def test_store_4_maintenance_collections_are_invalid_in_store_3_1(
-    asset_store_data: AssetStoreData,
+def test_store_4_maintenance_collections_are_invalid_in_a_store_3_1_source(
+    asset_store_data_v3_1: AssetStoreData,
     future_keys: tuple[str, ...],
 ) -> None:
     """Maintenance collections belong to Store 4 and fail closed in Store 3.1.
 
-    This pins the activation boundary in docs/maintenance-implementation-plan.md:
-    Store 3.1 stays unaware of the Maintenance shape until Store 4 activation.
+    A Store 3.1 migration source is validated against the exact 3.1 shape, so
+    a 3.1 file already carrying Maintenance collections is never migrated.
     """
-    data: dict[str, Any] = deepcopy(asset_store_data)
+    data: dict[str, Any] = deepcopy(asset_store_data_v3_1)
     for key in future_keys:
         data[key] = {}
 
     with pytest.raises(AssetStoreError, match="invalid top-level shape"):
-        _validate_store_data(data)  # type: ignore[arg-type]
+        _validate_store_v3_1_data(data)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("payload", [None, [], "store"])
+def test_non_mapping_store_3_1_source_is_rejected(payload: Any) -> None:
+    with pytest.raises(AssetStoreError, match="payload is not a mapping"):
+        _validate_store_v3_1_data(payload)
+
+
+@pytest.mark.parametrize(
+    "key", ["purchases", "assets", "lifecycle_events", "replacement_records"]
+)
+def test_store_3_1_source_with_non_mapping_collection_is_rejected(
+    asset_store_data_v3_1: AssetStoreData, key: str
+) -> None:
+    data: dict[str, Any] = deepcopy(asset_store_data_v3_1)
+    data[key] = []
+    with pytest.raises(AssetStoreError, match="invalid top-level structure"):
+        _validate_store_v3_1_data(data)  # type: ignore[arg-type]
+
+
+def test_store_3_1_source_with_non_mapping_asset_is_rejected(
+    asset_store_data_v3_1: AssetStoreData,
+) -> None:
+    data: dict[str, Any] = deepcopy(asset_store_data_v3_1)
+    data["assets"][ASSET_UUID] = []
+    with pytest.raises(AssetStoreError, match=f"Asset {ASSET_UUID} is not a mapping"):
+        _validate_store_v3_1_data(data)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(
@@ -969,22 +999,26 @@ async def test_setup_with_unknown_top_level_key_fails_closed_without_writing(
     hass: HomeAssistant,
     hass_storage: dict[str, Any],
     asset_store_data: AssetStoreData,
+    asset_store_data_v3_1: AssetStoreData,
     version: int,
     minor_version: int,
 ) -> None:
     """Load rejects an unknown key without dropping it, writing, or publishing.
 
-    Store 3.1 is validated directly on load. An older Store is migrated and the
-    migrated result is validated as Store 3.1, so an unknown key is never
-    carried silently into the current schema either.
+    Store 4.1 is validated directly on load. An older Store is migrated and
+    the intermediate Store 3.1 is validated exactly before the 4.1 transform,
+    so an unknown key is never carried silently into the current schema.
     """
-    data: dict[str, Any] = deepcopy(asset_store_data)
+    data: dict[str, Any]
     if version == 2:
+        data = deepcopy(asset_store_data_v3_1)
         del data["lifecycle_events"]
         del data["replacement_records"]
         for asset in data["assets"].values():
             del asset["lifecycle"]
-    data["maintenance_schedules"] = {}
+    else:
+        data = deepcopy(asset_store_data)
+    data["unexpected_future_field"] = {}
     envelope = {
         "version": version,
         "minor_version": minor_version,

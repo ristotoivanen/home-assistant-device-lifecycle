@@ -2,9 +2,9 @@
 
 The authoritative schema is docs/maintenance-store-v4-schema.md. This module
 validates persisted Maintenance Schedules and Events and derives reference
-facts from them. It is library code only: Store 3.1 does not contain the
-Maintenance collections, and nothing in production calls this module until
-Store 4 activation.
+facts from them. Since Store 4.1 activation the production Store validator
+uses it to validate the persisted Maintenance collections; no production
+path writes Maintenance data yet.
 
 Validation never reads the clock or the current Runtime, never writes or
 normalizes data, and uses no Home Assistant state. Mutation-time rules such

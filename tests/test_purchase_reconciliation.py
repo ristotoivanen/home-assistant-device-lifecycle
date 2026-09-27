@@ -298,6 +298,8 @@ async def test_empty_purchase_allocates_only_purchase_until_device_is_added(
             "assets": {},
             "lifecycle_events": {},
             "replacement_records": {},
+            "maintenance_schedules": {},
+            "maintenance_events": {},
         },
     )
     uuid_factory = Mock(

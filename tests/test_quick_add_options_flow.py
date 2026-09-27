@@ -66,13 +66,15 @@ DEVICE_ID = "quick-add-device"
 
 
 def _empty_store() -> AssetStoreData:
-    """Return one empty canonical Store 3.1 payload."""
+    """Return one empty canonical Store 4.1 payload."""
     return {
         "next_asset_number": 1,
         "purchases": {},
         "assets": {},
         "lifecycle_events": {},
         "replacement_records": {},
+        "maintenance_schedules": {},
+        "maintenance_events": {},
     }
 
 

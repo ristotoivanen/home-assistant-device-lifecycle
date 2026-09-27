@@ -897,9 +897,13 @@ async def test_partial_migration_after_rollback_failure_recovers_on_reload(
     )
 
 
-def test_0_7_0_changes_only_the_store_schema() -> None:
-    """Lifecycle/replacement use Store 3.1 without a ConfigEntry migration."""
-    assert STORAGE_VERSION == 3
+def test_store_schema_changes_never_migrate_the_config_entry() -> None:
+    """Store 3.1 (0.7.0) and Store 4.1 changed only the Store schema.
+
+    The ConfigEntry stays version 4; Store and ConfigEntry versions are
+    separate.
+    """
+    assert STORAGE_VERSION == 4
     assert STORAGE_MINOR_VERSION == 1
     assert CONFIG_ENTRY_VERSION == 4
 

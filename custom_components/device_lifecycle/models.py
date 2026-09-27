@@ -98,6 +98,7 @@ class AssetData(TypedDict):
     notes: str | None
     field_sources: dict[str, str]
     ha_device_refs: list[HADeviceReference]
+    archived_at: str | None
 
 
 class PurchaseData(TypedDict):
@@ -145,8 +146,8 @@ class MaintenanceScheduleData(TypedDict):
     """Current planning configuration for one Asset's maintenance.
 
     Frozen in docs/maintenance-store-v4-schema.md. Every key is always
-    present; a nullable field is stored as None, never omitted. Not part of
-    the Store 3.1 payload.
+    present; a nullable field is stored as None, never omitted. Part of the
+    Store 4.1 payload.
     """
 
     schedule_uuid: str
@@ -163,8 +164,8 @@ class MaintenanceEventData(TypedDict):
     """One historical fact: maintenance performed on one Asset.
 
     Frozen in docs/maintenance-store-v4-schema.md. Every key is always
-    present; a nullable field is stored as None, never omitted. Not part of
-    the Store 3.1 payload.
+    present; a nullable field is stored as None, never omitted. Part of the
+    Store 4.1 payload.
     """
 
     event_uuid: str
@@ -188,3 +189,5 @@ class AssetStoreData(TypedDict):
     assets: dict[str, AssetData]
     lifecycle_events: dict[str, LifecycleEventData]
     replacement_records: dict[str, ReplacementRecordData]
+    maintenance_schedules: dict[str, MaintenanceScheduleData]
+    maintenance_events: dict[str, MaintenanceEventData]

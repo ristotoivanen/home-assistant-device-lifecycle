@@ -36,7 +36,7 @@ from custom_components.device_lifecycle.models import AssetStoreData
 from custom_components.device_lifecycle.storage import (
     STORE_TOP_LEVEL_KEYS,
     AssetStoreError,
-    _validate_store_data,
+    _validate_store_v3_1_data,
 )
 
 ASSET_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"
@@ -1152,7 +1152,8 @@ def test_projection_is_not_wired_into_production() -> None:
         }, path.name
 
 
-def test_store_3_1_top_level_keys_are_unchanged() -> None:
+def test_production_store_carries_the_maintenance_collections() -> None:
+    """Since Store 4.1 activation the Maintenance collections are persisted."""
     assert (
         frozenset(
             {
@@ -1161,6 +1162,8 @@ def test_store_3_1_top_level_keys_are_unchanged() -> None:
                 "assets",
                 "lifecycle_events",
                 "replacement_records",
+                "maintenance_schedules",
+                "maintenance_events",
             }
         )
         == STORE_TOP_LEVEL_KEYS
@@ -1168,11 +1171,11 @@ def test_store_3_1_top_level_keys_are_unchanged() -> None:
 
 
 @pytest.mark.parametrize("key", ["maintenance_schedules", "maintenance_events"])
-def test_store_3_1_still_rejects_maintenance_collections(
-    asset_store_data: AssetStoreData,
+def test_store_3_1_source_still_rejects_maintenance_collections(
+    asset_store_data_v3_1: AssetStoreData,
     key: str,
 ) -> None:
-    data: dict[str, Any] = deepcopy(asset_store_data)
+    data: dict[str, Any] = deepcopy(asset_store_data_v3_1)
     data[key] = {}
     with pytest.raises(AssetStoreError, match="invalid top-level shape"):
-        _validate_store_data(data)  # type: ignore[arg-type]
+        _validate_store_v3_1_data(data)  # type: ignore[arg-type]

@@ -546,6 +546,7 @@ async def test_historical_installations_upgrade_to_canonical_placement(
     hass_storage: dict,
     asset_store_data: AssetStoreData,
     asset_store_data_v1_1: AssetStoreData,
+    asset_store_data_v3_1: AssetStoreData,
     purchase_subentry_data: dict[str, Any],
     runtime_subentry_data: dict[str, Any],
     device_registry: dr.DeviceRegistry,
@@ -580,7 +581,8 @@ async def test_historical_installations_upgrade_to_canonical_placement(
         entry = _historical_entry(hass, CONFIG_ENTRY_VERSION, [purchase, runtime])
         expected_total = Decimal(45000)
     else:
-        data = deepcopy(asset_store_data)
+        # A historical Store 2.1 payload, derived from the Store 3.1 source.
+        data = deepcopy(asset_store_data_v3_1)
         data["assets"][ASSET_UUID]["ha_device_refs"] = _refs(device.id)
         data["assets"][ASSET_UUID]["runtime"]["total_seconds"] = "1234.5"
         for asset in data["assets"].values():

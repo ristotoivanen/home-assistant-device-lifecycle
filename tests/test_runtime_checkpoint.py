@@ -505,10 +505,9 @@ def _imports(path: Path) -> set[str]:
 def test_runtime_domain_has_no_maintenance_imports() -> None:
     """Runtime never depends on Maintenance operations or projections.
 
-    Since WP3 storage.py imports the Maintenance Store schema authority
-    (``maintenance``) for the inactive Store 4.1 validator and migration
-    step only; the Store 4.1 reachability tests prove it is used nowhere
-    else. The Runtime sensor imports no Maintenance module at all.
+    storage.py imports the Maintenance Store schema authority
+    (``maintenance``) for the Store 4.1 validator and migration step only;
+    the Store 4.1 reachability tests prove it is used nowhere else. The Runtime sensor imports no Maintenance module at all.
     """
     assert not any(
         "maintenance" in name for name in _imports(Path(sensor_module.__file__))
@@ -521,10 +520,10 @@ def test_runtime_domain_has_no_maintenance_imports() -> None:
     assert storage_imports == {"maintenance"}
 
 
-def test_store_3_1_shape_and_version_unchanged(
+def test_store_4_1_shape_and_version(
     hass: HomeAssistant, asset_store_data: AssetStoreData
 ) -> None:
-    assert (STORAGE_VERSION, STORAGE_MINOR_VERSION) == (3, 1)
+    assert (STORAGE_VERSION, STORAGE_MINOR_VERSION) == (4, 1)
     assert (
         frozenset(
             {
@@ -533,6 +532,8 @@ def test_store_3_1_shape_and_version_unchanged(
                 "assets",
                 "lifecycle_events",
                 "replacement_records",
+                "maintenance_schedules",
+                "maintenance_events",
             }
         )
         == STORE_TOP_LEVEL_KEYS

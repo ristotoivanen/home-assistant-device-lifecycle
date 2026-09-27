@@ -20,7 +20,7 @@ from custom_components.device_lifecycle.maintenance import (
 from custom_components.device_lifecycle.models import AssetStoreData
 from custom_components.device_lifecycle.storage import (
     AssetStoreError,
-    _validate_store_data,
+    _validate_store_v3_1_data,
 )
 
 ASSET_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"
@@ -701,13 +701,13 @@ def test_validation_does_not_modify_the_candidate() -> None:
     "keys",
     [("maintenance_schedules",), ("maintenance_events",), ("maintenance_schedules", "maintenance_events")],
 )
-def test_store_3_1_still_rejects_maintenance_collections(
-    asset_store_data: AssetStoreData,
+def test_store_3_1_source_still_rejects_maintenance_collections(
+    asset_store_data_v3_1: AssetStoreData,
     keys: tuple[str, ...],
 ) -> None:
-    """The standalone validator is not wired into the Store 3.1 payload."""
-    data: dict[str, Any] = deepcopy(asset_store_data)
+    """A Store 3.1 migration source never carries Maintenance collections."""
+    data: dict[str, Any] = deepcopy(asset_store_data_v3_1)
     for key in keys:
         data[key] = {}
     with pytest.raises(AssetStoreError, match="invalid top-level shape"):
-        _validate_store_data(data)  # type: ignore[arg-type]
+        _validate_store_v3_1_data(data)  # type: ignore[arg-type]

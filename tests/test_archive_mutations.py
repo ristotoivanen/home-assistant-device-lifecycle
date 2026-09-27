@@ -33,11 +33,11 @@ from custom_components.device_lifecycle.storage import (
     STORAGE_VERSION,
     _empty_store_data,
     _migrate_v3_1_to_v4_1,
-    _validate_store_v4_1_data,
+    _validate_store_data,
 )
 from custom_components.device_lifecycle.store_shape import (
-    ASSET_KEYS_3_1,
-    STORE_3_1_TOP_LEVEL_KEYS,
+    ASSET_KEYS_4_1,
+    STORE_4_1_TOP_LEVEL_KEYS,
 )
 
 from .conftest import ASSET_UUID
@@ -79,7 +79,7 @@ async def _store(hass: HomeAssistant, data: AssetStoreData) -> dict[str, Any]:
     store["maintenance_events"] = {
         EVENT_UUID: _event(EVENT_UUID, ASSET_UUID, [SCHEDULE_UUID])
     }
-    _validate_store_v4_1_data(store)
+    _validate_store_data(store)
     assert len(store["assets"]) == 2
     return store
 
@@ -146,9 +146,9 @@ def test_requests_are_frozen() -> None:
     "request_value", [None, "archive", object(), {"asset_uuid": ASSET_UUID}]
 )
 def test_unknown_request_type_fails_closed(
-    asset_store_data: AssetStoreData, request_value: Any
+    asset_store_data_v3_1: AssetStoreData, request_value: Any
 ) -> None:
-    assets = _migrate_v3_1_to_v4_1(asset_store_data)["assets"]
+    assets = _migrate_v3_1_to_v4_1(asset_store_data_v3_1)["assets"]
     before = deepcopy(assets)
     with pytest.raises(TypeError, match="Unknown Archive request"):
         apply_archive_request(assets, request_value, observed_utc=NOW)
@@ -164,9 +164,9 @@ def test_unknown_request_type_fails_closed(
     "deployment_state", [DEPLOYMENT_STATE_NOT_DEPLOYED, DEPLOYMENT_STATE_UNKNOWN]
 )
 async def test_archive_changes_only_archived_at(
-    hass: HomeAssistant, asset_store_data: AssetStoreData, deployment_state: str
+    hass: HomeAssistant, asset_store_data_v3_1: AssetStoreData, deployment_state: str
 ) -> None:
-    store = _active(await _store(hass, asset_store_data), deployment_state)
+    store = _active(await _store(hass, asset_store_data_v3_1), deployment_state)
     before = deepcopy(store)
     assets = store["assets"]
     other_asset = next(value for key, value in assets.items() if key != ASSET_UUID)
@@ -184,13 +184,13 @@ async def test_archive_changes_only_archived_at(
     assert assets[ASSET_UUID]["runtime"] is runtime
     assert next(v for k, v in assets.items() if k != ASSET_UUID) is other_asset
     validate_asset_archive_state(assets)
-    _validate_store_v4_1_data(store)
+    _validate_store_data(store)
 
 
 async def test_future_observed_time_is_accepted(
-    hass: HomeAssistant, asset_store_data: AssetStoreData
+    hass: HomeAssistant, asset_store_data_v3_1: AssetStoreData
 ) -> None:
-    store = _active(await _store(hass, asset_store_data), DEPLOYMENT_STATE_NOT_DEPLOYED)
+    store = _active(await _store(hass, asset_store_data_v3_1), DEPLOYMENT_STATE_NOT_DEPLOYED)
     outcome = apply_archive_request(
         store["assets"], ArchiveAssetRequest(ASSET_UUID), observed_utc=FUTURE
     )
@@ -199,9 +199,9 @@ async def test_future_observed_time_is_accepted(
 
 
 async def test_deployed_asset_cannot_be_archived(
-    hass: HomeAssistant, asset_store_data: AssetStoreData
+    hass: HomeAssistant, asset_store_data_v3_1: AssetStoreData
 ) -> None:
-    store = _active(await _store(hass, asset_store_data), DEPLOYMENT_STATE_DEPLOYED)
+    store = _active(await _store(hass, asset_store_data_v3_1), DEPLOYMENT_STATE_DEPLOYED)
     before = deepcopy(store)
     with pytest.raises(ArchiveMutationError) as err:
         apply_archive_request(
@@ -214,9 +214,9 @@ async def test_deployed_asset_cannot_be_archived(
 
 
 async def test_deployed_check_precedes_timestamp_validation(
-    hass: HomeAssistant, asset_store_data: AssetStoreData
+    hass: HomeAssistant, asset_store_data_v3_1: AssetStoreData
 ) -> None:
-    store = _active(await _store(hass, asset_store_data), DEPLOYMENT_STATE_DEPLOYED)
+    store = _active(await _store(hass, asset_store_data_v3_1), DEPLOYMENT_STATE_DEPLOYED)
     with pytest.raises(ArchiveMutationError) as err:
         apply_archive_request(
             store["assets"], ArchiveAssetRequest(ASSET_UUID), observed_utc="bad"
@@ -238,9 +238,9 @@ async def test_deployed_check_precedes_timestamp_validation(
     ],
 )
 async def test_invalid_observed_time_fails_before_mutation(
-    hass: HomeAssistant, asset_store_data: AssetStoreData, observed_utc: Any
+    hass: HomeAssistant, asset_store_data_v3_1: AssetStoreData, observed_utc: Any
 ) -> None:
-    store = _active(await _store(hass, asset_store_data), DEPLOYMENT_STATE_NOT_DEPLOYED)
+    store = _active(await _store(hass, asset_store_data_v3_1), DEPLOYMENT_STATE_NOT_DEPLOYED)
     before = deepcopy(store)
     with pytest.raises(ArchiveMutationError) as err:
         apply_archive_request(
@@ -253,9 +253,9 @@ async def test_invalid_observed_time_fails_before_mutation(
 
 @pytest.mark.parametrize("archived_at", [EARLIER, FUTURE])
 async def test_archive_of_archived_asset_is_no_op_and_keeps_timestamp(
-    hass: HomeAssistant, asset_store_data: AssetStoreData, archived_at: str
+    hass: HomeAssistant, asset_store_data_v3_1: AssetStoreData, archived_at: str
 ) -> None:
-    store = _archived(await _store(hass, asset_store_data), archived_at)
+    store = _archived(await _store(hass, asset_store_data_v3_1), archived_at)
     before, serialized = deepcopy(store), _serialized(store)
 
     outcome = apply_archive_request(
@@ -269,9 +269,9 @@ async def test_archive_of_archived_asset_is_no_op_and_keeps_timestamp(
 
 
 async def test_archive_no_op_precedes_timestamp_validation(
-    hass: HomeAssistant, asset_store_data: AssetStoreData
+    hass: HomeAssistant, asset_store_data_v3_1: AssetStoreData
 ) -> None:
-    store = _archived(await _store(hass, asset_store_data))
+    store = _archived(await _store(hass, asset_store_data_v3_1))
     before = deepcopy(store)
     outcome = apply_archive_request(
         store["assets"], ArchiveAssetRequest(ASSET_UUID), observed_utc="bad"
@@ -282,9 +282,9 @@ async def test_archive_no_op_precedes_timestamp_validation(
 
 @pytest.mark.parametrize("request_type", [ArchiveAssetRequest, RestoreAssetRequest])
 async def test_missing_asset_is_not_found(
-    hass: HomeAssistant, asset_store_data: AssetStoreData, request_type: type
+    hass: HomeAssistant, asset_store_data_v3_1: AssetStoreData, request_type: type
 ) -> None:
-    store = await _store(hass, asset_store_data)
+    store = await _store(hass, asset_store_data_v3_1)
     before = deepcopy(store)
     with pytest.raises(ArchiveMutationError) as err:
         apply_archive_request(
@@ -301,9 +301,9 @@ async def test_missing_asset_is_not_found(
 
 @pytest.mark.parametrize("observed_utc", [NOW, None, "not validated", 0])
 async def test_restore_clears_archived_at_and_ignores_observed_time(
-    hass: HomeAssistant, asset_store_data: AssetStoreData, observed_utc: Any
+    hass: HomeAssistant, asset_store_data_v3_1: AssetStoreData, observed_utc: Any
 ) -> None:
-    store = _archived(await _store(hass, asset_store_data))
+    store = _archived(await _store(hass, asset_store_data_v3_1))
     before = deepcopy(store)
 
     outcome = apply_archive_request(
@@ -315,13 +315,13 @@ async def test_restore_clears_archived_at_and_ignores_observed_time(
     _only_archived_at_changed(before, store)
     # The previous timestamp is not kept anywhere.
     assert EARLIER not in _serialized(store)
-    _validate_store_v4_1_data(store)
+    _validate_store_data(store)
 
 
 async def test_restore_of_active_asset_is_no_op(
-    hass: HomeAssistant, asset_store_data: AssetStoreData
+    hass: HomeAssistant, asset_store_data_v3_1: AssetStoreData
 ) -> None:
-    store = _active(await _store(hass, asset_store_data), DEPLOYMENT_STATE_DEPLOYED)
+    store = _active(await _store(hass, asset_store_data_v3_1), DEPLOYMENT_STATE_DEPLOYED)
     before, serialized = deepcopy(store), _serialized(store)
     outcome = apply_archive_request(
         store["assets"], RestoreAssetRequest(ASSET_UUID), observed_utc=None
@@ -342,9 +342,9 @@ def test_restore_has_no_deployment_precondition() -> None:
 
 
 async def test_archive_then_restore_round_trip(
-    hass: HomeAssistant, asset_store_data: AssetStoreData
+    hass: HomeAssistant, asset_store_data_v3_1: AssetStoreData
 ) -> None:
-    store = _active(await _store(hass, asset_store_data), DEPLOYMENT_STATE_NOT_DEPLOYED)
+    store = _active(await _store(hass, asset_store_data_v3_1), DEPLOYMENT_STATE_NOT_DEPLOYED)
     original = deepcopy(store)
     apply_archive_request(
         store["assets"], ArchiveAssetRequest(ASSET_UUID), observed_utc=NOW
@@ -360,9 +360,9 @@ async def test_archive_then_restore_round_trip(
 
 @pytest.mark.parametrize("request_type", [ArchiveAssetRequest, RestoreAssetRequest])
 def test_missing_archived_at_is_never_read_as_active(
-    asset_store_data: AssetStoreData, request_type: type
+    asset_store_data_v3_1: AssetStoreData, request_type: type
 ) -> None:
-    assets = deepcopy(asset_store_data["assets"])
+    assets = deepcopy(asset_store_data_v3_1["assets"])
     before = deepcopy(assets)
     with pytest.raises(KeyError):
         apply_archive_request(assets, request_type(ASSET_UUID), observed_utc=NOW)
@@ -441,15 +441,21 @@ def test_archive_module_owns_no_runtime_or_home_assistant_logic() -> None:
     assert not attributes & {"now", "today", "utcnow", "subentries", "async_save"}
 
 
-async def test_production_store_is_still_3_1(hass: HomeAssistant) -> None:
-    assert (STORAGE_VERSION, STORAGE_MINOR_VERSION) == (3, 1)
-    assert set(_empty_store_data()) == STORE_3_1_TOP_LEVEL_KEYS
-    asset = await _manager(hass).async_create_manual_asset(name="Production Asset")
-    assert set(asset) == ASSET_KEYS_3_1
-    assert ARCHIVED_AT not in asset
+async def test_production_store_is_4_1_without_archive_management(
+    hass: HomeAssistant,
+) -> None:
+    """Store 4.1 is active, so new Assets are active, and still nothing in
+    production archives or restores one."""
+    assert (STORAGE_VERSION, STORAGE_MINOR_VERSION) == (4, 1)
+    assert set(_empty_store_data()) == STORE_4_1_TOP_LEVEL_KEYS
+    asset = await _manager(hass, _empty_store_data()).async_create_manual_asset(
+        name="Production Asset"
+    )
+    assert set(asset) == ASSET_KEYS_4_1
+    assert asset[ARCHIVED_AT] is None
     scopes = referencing_scopes(
         ast.parse((PACKAGE / "storage.py").read_text(encoding="utf-8")),
-        frozenset({"_migrate_v3_1_to_v4_1"}),
+        WP4_SYMBOLS,
     )
     assert scopes == {}
-    assert storage.STORE_TOP_LEVEL_KEYS == STORE_3_1_TOP_LEVEL_KEYS
+    assert storage.STORE_TOP_LEVEL_KEYS == STORE_4_1_TOP_LEVEL_KEYS
