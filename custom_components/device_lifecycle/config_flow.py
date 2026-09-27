@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable, Coroutine, Mapping
 from datetime import date
 from decimal import Decimal
@@ -753,6 +754,21 @@ _EVENT_VOIDED = "voided"
 _EVENT_CORRECTED = "corrected"
 _SECONDS_PER_HOUR = Decimal(3600)
 _HOURS_DISPLAY = Decimal("0.000001")
+
+
+def _disambiguated(
+    labels: dict[str, str], detail: Callable[[str], str]
+) -> dict[str, str]:
+    """Add ``detail(value)`` to exactly the labels that read alike.
+
+    Labels are compared as people read them, ignoring case. The result
+    depends only on the values and labels given, never on their order.
+    """
+    counts = Counter(label.casefold() for label in labels.values())
+    return {
+        value: f"{label} ({detail(value)})" if counts[label.casefold()] > 1 else label
+        for value, label in labels.items()
+    }
 
 
 def _hours_selector() -> selector.NumberSelector:
@@ -5161,18 +5177,22 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
     # Schedule selection and view
 
     def _schedule_choices(self, asset: AssetData) -> list[selector.SelectOptionDict]:
-        """This Asset's Schedules by name; a shared name gets its interval."""
+        """This Asset's Schedules by name, every label distinct.
+
+        A shared name gets its interval; labels that still match get the
+        Schedule's identity, the only permanent distinction it has.
+        """
         schedules = self._manager.maintenance_schedules_for_asset(asset["asset_uuid"])
-        names = [schedule["name"].casefold() for schedule in schedules]
-        choices = []
-        for schedule in schedules:
-            label = _short_name(schedule["name"])
-            if names.count(schedule["name"].casefold()) > 1:
-                label = f"{label} ({self._schedule_interval_text(schedule)})"
-            choices.append(
-                selector.SelectOptionDict(value=schedule["schedule_uuid"], label=label)
-            )
-        return choices
+        by_uuid = {schedule["schedule_uuid"]: schedule for schedule in schedules}
+        labels = _disambiguated(
+            {uuid: _short_name(schedule["name"]) for uuid, schedule in by_uuid.items()},
+            lambda uuid: self._schedule_interval_text(by_uuid[uuid]),
+        )
+        labels = _disambiguated(labels, lambda uuid: uuid)
+        return [
+            selector.SelectOptionDict(value=uuid, label=labels[uuid])
+            for uuid in by_uuid
+        ]
 
     def _show_open_schedule_form(
         self, asset: AssetData, *, errors: dict[str, str] | None = None
@@ -6779,11 +6799,16 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         date_from, date_to = getattr(self, "_history_filter", (None, None))
         events = self._manager.maintenance_events_for_asset(asset["asset_uuid"])
         matching = self._events_newest_first(asset, date_from=date_from, date_to=date_to)
+        # Records alike in date, title, and state get their identity.
+        labels = _disambiguated(
+            {event["event_uuid"]: self._event_label(event, events) for event in matching},
+            lambda uuid: uuid,
+        )
         options = [
             self._not_selected_option(),
             *(
                 selector.SelectOptionDict(
-                    value=event["event_uuid"], label=self._event_label(event, events)
+                    value=event["event_uuid"], label=labels[event["event_uuid"]]
                 )
                 for event in matching
             ),

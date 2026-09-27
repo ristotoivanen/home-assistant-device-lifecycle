@@ -2093,3 +2093,162 @@ async def test_a_schedule_deleted_mid_edit_is_reported_once(
         if event["corrects_event_uuid"] == EVENT
     ]
     assert corrected["runtime_seconds"] == "1800.0"
+
+
+# --- Selector labels stay distinct ---------------------------------------------------
+
+TWIN = "c0000000-0000-4000-8000-000000000004"
+
+
+def _labels(form: dict[str, Any], key: str) -> dict[str, str]:
+    for marker, field in form["data_schema"].schema.items():
+        if marker == key:
+            return {
+                option["value"]: option["label"]
+                for option in field.config["options"]
+                if option["value"] != NOT_SELECTED
+            }
+    raise AssertionError(key)
+
+
+def _assert_distinct(labels: dict[str, str]) -> None:
+    assert len({label.casefold() for label in labels.values()}) == len(labels)
+
+
+async def test_schedule_labels_use_names_then_intervals_without_identities(
+    hass: HomeAssistant, asset_store_data: AssetStoreData, freezer: Any
+) -> None:
+    data = _data(
+        asset_store_data,
+        _schedule(CAL, "Filter"),
+        _schedule(RUN, "Belt", calendar=False, runtime="3600"),
+        _schedule(BOTH, "Pump", runtime="3600"),
+        _schedule(TWIN, "pump", calendar=False, runtime="3600"),
+    )
+    flow, _entry, _unused = await _flow(hass, freezer, data)
+
+    labels = _labels(
+        await flow.async_step_maintenance_open_schedule(), CONF_SCHEDULE_UUID
+    )
+
+    assert labels == {
+        RUN: "Belt",
+        CAL: "Filter",
+        BOTH: "Pump (every 6 month(s) or every 1.00 h of Runtime)",
+        TWIN: "pump (every 1.00 h of Runtime)",
+    }
+    assert not any(uuid in label for uuid in labels for label in labels.values())
+
+
+async def test_identical_schedules_get_a_stable_identity_only_when_needed(
+    hass: HomeAssistant, asset_store_data: AssetStoreData, freezer: Any
+) -> None:
+    data = _data(
+        asset_store_data,
+        _schedule(TWIN, "Filter"),
+        _schedule(CAL, "Filter"),
+        _schedule(RUN, "Belt", calendar=False, runtime="3600"),
+    )
+    flow, _entry, manager = await _flow(hass, freezer, data)
+
+    first = _labels(
+        await flow.async_step_maintenance_open_schedule(), CONF_SCHEDULE_UUID
+    )
+    assert first == {
+        RUN: "Belt",
+        CAL: f"Filter (every 6 month(s)) ({CAL})",
+        TWIN: f"Filter (every 6 month(s)) ({TWIN})",
+    }
+    _assert_distinct(first)
+    # The same data renders the same labels, whatever the stored order.
+    manager._data["maintenance_schedules"] = dict(
+        reversed(list(manager._data["maintenance_schedules"].items()))
+    )
+    again = _labels(
+        await flow.async_step_maintenance_open_schedule(), CONF_SCHEDULE_UUID
+    )
+    assert again == first
+    # Each label opens its own Schedule.
+    view = await _open(flow, TWIN)
+    assert flow._maintenance_schedule_uuid == TWIN
+    assert view["step_id"] == "maintenance_schedule"
+
+    # The same labels in Record maintenance.
+    record = await flow.async_step_maintenance_record()
+    assert _labels(record, CONF_SCHEDULE_UUIDS) == first
+    await flow.async_step_maintenance_record(
+        {CONF_SCHEDULE_UUIDS: [TWIN], CONF_EVENT_TITLE: "Filter"}
+    )
+    await flow.async_step_maintenance_event_earlier({CONF_PERFORMED_DATE: "2026-09-10"})
+    (event,) = manager._data["maintenance_events"].values()
+    assert event["schedule_uuids"] == [TWIN]
+
+    # And in Correct.
+    await flow.async_step_maintenance_correct_event()
+    await flow.async_step_maintenance_history_filter({})
+    correct = await flow.async_step_maintenance_select_event(
+        {CONF_EVENT_UUID: event["event_uuid"]}
+    )
+    assert _labels(correct, CONF_SCHEDULE_UUIDS) == first
+    assert _default(correct, CONF_SCHEDULE_UUIDS) == [TWIN]
+
+
+async def test_identical_event_labels_get_a_stable_identity_only_when_needed(
+    hass: HomeAssistant, asset_store_data: AssetStoreData, freezer: Any
+) -> None:
+    alike = [
+        _event(
+            f"e0000000-0000-4000-8000-00000000000{index}", "2026-08-10", schedules=[]
+        )
+        for index in (2, 1)
+    ]
+    single = _event(
+        "e0000000-0000-4000-8000-000000000003",
+        "2026-08-09",
+        schedules=[],
+        title="Other",
+    )
+    voided = _event(
+        "e0000000-0000-4000-8000-000000000004",
+        "2026-08-10",
+        schedules=[],
+        voided=True,
+    )
+    data = _data(asset_store_data, events=(*alike, single, voided))
+    flow, _entry, manager = await _flow(hass, freezer, data)
+    await flow.async_step_maintenance_void_event()
+
+    form = await flow.async_step_maintenance_history_filter({})
+    labels = _labels(form, CONF_EVENT_UUID)
+    first, second = (
+        event["event_uuid"] for event in sorted(alike, key=lambda e: e["event_uuid"])
+    )
+    assert labels == {
+        first: f"10 Aug 2026 · Service · Active ({first})",
+        second: f"10 Aug 2026 · Service · Active ({second})",
+        # Different state, different label: no identity added.
+        voided["event_uuid"]: "10 Aug 2026 · Service · Voided",
+        single["event_uuid"]: "9 Aug 2026 · Other · Active",
+    }
+    _assert_distinct(labels)
+    # History order is unchanged: newest date first, then title and identity.
+    assert _options(form, CONF_EVENT_UUID) == [
+        NOT_SELECTED,
+        first,
+        second,
+        voided["event_uuid"],
+        single["event_uuid"],
+    ]
+    assert _labels(
+        await flow.async_step_maintenance_history_filter({}), CONF_EVENT_UUID
+    ) == (labels)
+    # The summary is not a selector and stays plain.
+    history = await flow.async_step_maintenance_history()
+    assert first not in history["description_placeholders"]["events"]
+
+    await flow.async_step_maintenance_history_filter({})
+    await flow.async_step_maintenance_select_event({CONF_EVENT_UUID: second})
+    await flow.async_step_maintenance_void_event_confirm({CONF_CONFIRM_VOID: True})
+    events = manager._data["maintenance_events"]
+    assert events[second]["voided_at"] is not None
+    assert events[first]["voided_at"] is None
