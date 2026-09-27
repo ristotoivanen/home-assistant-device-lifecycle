@@ -794,6 +794,8 @@ CALL_SITE_CLASSIFICATION: dict[tuple[str, str, str], tuple[int, str]] = {
     ): (1, IDENTITY),
     # The exposure projection and Runtime setup follow persistent identity.
     ("exposure.py", "async_reconcile_exposure_registry", "assets"): (2, IDENTITY),
+    # Maintenance entities stay registered for archived Assets (unavailable).
+    ("maintenance_entities.py", "_schedules_by_asset", "assets"): (1, IDENTITY),
     ("migration.py", "async_migrate_entity_registry", "asset_for_primary_device_id"): (
         2,
         IDENTITY,

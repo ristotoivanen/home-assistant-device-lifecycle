@@ -22,7 +22,7 @@ from .stale_references import (
 )
 from .storage import AssetStoreError, AssetStoreManager
 
-PLATFORMS = [Platform.SENSOR]
+PLATFORMS = [Platform.BINARY_SENSOR, Platform.SENSOR]
 _LOGGER = logging.getLogger(__name__)
 
 

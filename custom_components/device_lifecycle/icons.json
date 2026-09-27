@@ -32,6 +32,27 @@
           "replaced_by": "mdi:arrow-right-bold",
           "replaces": "mdi:arrow-left-bold"
         }
+      },
+      "maintenance_status": {
+        "default": "mdi:wrench-clock",
+        "state": {
+          "ok": "mdi:check-circle-outline",
+          "unknown": "mdi:help-circle-outline",
+          "due": "mdi:wrench-clock",
+          "overdue": "mdi:alert-circle-outline",
+          "disabled": "mdi:pause-circle-outline"
+        }
+      },
+      "maintenance_due_date": {
+        "default": "mdi:calendar-wrench"
+      }
+    },
+    "binary_sensor": {
+      "maintenance_preparation": {
+        "default": "mdi:bell-outline",
+        "state": {
+          "on": "mdi:bell-ring-outline"
+        }
       }
     }
   }

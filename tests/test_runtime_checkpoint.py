@@ -508,11 +508,28 @@ def test_runtime_domain_has_no_maintenance_imports() -> None:
     storage.py imports the Maintenance Store schema authority
     (``maintenance``) for the Store 4.1 validator and migration step, and
     since WP11 the Maintenance mutations and projection for the Maintenance
-    manager API only; no Runtime method refers to them. The Runtime sensor imports no Maintenance module at all.
+    manager API only; no Runtime method refers to them. The Runtime sensor class refers to no
+    Maintenance name.
     """
-    assert not any(
-        "maintenance" in name for name in _imports(Path(sensor_module.__file__))
+    # sensor.py hosts the read-only Maintenance entities since WP16; the
+    # Runtime sensor itself refers to nothing of Maintenance.
+    assert {
+        name
+        for name in _imports(Path(sensor_module.__file__))
+        if "maintenance" in name
+    } == {"maintenance_entities", "maintenance_projection"}
+    sensor_tree = ast.parse(Path(sensor_module.__file__).read_text(encoding="utf-8"))
+    runtime_sensor = next(
+        node
+        for node in sensor_tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "DeviceRuntimeHoursSensor"
     )
+    runtime_names = {
+        node.id for node in ast.walk(runtime_sensor) if isinstance(node, ast.Name)
+    } | {
+        node.attr for node in ast.walk(runtime_sensor) if isinstance(node, ast.Attribute)
+    }
+    assert not {name for name in runtime_names if "maintenance" in name.lower()}
     storage_imports = {
         name
         for name in _imports(Path(storage_module.__file__))

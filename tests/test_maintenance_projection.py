@@ -1140,18 +1140,42 @@ def test_module_has_no_home_assistant_clock_or_store_dependencies() -> None:
 _PRE_ACTIVATION_LIBRARY = {"maintenance_mutations.py", "storage.py"}
 
 
-def test_projection_is_not_wired_into_production() -> None:
-    """No other production module imports the projection yet."""
+# Since WP16 the Maintenance entities read the projection's result types;
+# they never project themselves, only through the manager.
+_ENTITY_MODULES = {"binary_sensor.py", "maintenance_entities.py", "sensor.py"}
+_ENTITY_READABLE = {
+    "DueState",
+    "InactiveReason",
+    "MaintenanceProjection",
+    "PreparationState",
+}
+
+
+def _projection_names(tree: ast.AST) -> set[str]:
+    return {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and (node.module or "").rsplit(".", 1)[-1] == "maintenance_projection"
+        for alias in node.names
+    }
+
+
+def test_projection_is_wired_only_through_the_manager() -> None:
+    """Only the manager projects; entity modules read result types only."""
     package = MODULE_PATH.parent
     for path in package.glob("*.py"):
         if path == MODULE_PATH or path.name in _PRE_ACTIVATION_LIBRARY:
             continue
-        assert "maintenance_projection" not in _imports(
-            ast.parse(path.read_text(encoding="utf-8"))
-        ) | {
-            name.rsplit(".", 1)[-1]
-            for name in _imports(ast.parse(path.read_text(encoding="utf-8")))
-        }, path.name
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        imported = _imports(tree) | {
+            name.rsplit(".", 1)[-1] for name in _imports(tree)
+        }
+        if path.name in _ENTITY_MODULES:
+            assert _projection_names(tree) <= _ENTITY_READABLE, path.name
+            assert "project_schedule" not in path.read_text(encoding="utf-8")
+            continue
+        assert "maintenance_projection" not in imported, path.name
 
 
 def test_production_store_carries_the_maintenance_collections() -> None:

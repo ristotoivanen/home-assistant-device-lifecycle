@@ -720,6 +720,24 @@
           "replaced_by": "Korvattu laitteella",
           "replaces": "Korvaa laitteen"
         }
+      },
+      "maintenance_status": {
+        "name": "Huolto {schedule}",
+        "state": {
+          "ok": "Kunnossa",
+          "unknown": "Tuntematon",
+          "due": "Ajankohtainen",
+          "overdue": "Myöhässä",
+          "disabled": "Pois käytöstä"
+        }
+      },
+      "maintenance_due_date": {
+        "name": "Seuraava huolto {schedule}"
+      }
+    },
+    "binary_sensor": {
+      "maintenance_preparation": {
+        "name": "Huoltoon valmistautuminen {schedule}"
       }
     }
   },

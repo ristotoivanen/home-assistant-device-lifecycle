@@ -1007,12 +1007,17 @@ async def test_projection_uses_the_pure_rules_and_canonical_state(
     assert manager._data == before
 
 
-def test_no_maintenance_ui_or_entities() -> None:
+def test_no_maintenance_ui_and_read_only_entities() -> None:
+    """WP16 adds read-only Maintenance entities; the UI comes in WP17."""
     package = Path(storage.__file__).parent
-    for name in ("config_flow.py", "sensor.py", "exposure.py", "__init__.py"):
+    for name in ("config_flow.py", "exposure.py", "__init__.py"):
         source = (package / name).read_text(encoding="utf-8")
         assert "async_mutate_maintenance" not in source, name
         assert "maintenance_projection" not in source, name
+    for name in ("sensor.py", "binary_sensor.py", "maintenance_entities.py"):
+        source = (package / name).read_text(encoding="utf-8")
+        assert "async_mutate_maintenance" not in source, name
+        assert "maintenance_mutations" not in source, name
     assert (storage.STORAGE_VERSION, storage.STORAGE_MINOR_VERSION) == (4, 1)
 
 

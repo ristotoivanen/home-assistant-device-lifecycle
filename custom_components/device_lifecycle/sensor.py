@@ -78,8 +78,23 @@ from .exposure import (
     relationships_unique_id,
     replacement_unique_id,
 )
+from .maintenance_entities import (
+    MAINTENANCE_DUE_DATE_SUFFIX,
+    MAINTENANCE_STATUS_SUFFIX,
+    MAINTENANCE_STATUSES,
+    MaintenanceEntity,
+    MaintenanceEntityCoordinator,
+    maintenance_due_date_unique_id,
+    maintenance_status_unique_id,
+)
+from .maintenance_projection import InactiveReason
 from .migration import lifecycle_unique_id, runtime_unique_id
-from .models import AssetData, LifecycleEventData, PurchaseData
+from .models import (
+    AssetData,
+    LifecycleEventData,
+    MaintenanceScheduleData,
+    PurchaseData,
+)
 from .storage import AssetStoreError, AssetStoreManager, RuntimeWriterDurability
 
 RUNTIME_REFRESH_INTERVAL = timedelta(minutes=5)
@@ -353,6 +368,18 @@ async def async_setup_entry(
         if hasattr(entry, "async_on_unload"):
             entry.async_on_unload(unsubscribe)
 
+    if hasattr(entry, "async_on_unload"):
+        MaintenanceEntityCoordinator(
+            hass,
+            entry,
+            manager,
+            domain="sensor",
+            suffixes=(MAINTENANCE_STATUS_SUFFIX, MAINTENANCE_DUE_DATE_SUFFIX),
+            expected_unique_ids=_maintenance_sensor_unique_ids,
+            factory=_maintenance_sensors,
+            async_add_entities=async_add_entities,
+        ).async_setup()
+
     for subentry in entry.subentries.values():
         if (
             subentry.subentry_type == SUBENTRY_TYPE_RUNTIME
@@ -484,6 +511,83 @@ def _remove_unexpected_subentry_entities(
             and registry_entry.unique_id not in expected_unique_ids
         ):
             entity_registry.async_remove(registry_entry.entity_id)
+
+
+def _maintenance_sensor_unique_ids(schedule: MaintenanceScheduleData) -> set[str]:
+    """Every Schedule has a status and a next-maintenance sensor."""
+    return {
+        maintenance_status_unique_id(schedule["schedule_uuid"]),
+        maintenance_due_date_unique_id(schedule["schedule_uuid"]),
+    }
+
+
+def _maintenance_sensors(
+    manager: AssetStoreManager,
+    schedule: MaintenanceScheduleData,
+    device_entry: dr.DeviceEntry,
+) -> list[MaintenanceEntity]:
+    return [
+        MaintenanceStatusSensor(
+            manager=manager,
+            schedule=schedule,
+            device_entry=device_entry,
+            unique_id=maintenance_status_unique_id(schedule["schedule_uuid"]),
+        ),
+        MaintenanceDueDateSensor(
+            manager=manager,
+            schedule=schedule,
+            device_entry=device_entry,
+            unique_id=maintenance_due_date_unique_id(schedule["schedule_uuid"]),
+        ),
+    ]
+
+
+class MaintenanceStatusSensor(MaintenanceEntity, SensorEntity):
+    """The current due state of one Maintenance Schedule.
+
+    ``disabled`` is a presentation value for a disabled Schedule, distinct
+    from ``unknown``; it is never persisted. An archived Asset makes the
+    entity unavailable instead.
+    """
+
+    _attr_translation_key = "maintenance_status"
+    _attr_device_class = SensorDeviceClass.ENUM
+
+    @property
+    def options(self) -> list[str]:
+        """Return the fixed status states."""
+        return list(MAINTENANCE_STATUSES)
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the combined due state, or ``disabled``."""
+        projection = self._projection
+        if projection is None:
+            return None
+        if projection.active:
+            return str(projection.combined_state)
+        if projection.inactive_reason is InactiveReason.DISABLED:
+            return "disabled"
+        return None
+
+
+class MaintenanceDueDateSensor(MaintenanceEntity, SensorEntity):
+    """The calendar due date of one Maintenance Schedule, if known.
+
+    Unknown when the Schedule has no calendar interval, its calendar due
+    date is unknown, or it is disabled. Never derived from Runtime.
+    """
+
+    _attr_translation_key = "maintenance_due_date"
+    _attr_device_class = SensorDeviceClass.DATE
+
+    @property
+    def native_value(self) -> date | None:
+        """Return the projected calendar due date."""
+        projection = self.active_projection
+        if projection is None or projection.calendar is None:
+            return None
+        return projection.calendar.due
 
 
 class _AssetSnapshotEntity(SensorEntity):

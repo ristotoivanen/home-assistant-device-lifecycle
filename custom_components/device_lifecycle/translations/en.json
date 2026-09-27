@@ -720,6 +720,24 @@
           "replaced_by": "Replaced by",
           "replaces": "Replaces"
         }
+      },
+      "maintenance_status": {
+        "name": "Maintenance {schedule}",
+        "state": {
+          "ok": "OK",
+          "unknown": "Unknown",
+          "due": "Due",
+          "overdue": "Overdue",
+          "disabled": "Disabled"
+        }
+      },
+      "maintenance_due_date": {
+        "name": "Next maintenance {schedule}"
+      }
+    },
+    "binary_sensor": {
+      "maintenance_preparation": {
+        "name": "Maintenance preparation {schedule}"
       }
     }
   },
