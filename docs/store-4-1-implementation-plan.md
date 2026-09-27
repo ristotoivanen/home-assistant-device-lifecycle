@@ -760,4 +760,4 @@ The owner decisions of section 11 were all made: 5.2 and 5.3 passed before WP9, 
 | Gate 5.4 — Store 4.1 upgrade and smoke | CLOSED (PASS) |
 | S7 — Home Assistant surface and release readiness | CLOSED with WP18 |
 
-Closing S7 means the branch meets every defined implementation and external validation gate. Tagging, publishing the release, and merging are separate steps not covered by these gates. The integration manifest still reports version `0.7.7`; the version change for the 0.8.0 release is part of the release preparation, not of WP18.
+Closing S7 means the branch meets every defined implementation and external validation gate. Tagging, publishing the release, and merging are separate steps not covered by these gates. WP18 left the integration manifest at `0.7.7`; the release-preparation commit that followed it (`chore: prepare 0.8.0 release`) raised it to `0.8.0` without any behavior change.

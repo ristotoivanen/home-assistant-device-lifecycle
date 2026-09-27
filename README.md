@@ -158,7 +158,7 @@ If the repository is not already available in your HACS instance, add it manuall
 
 Copy `custom_components/device_lifecycle/` into `/config/custom_components/device_lifecycle/`, restart Home Assistant, and add the integration from **Settings > Devices & services**.
 
-Device Lifecycle 0.7.7 requires Home Assistant 2026.8.0 or newer. Review the [upgrade notes](#upgrade-notes) and create a Home Assistant backup before any upgrade that changes the Store schema.
+Device Lifecycle 0.8.0 requires Home Assistant 2026.8.0 or newer. Review the [upgrade notes](#upgrade-notes) and create a Home Assistant backup before any upgrade that changes the Store schema; the upgrade from 0.7.x to 0.8.0 does.
 
 ## Optional dashboard
 
@@ -496,7 +496,7 @@ Existing Purchase workflows can set a warranty with these modes:
 - 2 years
 - Manual
 
-For 1- and 2-year warranties, the warranty end date is calculated from the Purchase date with calendar-year and leap-day handling. Quick Add can apply those modes only when a configured Purchase with a valid Purchase date is selected, or use a manual warranty date without a Purchase. It revalidates the Purchase date immediately before commit. There is no separate warranty editor in 0.7.7: the **Linked purchase** / **Ostoslinkitys** form changes only the Purchase link.
+For 1- and 2-year warranties, the warranty end date is calculated from the Purchase date with calendar-year and leap-day handling. Quick Add can apply those modes only when a configured Purchase with a valid Purchase date is selected, or use a manual warranty date without a Purchase. It revalidates the Purchase date immediately before commit. There is no separate warranty editor in 0.8.0: the **Linked purchase** / **Ostoslinkitys** form changes only the Purchase link.
 
 ## Runtime tracking
 
@@ -763,7 +763,7 @@ For reproducible problems, open a [GitHub issue](https://github.com/ristotoivane
 - **0.7.5 — Asset Management UX & safety**
 - **0.7.6 — Stale device references in Repairs**
 - **0.7.7 — Entity Registry placement hardening**
-- **0.8.x — Maintenance** (implemented for 0.8.0)
+- **0.8.0 — Maintenance & Asset Archive**
   - Maintenance schedules, history, and status/workflows
   - reversible Asset archive and restore that keeps the Asset ID, internal identity, and history
 - **0.9.x — Portability, Data Safety & Hardening**

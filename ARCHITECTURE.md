@@ -1,6 +1,6 @@
 # Device Lifecycle architecture
 
-This document defines the Asset Core and Asset Exposure invariants through Device Lifecycle 0.7.7. Future releases must extend the model through explicit migrations instead of replacing Asset identity.
+This document defines the Asset Core and Asset Exposure invariants through Device Lifecycle 0.8.0. Future releases must extend the model through explicit migrations instead of replacing Asset identity.
 
 ## Core concepts
 
@@ -561,7 +561,7 @@ The stale-device warning is unchanged: the migration still logs it once for each
 
 ## Store 4.1, Asset Archive, and Maintenance (0.8.0)
 
-Status: **implemented** for 0.8.0 on the branch that carries the [Store 4.1 implementation plan](docs/store-4-1-implementation-plan.md) (WP1–WP18). The canonical contracts are the frozen [Asset Archive and Store 4.1 architecture](docs/asset-archive-store-v4.md) and [Maintenance Store 4.x schema](docs/maintenance-store-v4-schema.md); this section summarizes the production boundaries and does not restate or change them.
+Status: **implemented** in 0.8.0, through the [Store 4.1 implementation plan](docs/store-4-1-implementation-plan.md) (WP1–WP18). The canonical contracts are the frozen [Asset Archive and Store 4.1 architecture](docs/asset-archive-store-v4.md) and [Maintenance Store 4.x schema](docs/maintenance-store-v4-schema.md); this section summarizes the production boundaries and does not restate or change them.
 
 ### Store 4.1
 
