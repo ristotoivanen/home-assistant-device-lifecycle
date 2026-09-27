@@ -644,12 +644,14 @@ def test_archive_is_reachable_only_through_the_store_4_1_code() -> None:
     for symbol, scopes in referencing_scopes(tree, future_only).items():
         assert scopes <= STORE_4_1_SCOPES, (symbol, scopes)
     # Since WP10 the manager reads Archive state through the one authority,
-    # and only in its filtering helpers and the current-management guard.
+    # and only in its filtering helpers, the current-management guard, and
+    # (since WP11) the Maintenance projection helper.
     assert referencing_scopes(tree, frozenset({"asset_is_archived"})) == {
         "asset_is_archived": {
             "AssetStoreManager.active_assets",
             "AssetStoreManager.archived_assets",
             "AssetStoreManager._require_active_asset",
+            "AssetStoreManager.maintenance_projection",
         }
     }
 

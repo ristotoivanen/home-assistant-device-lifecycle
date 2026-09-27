@@ -1135,11 +1135,13 @@ def test_module_has_no_home_assistant_clock_or_store_dependencies() -> None:
 
 
 # Unwired pre-activation library modules that may build on the projection.
-_PRE_ACTIVATION_LIBRARY = {"maintenance_mutations.py"}
+# The Maintenance mutation library and, since WP11, the Store manager's
+# read-only ``maintenance_projection`` helper use the projection.
+_PRE_ACTIVATION_LIBRARY = {"maintenance_mutations.py", "storage.py"}
 
 
 def test_projection_is_not_wired_into_production() -> None:
-    """No production module imports the projection before activation."""
+    """No other production module imports the projection yet."""
     package = MODULE_PATH.parent
     for path in package.glob("*.py"):
         if path == MODULE_PATH or path.name in _PRE_ACTIVATION_LIBRARY:

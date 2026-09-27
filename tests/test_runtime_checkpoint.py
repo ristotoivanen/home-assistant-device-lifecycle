@@ -506,8 +506,9 @@ def test_runtime_domain_has_no_maintenance_imports() -> None:
     """Runtime never depends on Maintenance operations or projections.
 
     storage.py imports the Maintenance Store schema authority
-    (``maintenance``) for the Store 4.1 validator and migration step only;
-    the Store 4.1 reachability tests prove it is used nowhere else. The Runtime sensor imports no Maintenance module at all.
+    (``maintenance``) for the Store 4.1 validator and migration step, and
+    since WP11 the Maintenance mutations and projection for the Maintenance
+    manager API only; no Runtime method refers to them. The Runtime sensor imports no Maintenance module at all.
     """
     assert not any(
         "maintenance" in name for name in _imports(Path(sensor_module.__file__))
@@ -517,7 +518,28 @@ def test_runtime_domain_has_no_maintenance_imports() -> None:
         for name in _imports(Path(storage_module.__file__))
         if "maintenance" in name
     }
-    assert storage_imports == {"maintenance"}
+    assert storage_imports == {
+        "maintenance",
+        "maintenance_mutations",
+        "maintenance_projection",
+    }
+    tree = ast.parse(Path(storage_module.__file__).read_text(encoding="utf-8"))
+    manager = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "AssetStoreManager"
+    )
+    for method in manager.body:
+        if not isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if "runtime" not in method.name:
+            continue
+        names = {node.id for node in ast.walk(method) if isinstance(node, ast.Name)} | {
+            node.attr for node in ast.walk(method) if isinstance(node, ast.Attribute)
+        }
+        assert not {name for name in names if "maintenance" in name.lower()}, (
+            method.name
+        )
 
 
 def test_store_4_1_shape_and_version(

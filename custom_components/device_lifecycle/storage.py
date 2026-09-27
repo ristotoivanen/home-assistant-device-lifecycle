@@ -31,6 +31,7 @@ from .archive import (
     asset_is_archived,
     validate_asset_archive_state,
 )
+from .canonical import utc_now_iso
 from .const import (
     CONF_ASSET_UUID,
     CONF_CURRENCY,
@@ -74,12 +75,23 @@ from .maintenance import (
     add_maintenance_collections,
     validate_maintenance_collections,
 )
+from .maintenance_mutations import (
+    MaintenanceArchivedAssetError,
+    MaintenanceMutationContext,
+    MaintenanceMutationError,
+    MaintenanceMutationResult,
+    MaintenanceSnapshot,
+    mutate_maintenance,
+)
+from .maintenance_projection import MaintenanceProjection, project_schedule
 from .models import (
     AssetData,
     AssetStoreData,
     HADeviceReference,
     LifecycleEventData,
     LifecycleStatus,
+    MaintenanceEventData,
+    MaintenanceScheduleData,
     PurchaseData,
     ReplacementReason,
     ReplacementRecordData,
@@ -1404,6 +1416,9 @@ class AssetStoreManager:
     async def _async_mutate_reporting(
         self,
         mutator: Callable[[AssetStoreData], _MutationResultT],
+        *,
+        resolve_ambiguous: Callable[[AssetStoreData], _MutationResultT | None]
+        | None = None,
     ) -> tuple[_MutationResultT, bool]:
         """Apply one all-or-nothing mutation and report whether it changed data.
 
@@ -1413,6 +1428,12 @@ class AssetStoreManager:
         that existing fact instead of re-deriving it elsewhere (0.7.2 WP2 /
         F-2/F-3), so callers that need to skip an explicit reload for a no-op
         can do so without guessing from submitted UI values.
+
+        ``resolve_ambiguous`` is for mutations whose request can be replayed
+        deterministically. When the save is ambiguous, the persisted Store is
+        read back under the same lock and handed to it; see
+        ``_async_resolve_ambiguous_persistence``. Without it an ambiguous save
+        leaves persistence uncertain until the next mutation recovers it.
         """
         async with self._mutation_lock:
             await self._async_recover_uncertain_persistence()
@@ -1427,12 +1448,51 @@ class AssetStoreManager:
                     await self._store.async_save(data)
                 except AssetStorePersistenceError as err:
                     self._persistence_uncertain = err.ambiguous
-                    raise
+                    if not err.ambiguous or resolve_ambiguous is None:
+                        raise
+                    resolved = await self._async_resolve_ambiguous_persistence(
+                        err, resolve_ambiguous
+                    )
+                    return deepcopy(resolved), True
 
             # Publish only after the complete snapshot has been validated and
             # durably saved. A mutation or save exception leaves _data untouched.
             self._data = data
             return deepcopy(result), changed
+
+    async def _async_resolve_ambiguous_persistence(
+        self,
+        error: AssetStorePersistenceError,
+        resolve_ambiguous: Callable[[AssetStoreData], _MutationResultT | None],
+    ) -> _MutationResultT:
+        """Settle an ambiguous save from the persisted Store, under the lock.
+
+        The persisted snapshot is read directly and validated as Store 4.1.
+        If it cannot be read or is invalid, nothing is published, persistence
+        stays uncertain, and the original ambiguous error is raised. Otherwise
+        the persisted state is known and published: the resolver's non-None
+        result proves the write landed and is returned, while ``None`` means
+        it did not, which is raised as a definite (non-ambiguous) failure.
+        The resolver works on a copy, so it cannot change what is published.
+        """
+        try:
+            persisted = await self._store.async_load_persisted_snapshot()
+            if persisted is None:
+                raise AssetStoreError(
+                    "Asset Core persistence disappeared during resolution"
+                )
+            _validate_store_data(persisted)
+        except AssetStoreError as err:
+            raise error from err
+
+        resolved = resolve_ambiguous(deepcopy(persisted))
+        self._data = persisted
+        self._persistence_uncertain = False
+        if resolved is None:
+            raise AssetStorePersistenceError(
+                "Asset Core mutation was not persisted"
+            ) from error
+        return resolved
 
     async def _async_mutate_history(
         self,
@@ -3010,6 +3070,186 @@ class AssetStoreManager:
             )
 
         return await self._async_mutate_history(_correct)
+
+    def _maintenance_request_asset(
+        self,
+        data: AssetStoreData,
+        request: Any,
+    ) -> AssetData | None:
+        """Return the Asset a Maintenance request concerns, if it exists.
+
+        Only to take that Asset's canonical Runtime into the mutation
+        context; the pure mutation decides everything else, including what
+        a missing record means.
+        """
+        asset_uuid: Any = getattr(request, "asset_uuid", None)
+        if asset_uuid is None:
+            record: Any = None
+            for field, collection in (
+                ("schedule_uuid", data["maintenance_schedules"]),
+                ("target_event_uuid", data["maintenance_events"]),
+                ("event_uuid", data["maintenance_events"]),
+            ):
+                key = getattr(request, field, None)
+                if isinstance(key, str):
+                    record = collection.get(key)
+                    break
+            asset_uuid = None if record is None else record["asset_uuid"]
+        if not isinstance(asset_uuid, str):
+            return None
+        return data["assets"].get(asset_uuid)
+
+    def _run_maintenance(
+        self,
+        data: AssetStoreData,
+        request: Any,
+    ) -> MaintenanceMutationResult:
+        """Run one Maintenance request against one Store snapshot.
+
+        The context comes from the same snapshot: Home Assistant's local
+        civil date, the observed UTC time, and the Asset's canonical
+        persisted Runtime. Pure Maintenance errors become AssetStoreErrors
+        with the pure layer's stable code; an archived Asset is the same
+        ``asset_archived`` refusal as every other current-management change.
+        The original error stays available as ``__cause__``.
+        """
+        asset = self._maintenance_request_asset(data, request)
+        context = MaintenanceMutationContext(
+            today=dt_util.now().date(),
+            observed_utc=utc_now_iso(),
+            current_runtime=(
+                None if asset is None else asset["runtime"]["total_seconds"]
+            ),
+        )
+        snapshot = MaintenanceSnapshot(
+            assets=data["assets"],
+            schedules=data["maintenance_schedules"],
+            events=data["maintenance_events"],
+        )
+        try:
+            return mutate_maintenance(snapshot, request, context)
+        except MaintenanceArchivedAssetError as err:
+            raise AssetStoreError(
+                "The Asset is archived", code="asset_archived"
+            ) from err
+        except MaintenanceMutationError as err:
+            raise AssetStoreError(
+                f"Maintenance request refused: {err.code}", code=err.code
+            ) from err
+
+    async def async_mutate_maintenance(
+        self,
+        request: Any,
+    ) -> MaintenanceMutationResult:
+        """Apply one Maintenance request through the verified Store pipeline.
+
+        The request runs inside ``_mutation_lock`` on the mutation candidate.
+        CHANGED writes back only the two Maintenance collections and saves;
+        NO_OP and REPLAY write nothing. Maintenance reads Asset state and
+        Runtime and never writes either.
+
+        Create-style requests carry their pre-generated UUIDs, so the same
+        request can be replayed. If the save is ambiguous, the same request
+        is replayed against the persisted Store: REPLAY or NO_OP proves the
+        write landed and is returned; CHANGED or a refusal proves it did not,
+        which is raised as a definite persistence failure.
+
+        This never awaits a Runtime checkpoint. For a "just now" Runtime,
+        ``async_checkpoint_runtime`` is awaited first and this afterwards,
+        never while a Runtime lock is held.
+        """
+
+        def _mutate(data: AssetStoreData) -> MaintenanceMutationResult:
+            result = self._run_maintenance(data, request)
+            if result.changed:
+                data["maintenance_schedules"] = dict(result.snapshot.schedules)
+                data["maintenance_events"] = dict(result.snapshot.events)
+            return result
+
+        def _resolve(persisted: AssetStoreData) -> MaintenanceMutationResult | None:
+            try:
+                replayed = self._run_maintenance(persisted, request)
+            except AssetStoreError:
+                return None
+            return None if replayed.changed else replayed
+
+        result, _changed = await self._async_mutate_reporting(
+            _mutate,
+            resolve_ambiguous=_resolve,
+        )
+        return result
+
+    def maintenance_schedules_for_asset(
+        self,
+        asset_uuid: str,
+    ) -> list[MaintenanceScheduleData]:
+        """Return detached snapshots of every Schedule of one Asset.
+
+        Disabled Schedules and those of an archived Asset are included;
+        ordered by name, then Schedule UUID.
+        """
+        return deepcopy(
+            sorted(
+                (
+                    schedule
+                    for schedule in self._data["maintenance_schedules"].values()
+                    if schedule["asset_uuid"] == asset_uuid
+                ),
+                key=lambda item: (item["name"].casefold(), item["schedule_uuid"]),
+            )
+        )
+
+    def maintenance_events_for_asset(
+        self,
+        asset_uuid: str,
+    ) -> list[MaintenanceEventData]:
+        """Return detached snapshots of every Maintenance Event of one Asset.
+
+        Voided and correcting Events are included; ordered by performed
+        date, then recorded time, then Event UUID.
+        """
+        return deepcopy(
+            sorted(
+                (
+                    event
+                    for event in self._data["maintenance_events"].values()
+                    if event["asset_uuid"] == asset_uuid
+                ),
+                key=lambda item: (
+                    item["performed_date"],
+                    item["recorded_at"],
+                    item["event_uuid"],
+                ),
+            )
+        )
+
+    def maintenance_projection(
+        self,
+        schedule_uuid: str,
+    ) -> MaintenanceProjection | None:
+        """Project one Schedule from the canonical persisted state.
+
+        The pure projection owns every rule; this supplies the Schedule, its
+        Asset's Events, Home Assistant's local date, the canonical persisted
+        Runtime, and the Asset's Archive state. ``None`` if the Schedule
+        does not exist.
+        """
+        schedule = self._data["maintenance_schedules"].get(schedule_uuid)
+        if schedule is None:
+            return None
+        asset = self._data["assets"][schedule["asset_uuid"]]
+        events = {
+            event_uuid: event
+            for event_uuid, event in self._data["maintenance_events"].items()
+            if event["asset_uuid"] == schedule["asset_uuid"]
+        }
+        return project_schedule(
+            deepcopy(schedule),
+            deepcopy(events),
+            today=dt_util.now().date(),
+            current_runtime=asset["runtime"]["total_seconds"],
+            asset_archived=asset_is_archived(asset),
+        )
 
     async def async_update_asset_metadata(
         self,

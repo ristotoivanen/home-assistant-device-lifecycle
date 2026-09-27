@@ -1668,14 +1668,29 @@ def test_module_never_touches_asset_runtime() -> None:
     assert "snapshot.assets[" not in source
 
 
-def test_mutations_are_not_wired_into_production() -> None:
+def test_mutations_are_reached_only_through_the_store_manager() -> None:
+    """Since WP11 only the Store manager runs Maintenance mutations, inside
+    its locked, verified persistence pipeline."""
     package = MODULE_PATH.parent
     for path in package.glob("*.py"):
-        if path == MODULE_PATH:
+        if path.name in {MODULE_PATH.name, "storage.py"}:
             continue
         assert "maintenance_mutations" not in path.read_text(encoding="utf-8"), (
             path.name
         )
+    tree = ast.parse((package / "storage.py").read_text(encoding="utf-8"))
+    callers = {
+        f"{node.name}.{item.name}"
+        for node in tree.body
+        if isinstance(node, ast.ClassDef)
+        for item in node.body
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and any(
+            isinstance(inner, ast.Name) and inner.id == "mutate_maintenance"
+            for inner in ast.walk(item)
+        )
+    }
+    assert callers == {"AssetStoreManager._run_maintenance"}
 
 
 @pytest.mark.parametrize("key", ["maintenance_schedules", "maintenance_events"])

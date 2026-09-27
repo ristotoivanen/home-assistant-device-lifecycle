@@ -862,7 +862,8 @@ def test_every_asset_collection_call_site_is_classified() -> None:
 
 def test_archive_state_is_read_only_through_the_archive_authority() -> None:
     """No production module reads ``archived_at`` itself; the manager
-    reads Archive state only in its filtering helpers and the guard.
+    reads Archive state only in its filtering helpers, the guard, and the
+    Maintenance projection helper.
 
     The field name as a value (a key, a subscript, a ``get`` argument) is
     the only way to read it, so its string constants are inventoried.
@@ -903,6 +904,7 @@ def test_archive_state_is_read_only_through_the_archive_authority() -> None:
             "AssetStoreManager.active_assets",
             "AssetStoreManager.archived_assets",
             "AssetStoreManager._require_active_asset",
+            "AssetStoreManager.maintenance_projection",
         }
     }
 
