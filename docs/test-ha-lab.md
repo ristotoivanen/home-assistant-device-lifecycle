@@ -171,6 +171,63 @@ After this dashboard was built, the lab was checked and was otherwise unchanged:
 
 DL0003 Runtime kept accumulating while the dashboard was being built.
 
+## Store 4.1 pre-activation external gates — 2026-09-27
+
+Owner-run checks of the external gates in the [Store 4.1 implementation plan](store-4-1-implementation-plan.md#5-external-test-ha-gates), sections 5.2 and 5.3. They were run on this lab on 2026-09-27 with the production Store still at 3.1. Store 4.1 was not activated, and no Archive or Maintenance behavior was involved. Following the plan, only key names, counts, Asset IDs, and outcomes are recorded here, not field values, UUIDs, subentry IDs, or file hashes.
+
+### Lab inventory at the time of the gates
+
+The [baseline](#baseline) above is historical: it was 8 Assets after the 0.7.7 release validation, and it is left as it was. On 2026-09-27 the lab held 9 Assets and 4 Purchases. The additional Asset is DL0009, "DL Repairs Fixture — destructive test", fixture data added to the lab after that baseline. Its scenario is not otherwise documented in this file. The difference is a change in lab data, not a Store-shape finding.
+
+### Gate 5.2 — Store 3.1 source shape
+
+The section 5.2 script inspected a copy of `/config/.storage/device_lifecycle.assets`.
+
+| Check | Observed |
+|---|---|
+| Envelope | key `device_lifecycle.assets`, version 3, minor version 1 |
+| Top-level keys | exactly `assets`, `lifecycle_events`, `next_asset_number`, `purchases`, `replacement_records`; none missing, none unexpected |
+| Records | 9 Assets, 4 Purchases |
+| Asset record shapes | every Asset had exactly the 20 Store 3.1 Asset keys |
+| Purchase record shapes | every Purchase had exactly the 12 Purchase keys |
+| Read-only | the live file and the inspection copy had equal SHA-256 before the inspection, and the live file still matched afterwards |
+| Result | `RESULT: COMPATIBLE` |
+
+Gate 5.2: **PASS**.
+
+### Gate 5.3 — Runtime identity continuity
+
+The branch build `claude/admiring-turing-yqbbb9` at `0a30142` (WP7) was installed, with the Store still at 3.1.
+
+**Ownership move.** Before the build was installed, the two Runtime entities were owned by their Runtime ConfigSubentries in the Entity Registry: DL0002 (DL Lab Device 01) and DL0003 (DL Lab Device 02 — New). After the install and a restart, both:
+
+- kept the same `entity_id` and unique ID
+- had `config_subentry_id` null, the intended parent-owned placement
+- kept `disabled_by` unchanged
+- had no duplicate Runtime entity
+
+**Remove, restart, and re-add (DL0002 only).**
+
+1. The DL0002 Runtime configuration was deleted in the Home Assistant UI. Its ConfigSubentry was gone from the config entries. The Runtime Entity Registry entry remained, with the same `entity_id` and unique ID and `config_subentry_id` null, and the canonical Runtime total was unchanged.
+2. Home Assistant was restarted with no Runtime tracking for DL0002. The same registry entry, `entity_id`, and unique ID remained, `config_subentry_id` stayed null, and the canonical Runtime total was unchanged.
+3. Runtime tracking was added again for the same device. The same `entity_id` and unique ID were reused, `config_subentry_id` stayed null, and there was exactly one matching Runtime registry entry, with no `_2` or other duplicate. The canonical Runtime total resumed from the existing Asset-owned total, and no Runtime was added for the time without tracking.
+
+**History.** In Home Assistant History, "DL Lab Device 01 Runtime hours" showed one continuous series across the install, removal, restart, and re-add, with no new entity or series.
+
+The DL0002 total was carried through unchanged at every step. Its value in this one-time test is not a baseline; the lab still does not require Runtime values to match historical numbers.
+
+Gate 5.3: **PASS**.
+
+### Gate status after these checks
+
+| Gate | Status |
+|---|---|
+| S1 — migration-source safety | CLOSED: repository evidence (WP1, WP3) and Gate 5.2 |
+| S2 — pure Store 4.1 model | CLOSED earlier by repository evidence (WP1–WP6) |
+| S3 — Runtime identity continuity | CLOSED: repository evidence (WP7) and Gate 5.3 |
+| S4 — Store 4.1 activation | NOT STARTED; its preconditions S1–S3 are now met |
+| Gate 5.4 — Store 4.1 upgrade and smoke | PENDING; required before the branch is merged or released (Gate S7) |
+
 ## Observations for later review
 
 These are observations, not current defects.
