@@ -1356,6 +1356,11 @@ class AssetStoreManager:
         # was still pending, so an old total is never reported as current.
         self._runtime_writers: dict[str, RuntimeWriter] = {}
         self._runtime_unresolved: set[str] = set()
+        # The Runtime subentries quarantined for this loaded setup, and the
+        # archived Asset each resolves to. Derived once at setup by
+        # apply_runtime_quarantine and never persisted.
+        self.runtime_quarantine: frozenset[str] = frozenset()
+        self._runtime_quarantine_assets: dict[str, str] = {}
 
     async def async_setup(self) -> None:
         """Load and validate persistent Asset Core data."""
@@ -3806,13 +3811,60 @@ class AssetStoreManager:
         ] = FIELD_SOURCE_PURCHASE
         return True
 
+    def quarantined_runtime_subentries(self, entry: ConfigEntry) -> frozenset[str]:
+        """Return the Runtime subentries that resolve to an archived Asset.
+
+        Each Runtime subentry is resolved by the canonical resolver over every
+        Asset, archived ones included, so a modern ``asset_uuid`` binding and a
+        legacy device-only binding are judged alike. A subentry that resolves
+        to no Asset is not quarantined; reconciliation handles it as before.
+        """
+        assets = self._data["assets"]
+        quarantined: set[str] = set()
+        for subentry in entry.subentries.values():
+            if subentry.subentry_type != SUBENTRY_TYPE_RUNTIME:
+                continue
+            asset_uuid = resolve_runtime_subentry_asset(assets, subentry.data)
+            if asset_uuid is not None and asset_is_archived(assets[asset_uuid]):
+                quarantined.add(subentry.subentry_id)
+        return frozenset(quarantined)
+
+    def apply_runtime_quarantine(self, entry: ConfigEntry) -> frozenset[str]:
+        """Derive this setup's Runtime quarantine and keep it on the manager.
+
+        The one set reconciliation, exposure, the Runtime platform, and the
+        conflict Repairs all use for this loaded setup.
+        """
+        quarantined = self.quarantined_runtime_subentries(entry)
+        assets = self._data["assets"]
+        self._runtime_quarantine_assets = {
+            subentry_id: cast(
+                str,
+                resolve_runtime_subentry_asset(
+                    assets, entry.subentries[subentry_id].data
+                ),
+            )
+            for subentry_id in sorted(quarantined)
+        }
+        self.runtime_quarantine = quarantined
+        return quarantined
+
+    def quarantined_runtime_asset(self, subentry_id: str) -> AssetData | None:
+        """Return the archived Asset a quarantined Runtime subentry resolves to."""
+        return self.asset(self._runtime_quarantine_assets.get(subentry_id))
+
     def _reconcile_entry_data(
         self,
         data: AssetStoreData,
         entry: ConfigEntry,
         device_registry: dr.DeviceRegistry,
+        quarantined: frozenset[str] = frozenset(),
     ) -> dict[str, dict[str, Any]]:
-        """Reconcile config subentries into one transaction snapshot."""
+        """Reconcile config subentries into one transaction snapshot.
+
+        A quarantined Runtime subentry is skipped entirely: it creates no
+        Asset, refreshes and links nothing, and is never rewritten.
+        """
         subentry_updates: dict[str, dict[str, Any]] = {}
         touched_purchase_uuids: set[str] = set()
 
@@ -3927,6 +3979,8 @@ class AssetStoreManager:
         )
 
         for subentry in runtime_subentries:
+            if subentry.subentry_id in quarantined:
+                continue
             raw = dict(subentry.data)
             device_id = str(raw.get(CONF_DEVICE_ID) or "")
             if not device_id:
@@ -3955,20 +4009,30 @@ class AssetStoreManager:
 
         return subentry_updates
 
-    async def async_reconcile_entry(self, entry: ConfigEntry) -> None:
+    async def async_reconcile_entry(
+        self,
+        entry: ConfigEntry,
+        *,
+        quarantined: frozenset[str] | None = None,
+    ) -> None:
         """Normalize current 0.4.x/0.5.x subentries into Asset Core storage.
 
         Storage is written before adding the generated UUID references back to
         config subentries. If a later config-entry write fails, the next setup can
         recover the same objects by subentry/device relationship instead of
         allocating new Asset IDs.
+
+        Quarantined Runtime subentries are skipped: ``quarantined`` when
+        given, otherwise this setup's ``runtime_quarantine``.
         """
         device_registry = dr.async_get(self.hass)
+        skipped = self.runtime_quarantine if quarantined is None else quarantined
         subentry_updates = await self._async_mutate(
             lambda data: self._reconcile_entry_data(
                 data,
                 entry,
                 device_registry,
+                skipped,
             )
         )
 

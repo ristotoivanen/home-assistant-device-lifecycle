@@ -668,6 +668,10 @@
     "stale_related_device": {
       "title": "Liittyvä Home Assistant -laite ei saatavilla: {asset_name} ({asset_id})",
       "description": "Laitteen {asset_name} ({asset_id}) liittyvä Home Assistant -laite ei ole enää Home Assistantissa.\n\nDevice Lifecycle säilytti tämän linkityksen tarkoituksella. Mitään ei ole poistettu automaattisesti, eikä laite tai sen entiteetit ole muuttuneet.\n\nPoista linkitys avaamalla [Device Lifecycle](/config/integrations/integration/device_lifecycle) ja valitsemalla **Määrittele** → **Hallitse laitteita** → {asset_id} → **Home Assistant -laitteet** → **Poista liittyvä Home Assistant -laite**. Laite näkyy siellä nimellä Home Assistant -laite ei saatavilla.\n\nJos sama Home Assistant -laite palaa Home Assistantiin, tämä ilmoitus poistuu itsestään."
+    },
+    "runtime_archived_asset": {
+      "title": "Käyttötuntiseuranta on ristiriidassa arkistoidun laitteen kanssa: {asset_name} ({asset_id})",
+      "description": "Laitteelle {asset_name} ({asset_id}) on yhä määritetty käyttötuntiseuranta, mutta laite on arkistoitu. Näin käy yleensä varmuuskopion palauttamisen jälkeen.\n\nLaitteen käyttötuntiseuranta on keskeytetty. Mitään ei ole poistettu: laite säilyttää kertyneet käyttötuntinsa, käyttötuntientiteettinsä ja historiansa, ja seurannan määritys säilyy muuttumattomana.\n\nRatkaise ristiriita avaamalla [Device Lifecycle](/config/integrations/integration/device_lifecycle) ja joko palauta laite tai poista tämä käyttötuntiseurannan määritys.\n\nIlmoituksen ohittaminen ei ratkaise ristiriitaa."
     }
   }
 }

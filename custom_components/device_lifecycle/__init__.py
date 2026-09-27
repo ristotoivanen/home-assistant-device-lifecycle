@@ -11,6 +11,10 @@ from homeassistant.core import HomeAssistant
 from .const import CONFIG_ENTRY_VERSION
 from .exposure import async_reconcile_exposure_registry
 from .migration import async_migrate_entity_registry
+from .runtime_conflicts import (
+    async_delete_runtime_conflict_issues,
+    async_sync_runtime_conflict_issues,
+)
 from .stale_references import (
     async_delete_stale_reference_issues,
     async_sync_stale_reference_issues,
@@ -29,7 +33,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     manager = AssetStoreManager(hass)
     await manager.async_setup()
-    await manager.async_reconcile_entry(entry)
+
+    # A Runtime subentry that resolves to an archived Asset (a restored backup
+    # or an older configuration) is quarantined before anything can write
+    # Runtime: reconciliation, exposure, and the platform all skip it, and it
+    # is reported in Repairs. The rest of the entry loads normally.
+    quarantined = manager.apply_runtime_quarantine(entry)
+    await manager.async_reconcile_entry(entry, quarantined=quarantined)
 
     # 0.5.0 changes entity ownership from purchase/device-derived unique IDs to
     # immutable Asset UUIDs while preserving the existing entity_id and history.
@@ -45,6 +55,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # entry deletes them.
     async_sync_stale_reference_issues(hass, manager)
     entry.async_on_unload(async_track_stale_reference_issues(hass, manager))
+    async_sync_runtime_conflict_issues(hass, manager, quarantined)
 
     entry.runtime_data = manager
 
@@ -86,8 +97,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Delete the stale-reference Repairs issues when the entry is removed."""
+    """Delete the owned Repairs issues when the entry is removed."""
     async_delete_stale_reference_issues(hass)
+    async_delete_runtime_conflict_issues(hass)
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:

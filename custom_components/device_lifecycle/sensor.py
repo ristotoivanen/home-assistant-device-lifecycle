@@ -346,6 +346,14 @@ async def async_setup_entry(
             entry.async_on_unload(unsubscribe)
 
     for subentry in entry.subentries.values():
+        if (
+            subentry.subentry_type == SUBENTRY_TYPE_RUNTIME
+            and subentry.subentry_id in manager.runtime_quarantine
+        ):
+            # Quarantined: it resolves to an archived Asset. No Runtime is
+            # initialized or imported and no writer starts; the subentry and
+            # the Asset's parent-owned Runtime entity are left untouched.
+            continue
         if subentry.subentry_type == SUBENTRY_TYPE_RUNTIME:
             device_id = str(subentry.data.get(CONF_DEVICE_ID) or "")
             source_entity_id = str(subentry.data.get(CONF_SOURCE_ENTITY_ID) or "")

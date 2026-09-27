@@ -20,6 +20,9 @@ from custom_components.device_lifecycle.const import (
     DEPLOYMENT_STATES,
     HA_RELATIONSHIP_ACTIONS,
 )
+from custom_components.device_lifecycle.runtime_conflicts import (
+    TRANSLATION_KEY as RUNTIME_CONFLICT_TRANSLATION_KEY,
+)
 from custom_components.device_lifecycle.stale_references import TRANSLATION_KEYS
 
 TRANSLATION_DIRECTORY = (
@@ -466,6 +469,21 @@ def test_finalized_english_and_finnish_lifecycle_terms() -> None:
     }
 
 
+def test_runtime_conflict_issue_has_equivalent_translations() -> None:
+    """The Runtime conflict names the Asset only and deletes nothing."""
+    for language in LANGUAGES:
+        issue = _translation(language)["issues"][RUNTIME_CONFLICT_TRANSLATION_KEY]
+        assert set(issue) == {"title", "description"}
+        for text in issue.values():
+            assert set(re.findall(r"{(\w+)}", text)) == {"asset_id", "asset_name"}
+            assert "uuid" not in text.casefold()
+            assert "subentry" not in text.casefold()
+        assert (
+            "/config/integrations/integration/device_lifecycle"
+            in (issue["description"])
+        )
+
+
 def test_stale_reference_issues_have_equivalent_translations() -> None:
     """Both languages describe both issues with the same two placeholders.
 
@@ -475,7 +493,11 @@ def test_stale_reference_issues_have_equivalent_translations() -> None:
     english = _translation("en")["issues"]
     finnish = _translation("fi")["issues"]
 
-    assert set(english) == set(finnish) == set(TRANSLATION_KEYS.values())
+    assert (
+        set(english)
+        == set(finnish)
+        == set(TRANSLATION_KEYS.values()) | {RUNTIME_CONFLICT_TRANSLATION_KEY}
+    )
     for key in TRANSLATION_KEYS.values():
         for issue in (english[key], finnish[key]):
             assert set(issue) == {"title", "description"}

@@ -668,6 +668,10 @@
     "stale_related_device": {
       "title": "Related Home Assistant device unavailable: {asset_name} ({asset_id})",
       "description": "A related Home Assistant device of {asset_name} ({asset_id}) is no longer in Home Assistant.\n\nDevice Lifecycle kept this relationship on purpose. Nothing has been removed automatically, and the Asset and its entities are unchanged.\n\nTo remove the relationship, open [Device Lifecycle](/config/integrations/integration/device_lifecycle) and choose **Configure** → **Manage devices** → {asset_id} → **Home Assistant devices** → **Remove related Home Assistant device**. The device is listed there as Home Assistant device unavailable.\n\nIf the same Home Assistant device returns to Home Assistant, this issue clears by itself."
+    },
+    "runtime_archived_asset": {
+      "title": "Runtime tracking conflicts with an archived device: {asset_name} ({asset_id})",
+      "description": "Runtime tracking is still configured for {asset_name} ({asset_id}), but the device is archived. This usually happens after restoring a backup.\n\nRuntime tracking for it is paused. Nothing has been deleted: the device keeps its accumulated Runtime, its Runtime entity and history, and the Runtime configuration is kept unchanged.\n\nTo resolve it, open [Device Lifecycle](/config/integrations/integration/device_lifecycle) and either restore the device, or delete this Runtime tracking configuration.\n\nDismissing this issue does not resolve the conflict."
     }
   }
 }
