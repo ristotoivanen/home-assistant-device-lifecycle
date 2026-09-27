@@ -82,15 +82,19 @@ from .maintenance import (
     MaintenanceCompositionError,
     MaintenanceValidationError,
     add_maintenance_collections,
+    can_hard_delete_schedule,
+    is_baseline_locked,
     validate_maintenance_collections,
 )
 from .maintenance_mutations import (
+    EventGuards,
     MaintenanceArchivedAssetError,
     MaintenanceMutationContext,
     MaintenanceMutationError,
     MaintenanceMutationResult,
     MaintenanceSnapshot,
     mutate_maintenance,
+    preflight_event_guards,
 )
 from .maintenance_projection import MaintenanceProjection, project_schedule
 from .models import (
@@ -3707,6 +3711,72 @@ class AssetStoreManager:
             current_runtime=asset["runtime"]["total_seconds"],
             asset_archived=asset_is_archived(asset),
         )
+
+    def maintenance_schedule(
+        self, schedule_uuid: str | None
+    ) -> MaintenanceScheduleData | None:
+        """Return a detached snapshot of one Maintenance Schedule."""
+        if not schedule_uuid:
+            return None
+        schedule = self._data["maintenance_schedules"].get(schedule_uuid)
+        return deepcopy(schedule) if schedule is not None else None
+
+    def maintenance_event(self, event_uuid: str | None) -> MaintenanceEventData | None:
+        """Return a detached snapshot of one Maintenance Event."""
+        if not event_uuid:
+            return None
+        event = self._data["maintenance_events"].get(event_uuid)
+        return deepcopy(event) if event is not None else None
+
+    def maintenance_baseline_locked(self, schedule_uuid: str) -> bool:
+        """Return whether any Event, voided or not, references the Schedule."""
+        return is_baseline_locked(self._data["maintenance_events"], schedule_uuid)
+
+    def maintenance_schedule_deletable(self, schedule_uuid: str) -> bool:
+        """Return whether no Event, including a voided one, references it.
+
+        Only a preview for the user interface; the delete rechecks.
+        """
+        return can_hard_delete_schedule(
+            self._data["maintenance_events"], schedule_uuid
+        )
+
+    def maintenance_event_guards(
+        self,
+        schedule_uuids: list[str],
+        performed_date: str,
+        *,
+        replacing_event_uuid: str | None = None,
+        own_event_uuid: str | None = None,
+    ) -> EventGuards:
+        """Preview the guards a new or corrected Event would raise.
+
+        Read-only and advisory: the pure preflight runs on a detached copy
+        of the current snapshot, and the mutation recomputes every guard.
+        ``own_event_uuid`` is the pre-generated identity of the Event being
+        saved: if an earlier attempt already landed, it is not counted as
+        another Event. A refused preview becomes an AssetStoreError with the
+        stable code.
+        """
+        events = deepcopy(self._data["maintenance_events"])
+        if own_event_uuid is not None:
+            events.pop(own_event_uuid, None)
+        snapshot = MaintenanceSnapshot(
+            assets=deepcopy(self._data["assets"]),
+            schedules=deepcopy(self._data["maintenance_schedules"]),
+            events=events,
+        )
+        try:
+            return preflight_event_guards(
+                snapshot,
+                schedule_uuids,
+                performed_date,
+                replacing_event_uuid=replacing_event_uuid,
+            )
+        except MaintenanceMutationError as err:
+            raise AssetStoreError(
+                f"Maintenance request refused: {err.code}", code=err.code
+            ) from err
 
     async def async_update_asset_metadata(
         self,

@@ -110,7 +110,11 @@ async def test_archive_from_the_hub_needs_no_reload_and_keeps_the_manager(
     reloads.assert_not_called()
     assert entry.runtime_data is manager
     assert archived["step_id"] == "archived_asset"
-    assert archived["menu_options"] == ["confirm_restore_asset", "archived_assets"]
+    assert archived["menu_options"] == [
+        "confirm_restore_asset",
+        "maintenance_history",
+        "archived_assets",
+    ]
     assert "Device archived" in archived["description_placeholders"]["result"]
     assert manager.asset_archived(ASSET_UUID)
     # Current management no longer offers it; the archived selector does.
@@ -376,6 +380,7 @@ async def test_the_archived_view_offers_only_restore_history_and_back(
     assert view["menu_options"] == [
         "confirm_restore_asset",
         "archived_void_replacement",
+        "maintenance_history",
         "archived_assets",
     ]
     facts = view["description_placeholders"]["facts"]
@@ -416,7 +421,11 @@ async def test_a_replacement_of_an_archived_device_can_be_voided_in_place(
 
     reloads.assert_not_called()
     assert done["step_id"] == "archived_asset"
-    assert done["menu_options"] == ["confirm_restore_asset", "archived_assets"]
+    assert done["menu_options"] == [
+        "confirm_restore_asset",
+        "maintenance_history",
+        "archived_assets",
+    ]
     assert manager.replacement_record(record["replacement_uuid"])["voided_at"]  # type: ignore[index]
     assert manager.asset_archived(ASSET_UUID)
 
@@ -431,7 +440,11 @@ async def test_the_archived_view_shows_the_category_and_no_empty_history(
     view = await flow.async_step_archived_assets({CONF_ASSET_UUID: ASSET_UUID})
 
     assert "Category: Heating" in view["description_placeholders"]["facts"]
-    assert view["menu_options"] == ["confirm_restore_asset", "archived_assets"]
+    assert view["menu_options"] == [
+        "confirm_restore_asset",
+        "maintenance_history",
+        "archived_assets",
+    ]
     manager._data["assets"][ASSET_UUID][CONF_CATEGORY] = "  "
     blank = await flow.async_step_archived_asset()
     assert "Category" not in blank["description_placeholders"]["facts"]

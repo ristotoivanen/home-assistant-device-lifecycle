@@ -91,9 +91,32 @@ EDIT_FORMS = {
     "confirm_archive_asset",
     "confirm_restore_asset",
     "archived_void_replacement",
+    # WP17: every Maintenance form that saves or leads to saving.
+    "maintenance_add_schedule",
+    "maintenance_schedule_reminder",
+    "maintenance_start_known",
+    "maintenance_edit_schedule",
+    "maintenance_delete_schedule",
+    "maintenance_add_calendar",
+    "maintenance_add_runtime",
+    "maintenance_remove_interval",
+    "maintenance_confirm_destroy_baseline",
+    "maintenance_record",
+    "maintenance_event_just_now",
+    "maintenance_event_earlier",
+    "maintenance_event_lock",
+    "maintenance_event_ambiguity",
+    "maintenance_void_event_confirm",
+    "maintenance_correct_event_form",
 }
-# The Asset pickers only open an Asset: there is nothing to save or discard.
-NOT_EDIT_FORMS = {"manage_asset", "archived_assets"}
+# The pickers only open or find something: there is nothing to save or discard.
+NOT_EDIT_FORMS = {
+    "manage_asset",
+    "archived_assets",
+    "maintenance_open_schedule",
+    "maintenance_history_filter",
+    "maintenance_select_event",
+}
 # Purchase and runtime forms open from the integration page: every one of
 # them is a form whose X closes it without saving.
 SUBENTRY_FORMS = {

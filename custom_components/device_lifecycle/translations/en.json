@@ -186,7 +186,24 @@
       "archive_completed": "Device archived. It is no longer part of active management.",
       "archive_unchanged": "The device was already archived.",
       "restore_completed": "Device restored to active management.",
-      "restore_unchanged": "The device was already in active management."
+      "restore_unchanged": "The device was already in active management.",
+      "maintenance_schedule_created": "Schedule added.",
+      "maintenance_schedule_updated": "Schedule saved.",
+      "maintenance_unchanged": "Nothing changed; it was already so.",
+      "maintenance_schedule_enabled": "Schedule enabled.",
+      "maintenance_schedule_disabled": "Schedule disabled. Its history is kept.",
+      "maintenance_schedule_deleted": "Schedule deleted.",
+      "maintenance_interval_added": "Interval added.",
+      "maintenance_interval_removed": "Interval removed.",
+      "maintenance_starting_point_updated": "Starting point saved.",
+      "maintenance_starting_point_locked": "The starting point is locked because maintenance has been recorded.",
+      "maintenance_event_recorded": "Maintenance recorded.",
+      "maintenance_event_voided": "Record voided. It stays in the history.",
+      "maintenance_event_corrected": "Record corrected. The original stays in the history.",
+      "maintenance_archived_meanwhile": "The device was archived meanwhile. Only its maintenance history can be corrected now; nothing was saved.",
+      "maintenance_schedule_missing": "The schedule no longer exists.",
+      "maintenance_action_failed": "The change could not be saved. Try again.",
+      "maintenance_last_interval": "The last interval cannot be removed."
     },
     "error": {
       "asset_archived": "The selected Asset is archived and cannot be changed. Nothing was changed.",
@@ -256,7 +273,33 @@
       "archived_asset_required": "Select an archived device.",
       "no_archived_assets": "There are no archived devices.",
       "runtime_checkpoint_failed": "The device's latest Runtime could not be saved. Nothing was changed and the Runtime is kept; try again.",
-      "runtime_checkpoint_unresolved": "Some of the device's Runtime could not be saved when its tracking was removed. Reload Device Lifecycle, then try again."
+      "runtime_checkpoint_unresolved": "Some of the device's Runtime could not be saved when its tracking was removed. Reload Device Lifecycle, then try again.",
+      "maintenance_anchor_requires_interval": "A starting point needs the matching interval.",
+      "maintenance_asset_not_found": "The device no longer exists.",
+      "maintenance_baseline_locked": "The starting point is locked because maintenance has been recorded.",
+      "maintenance_confirm_baseline_lock": "Saving this locks a starting point; confirm it first.",
+      "maintenance_confirm_destroy_baseline": "This removes a locked starting point; confirm it first.",
+      "maintenance_date_in_future": "The date cannot be later than today.",
+      "maintenance_event_not_active": "This record is no longer in force, so it cannot be corrected or voided.",
+      "maintenance_event_not_found": "The record no longer exists.",
+      "maintenance_event_required": "Choose a record.",
+      "maintenance_interval_exists": "This interval already exists; edit its value instead.",
+      "maintenance_interval_required": "Give a time interval, a Runtime interval, or both.",
+      "maintenance_interval_type_change": "Add or remove an interval under Intervals.",
+      "maintenance_invalid_request": "Check the values; one of them is not valid.",
+      "maintenance_invalid_number": "Enter a valid positive number.",
+      "maintenance_last_interval": "The last interval cannot be removed.",
+      "maintenance_reminder_requires_calendar": "A preparation reminder needs a time interval.",
+      "maintenance_replay_conflict": "This was already saved with other values. Close the window and start again.",
+      "maintenance_runtime_above_current": "Runtime cannot be more than the device's current Runtime.",
+      "maintenance_schedule_not_found": "The schedule no longer exists.",
+      "maintenance_schedule_other_asset": "Choose only this device's schedules.",
+      "maintenance_schedule_referenced": "Maintenance has been recorded for this schedule, so it cannot be deleted.",
+      "maintenance_schedule_required": "Choose a schedule.",
+      "maintenance_starting_point_required": "Give at least one value, or choose Not known instead.",
+      "maintenance_confirmation_required": "Confirm to continue.",
+      "maintenance_filter_range": "The start date must not be after the end date.",
+      "maintenance_no_matching_events": "No records match these dates."
     },
     "step": {
       "asset_deployment": {
@@ -517,13 +560,15 @@
           "asset_details_warranty_menu": "{details_warranty}",
           "asset_installation_menu": "{deployment}",
           "asset_lifecycle_replacement_menu": "{lifecycle_replacement}",
-          "ha_relationship": "{ha_devices}"
+          "ha_relationship": "{ha_devices}",
+          "maintenance_menu": "{maintenance}"
         },
         "menu_options": {
           "asset_details_warranty_menu": "Details & warranty",
           "asset_installation_menu": "Installation & location",
           "asset_lifecycle_replacement_menu": "Lifecycle & replacement",
           "ha_relationship": "Home Assistant devices",
+          "maintenance_menu": "Maintenance",
           "confirm_archive_asset": "Archive this device",
           "manage_asset": "Choose another device"
         },
@@ -597,6 +642,7 @@
         "menu_options": {
           "confirm_restore_asset": "Restore to active management",
           "archived_void_replacement": "Void a replacement relationship",
+          "maintenance_history": "Maintenance history",
           "archived_assets": "← Back to archived devices"
         }
       },
@@ -615,6 +661,253 @@
           "confirm_restore": "Confirm restoring"
         },
         "submit": "Restore device"
+      },
+      "maintenance_menu": {
+        "title": "Maintenance",
+        "description": "{asset}\n\n{result}\n\n**Maintenance schedules**\n{schedules}",
+        "menu_options": {
+          "maintenance_add_schedule": "Add schedule",
+          "maintenance_open_schedule": "Open schedule",
+          "maintenance_record": "Record maintenance",
+          "maintenance_history": "History",
+          "manage_asset_menu": "← Back to asset management"
+        }
+      },
+      "maintenance_open_schedule": {
+        "title": "Open schedule",
+        "description": "{asset}",
+        "submit": "Open",
+        "data": {
+          "schedule_uuid": "Schedule"
+        }
+      },
+      "maintenance_schedule": {
+        "title": "Maintenance schedule",
+        "description": "{asset}\n\n{result}\n\n**{schedule}**\n{facts}",
+        "menu_options": {
+          "maintenance_mark_done": "Mark done",
+          "maintenance_edit_schedule": "Edit",
+          "maintenance_intervals": "Intervals",
+          "maintenance_starting_point": "Starting point",
+          "maintenance_disable_schedule": "Disable",
+          "maintenance_enable_schedule": "Enable",
+          "maintenance_delete_schedule": "Delete schedule",
+          "maintenance_menu": "← Back to maintenance"
+        }
+      },
+      "maintenance_add_schedule": {
+        "title": "Add schedule",
+        "description": "{asset}\n\nGive a time interval, a Runtime interval, or both. The maintenance is due when the first of them is reached.\n\nClose the window without saving by using the X button in the upper-left corner.",
+        "submit": "Continue",
+        "data": {
+          "schedule_name": "Name",
+          "calendar_value": "Time interval",
+          "calendar_unit": "Time unit",
+          "runtime_hours": "Runtime interval (hours)"
+        },
+        "data_description": {
+          "runtime_hours": "Hours of Runtime; decimals are allowed."
+        }
+      },
+      "maintenance_schedule_reminder": {
+        "title": "Preparation reminder",
+        "description": "{asset}\n\nOptional for {schedule}: a reminder this many days before the date it is due. Leave empty for no reminder.\n\nClose the window without saving by using the X button in the upper-left corner.",
+        "submit": "Continue",
+        "data": {
+          "lead_days": "Days before",
+          "reminder_message": "Reminder message"
+        }
+      },
+      "maintenance_start_choice": {
+        "title": "Starting point",
+        "description": "{asset}\n\nDo you know when this maintenance was last done? Nothing is assumed from the purchase, installation, or today.",
+        "menu_options": {
+          "maintenance_start_unknown": "Not known",
+          "maintenance_start_known": "I know it",
+          "maintenance_start_back": "← Back"
+        }
+      },
+      "maintenance_start_known": {
+        "title": "Starting point",
+        "description": "{asset}\n\nGive what you know. A value left empty stays unknown. Once maintenance is recorded for the schedule, its starting point is locked.\n\nClose the window without saving by using the X button in the upper-left corner.",
+        "submit": "Save and return",
+        "data": {
+          "starting_date": "Last done on",
+          "starting_runtime_hours": "Runtime when last done (hours)"
+        },
+        "data_description": {
+          "starting_runtime_hours": "Hours of Runtime; decimals are allowed."
+        }
+      },
+      "maintenance_edit_schedule": {
+        "title": "Edit schedule",
+        "description": "{asset}\n\n**{schedule}**\n\nAdding or removing an interval is done under Intervals.\n\nClose the window without saving by using the X button in the upper-left corner.",
+        "submit": "Continue",
+        "data": {
+          "schedule_name": "Name",
+          "calendar_value": "Time interval",
+          "calendar_unit": "Time unit",
+          "runtime_hours": "Runtime interval (hours)"
+        },
+        "data_description": {
+          "runtime_hours": "Hours of Runtime; decimals are allowed."
+        }
+      },
+      "maintenance_delete_schedule": {
+        "title": "Delete schedule",
+        "description": "{asset}\n\n**{schedule}**\n\nNo maintenance has been recorded for this schedule, so it can be deleted permanently.\n\nClose the window without saving by using the X button in the upper-left corner.",
+        "submit": "Delete and return",
+        "data": {
+          "confirm_delete_schedule": "Confirm deletion"
+        }
+      },
+      "maintenance_intervals": {
+        "title": "Intervals",
+        "description": "{asset}\n\n{result}\n\n**{schedule}**\n{intervals}\n{starting_point}",
+        "menu_options": {
+          "maintenance_add_calendar": "Add a time interval",
+          "maintenance_add_runtime": "Add a Runtime interval",
+          "maintenance_remove_calendar": "Remove the time interval",
+          "maintenance_remove_runtime": "Remove the Runtime interval",
+          "maintenance_schedule": "← Back to schedule"
+        }
+      },
+      "maintenance_add_calendar": {
+        "title": "Add a time interval",
+        "description": "{asset}\n\n**{schedule}**\n{starting_point}\n\nClose the window without saving by using the X button in the upper-left corner.",
+        "submit": "Continue",
+        "data": {
+          "calendar_value": "Time interval",
+          "calendar_unit": "Time unit"
+        }
+      },
+      "maintenance_add_runtime": {
+        "title": "Add a Runtime interval",
+        "description": "{asset}\n\n**{schedule}**\n{starting_point}\n\nClose the window without saving by using the X button in the upper-left corner.",
+        "submit": "Continue",
+        "data": {
+          "runtime_hours": "Runtime interval (hours)"
+        },
+        "data_description": {
+          "runtime_hours": "Hours of Runtime; decimals are allowed."
+        }
+      },
+      "maintenance_remove_interval": {
+        "title": "Remove interval",
+        "description": "{asset}\n\n**{schedule}**\n\n{effects}\n\nClose the window without saving by using the X button in the upper-left corner.",
+        "submit": "Remove and return",
+        "data": {
+          "confirm_remove_interval": "Confirm removal"
+        }
+      },
+      "maintenance_confirm_destroy_baseline": {
+        "title": "Remove locked starting point",
+        "description": "{asset}\n\n**{schedule}**\n\nMaintenance has been recorded for this schedule, so its starting point is locked. Removing the interval permanently removes {lost}. Adding the interval again later does not bring it back.\n\nClose the window without saving by using the X button in the upper-left corner.",
+        "submit": "Remove permanently",
+        "data": {
+          "confirm_destroy_baseline": "I understand this cannot be undone"
+        }
+      },
+      "maintenance_record": {
+        "title": "Record maintenance",
+        "description": "{asset}\n\nChoose the schedules this maintenance fulfils, or none for maintenance outside the schedules.\n\nClose the window without saving by using the X button in the upper-left corner.",
+        "submit": "Continue",
+        "data": {
+          "schedule_uuids": "Schedules done",
+          "event_title": "Title",
+          "notes": "Notes"
+        }
+      },
+      "maintenance_event_timing": {
+        "title": "When was it done?",
+        "description": "{asset}\n\n**{title}**",
+        "menu_options": {
+          "maintenance_event_just_now": "Just now",
+          "maintenance_event_earlier": "Earlier date",
+          "maintenance_event_details": "← Back to details"
+        }
+      },
+      "maintenance_event_just_now": {
+        "title": "Just now",
+        "description": "{asset}\n\n**{title}**\n\nDate: {date}\nRuntime: {runtime}\n\nThese values were read when this step opened and are saved as shown.\n\nClose the window without saving by using the X button in the upper-left corner.",
+        "submit": "Save and return"
+      },
+      "maintenance_event_earlier": {
+        "title": "Earlier date",
+        "description": "{asset}\n\n**{title}**\n\nRuntime at that time is not filled in for you; leave it empty if you do not know it.\n\nClose the window without saving by using the X button in the upper-left corner.",
+        "submit": "Save and return",
+        "data": {
+          "performed_date": "Date done",
+          "event_runtime_hours": "Runtime at that time (hours)"
+        },
+        "data_description": {
+          "event_runtime_hours": "Hours of Runtime; decimals are allowed."
+        }
+      },
+      "maintenance_event_lock": {
+        "title": "Starting point will be locked",
+        "description": "{asset}\n\nThis is the first maintenance recorded for: {schedules}. Saving it permanently locks their starting point; it can no longer be changed, even if this record is later voided.\n\nClose the window without saving by using the X button in the upper-left corner.",
+        "submit": "Continue",
+        "data": {
+          "confirm_baseline_lock": "Lock the starting point"
+        }
+      },
+      "maintenance_event_ambiguity": {
+        "title": "Several records on one day",
+        "description": "{asset}\n\nAnother record already exists on this date for: {schedules}. The date stays known, but the Runtime to count from becomes unknown for that day. A mistaken duplicate can be corrected or voided later.\n\nClose the window without saving by using the X button in the upper-left corner.",
+        "submit": "Save anyway"
+      },
+      "maintenance_history": {
+        "title": "Maintenance history",
+        "description": "{asset}\n\n{result}\n\n**Latest records** (of {count})\n{events}",
+        "menu_options": {
+          "maintenance_correct_event": "Correct a record",
+          "maintenance_void_event": "Void a record",
+          "maintenance_menu": "← Back to maintenance",
+          "archived_asset": "← Back to archived device"
+        }
+      },
+      "maintenance_history_filter": {
+        "title": "Find records",
+        "description": "{asset}\n\nOptionally limit the records by date. Leave both empty to list the whole history.",
+        "submit": "Continue",
+        "data": {
+          "date_from": "From",
+          "date_to": "To"
+        }
+      },
+      "maintenance_select_event": {
+        "title": "Choose record",
+        "description": "{asset}\n\nMatching records: {count}, newest first. Only a record in force can be corrected or voided.",
+        "submit": "Continue",
+        "data": {
+          "event_uuid": "Maintenance record"
+        }
+      },
+      "maintenance_void_event_confirm": {
+        "title": "Void record",
+        "description": "{asset}\n\nRecord to void: {event}\n\nA voided record stays in the history but no longer counts. Voiding cannot be undone.\n\nClose the window without saving by using the X button in the upper-left corner.",
+        "submit": "Void and return",
+        "data": {
+          "confirm_void": "Confirm voiding",
+          "void_reason": "Reason"
+        }
+      },
+      "maintenance_correct_event_form": {
+        "title": "Correct record",
+        "description": "{asset}\n\nGive the complete corrected record. The original is voided and kept in the history.\n\nClose the window without saving by using the X button in the upper-left corner.",
+        "submit": "Save correction",
+        "data": {
+          "schedule_uuids": "Schedules done",
+          "event_title": "Title",
+          "performed_date": "Date done",
+          "event_runtime_hours": "Runtime at that time (hours)",
+          "notes": "Notes",
+          "void_reason": "Reason for correction"
+        },
+        "data_description": {
+          "event_runtime_hours": "Hours of Runtime; decimals are allowed."
+        }
       }
     }
   },
@@ -669,6 +962,13 @@
         "1_year": "1 year",
         "2_years": "2 years",
         "manual": "Manual"
+      }
+    },
+    "maintenance_interval_unit": {
+      "options": {
+        "days": "days",
+        "months": "months",
+        "years": "years"
       }
     }
   },

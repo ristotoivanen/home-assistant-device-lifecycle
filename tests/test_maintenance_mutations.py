@@ -1668,16 +1668,33 @@ def test_module_never_touches_asset_runtime() -> None:
     assert "snapshot.assets[" not in source
 
 
+# The OptionsFlow may name request types and their enums, nothing else.
+REQUEST_VOCABULARY = {"IntervalDimension", "MutationOutcome"}
+
+
 def test_mutations_are_reached_only_through_the_store_manager() -> None:
     """Since WP11 only the Store manager runs Maintenance mutations, inside
-    its locked, verified persistence pipeline."""
+    its locked, verified persistence pipeline. Since WP17 the OptionsFlow
+    builds requests from the request types, and never runs an operation."""
     package = MODULE_PATH.parent
     for path in package.glob("*.py"):
-        if path.name in {MODULE_PATH.name, "storage.py"}:
+        if path.name in {MODULE_PATH.name, "storage.py", "config_flow.py"}:
             continue
         assert "maintenance_mutations" not in path.read_text(encoding="utf-8"), (
             path.name
         )
+    flow_tree = ast.parse((package / "config_flow.py").read_text(encoding="utf-8"))
+    imported = {
+        alias.name
+        for node in ast.walk(flow_tree)
+        if isinstance(node, ast.ImportFrom) and node.module == "maintenance_mutations"
+        for alias in node.names
+    }
+    assert imported
+    assert all(
+        name.endswith(("Request", "Input")) or name in REQUEST_VOCABULARY
+        for name in imported
+    ), imported
     tree = ast.parse((package / "storage.py").read_text(encoding="utf-8"))
     callers = {
         f"{node.name}.{item.name}"

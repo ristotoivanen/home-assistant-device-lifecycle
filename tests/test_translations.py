@@ -252,6 +252,22 @@ def test_every_emitted_options_error_has_translation(language: str) -> None:
     assert _emitted_options_errors() <= translated_errors
 
 
+# Maintenance menu rows that act or route and then show another step.
+MAINTENANCE_DISPATCH_ONLY = {
+    "maintenance_mark_done",
+    "maintenance_starting_point",
+    "maintenance_disable_schedule",
+    "maintenance_enable_schedule",
+    "maintenance_remove_calendar",
+    "maintenance_remove_runtime",
+    "maintenance_start_unknown",
+    "maintenance_start_back",
+    "maintenance_event_details",
+    "maintenance_correct_event",
+    "maintenance_void_event",
+}
+
+
 @pytest.mark.parametrize("language", LANGUAGES)
 def test_every_menu_action_and_step_has_translation(language: str) -> None:
     """Both menus and every dispatched action have localized labels and steps."""
@@ -271,14 +287,61 @@ def test_every_menu_action_and_step_has_translation(language: str) -> None:
         "asset_installation_menu",
         "asset_lifecycle_replacement_menu",
         "ha_relationship",
+        "maintenance_menu",
         "confirm_archive_asset",
         "manage_asset",
     }
     assert set(steps["archived_asset"]["menu_options"]) == {
         "confirm_restore_asset",
         "archived_void_replacement",
+        "maintenance_history",
         "archived_assets",
     }
+    # WP17: the Maintenance menus. An archived Asset reaches only History.
+    maintenance_menus = {
+        "maintenance_menu": {
+            "maintenance_add_schedule",
+            "maintenance_open_schedule",
+            "maintenance_record",
+            "maintenance_history",
+            "manage_asset_menu",
+        },
+        "maintenance_schedule": {
+            "maintenance_mark_done",
+            "maintenance_edit_schedule",
+            "maintenance_intervals",
+            "maintenance_starting_point",
+            "maintenance_disable_schedule",
+            "maintenance_enable_schedule",
+            "maintenance_delete_schedule",
+            "maintenance_menu",
+        },
+        "maintenance_intervals": {
+            "maintenance_add_calendar",
+            "maintenance_add_runtime",
+            "maintenance_remove_calendar",
+            "maintenance_remove_runtime",
+            "maintenance_schedule",
+        },
+        "maintenance_start_choice": {
+            "maintenance_start_unknown",
+            "maintenance_start_known",
+            "maintenance_start_back",
+        },
+        "maintenance_event_timing": {
+            "maintenance_event_just_now",
+            "maintenance_event_earlier",
+            "maintenance_event_details",
+        },
+        "maintenance_history": {
+            "maintenance_correct_event",
+            "maintenance_void_event",
+            "maintenance_menu",
+            "archived_asset",
+        },
+    }
+    for menu, options in maintenance_menus.items():
+        assert set(steps[menu]["menu_options"]) == options, menu
     section_menus = {
         "asset_details_warranty_menu": {
             "edit_asset_metadata",
@@ -315,8 +378,11 @@ def test_every_menu_action_and_step_has_translation(language: str) -> None:
         *steps["ha_relationship"]["menu_options"],
         *steps["asset_replacement"]["menu_options"],
         *steps["archived_asset"]["menu_options"],
+        *(option for options in maintenance_menus.values() for option in options),
     }
     menu_actions.remove("quick_add_manual")
+    # Maintenance rows that act or route and then show another step.
+    menu_actions -= MAINTENANCE_DISPATCH_ONLY
     assert menu_actions <= set(steps)
 
     # Home Assistant renders a menu option's description from the step's own

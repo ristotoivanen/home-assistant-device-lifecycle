@@ -341,6 +341,7 @@ def test_the_hub_rows_carry_the_frozen_names(language: str) -> None:
             "asset_installation_menu": "Installation & location",
             "asset_lifecycle_replacement_menu": "Lifecycle & replacement",
             "ha_relationship": "Home Assistant devices",
+            "maintenance_menu": "Maintenance",
             "confirm_archive_asset": "Archive this device",
             "manage_asset": "Choose another device",
         }
@@ -350,6 +351,7 @@ def test_the_hub_rows_carry_the_frozen_names(language: str) -> None:
             "asset_installation_menu": "Asennus ja sijainti",
             "asset_lifecycle_replacement_menu": "Elinkaari ja korvaaminen",
             "ha_relationship": "Home Assistant -laitteet",
+            "maintenance_menu": "Huolto",
             "confirm_archive_asset": "Arkistoi tämä laite",
             "manage_asset": "Valitse toinen laite",
         }

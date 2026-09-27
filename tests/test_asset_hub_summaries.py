@@ -725,16 +725,18 @@ def test_each_hub_row_carries_its_own_summary(language: str) -> None:
         "asset_installation_menu": "{deployment}",
         "asset_lifecycle_replacement_menu": "{lifecycle_replacement}",
         "ha_relationship": "{ha_devices}",
+        # Since WP17: Maintenance, a section with its own summary.
+        "maintenance_menu": "{maintenance}",
     }
 
 
 @pytest.mark.parametrize("language", ["en", "fi"])
-def test_only_the_four_section_rows_are_described(language: str) -> None:
+def test_only_the_section_rows_are_described(language: str) -> None:
     """Choosing another Asset is navigation and Archive is an action, so
     neither summarizes anything."""
     step = _hub_step(language)
 
-    assert len(step["menu_options"]) == 6
+    assert len(step["menu_options"]) == 7
     assert set(step["menu_option_descriptions"]) == (
         set(step["menu_options"]) - {"manage_asset", "confirm_archive_asset"}
     )

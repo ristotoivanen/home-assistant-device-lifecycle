@@ -1007,13 +1007,19 @@ async def test_projection_uses_the_pure_rules_and_canonical_state(
     assert manager._data == before
 
 
-def test_no_maintenance_ui_and_read_only_entities() -> None:
-    """WP16 adds read-only Maintenance entities; the UI comes in WP17."""
+def test_maintenance_ui_writes_through_the_manager_only() -> None:
+    """WP16 adds read-only entities; WP17 the UI, writing through the manager."""
     package = Path(storage.__file__).parent
-    for name in ("config_flow.py", "exposure.py", "__init__.py"):
+    for name in ("exposure.py", "__init__.py"):
         source = (package / name).read_text(encoding="utf-8")
         assert "async_mutate_maintenance" not in source, name
         assert "maintenance_projection" not in source, name
+    # Since WP17 the OptionsFlow writes only through the manager and reads
+    # projections only through it.
+    flow = (package / "config_flow.py").read_text(encoding="utf-8")
+    assert "self._manager.async_mutate_maintenance(" in flow
+    assert "project_schedule" not in flow
+    assert "from .maintenance_projection" not in flow
     for name in ("sensor.py", "binary_sensor.py", "maintenance_entities.py"):
         source = (package / name).read_text(encoding="utf-8")
         assert "async_mutate_maintenance" not in source, name

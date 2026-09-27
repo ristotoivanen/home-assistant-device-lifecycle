@@ -37,6 +37,8 @@ HUB_ROWS = [
     "asset_installation_menu",
     "asset_lifecycle_replacement_menu",
     "ha_relationship",
+    # Since WP17: Maintenance.
+    "maintenance_menu",
     # Since WP15: Archive, an action rather than a section.
     "confirm_archive_asset",
     "manage_asset",
@@ -47,6 +49,7 @@ SUMMARY_PLACEHOLDERS = [
     "deployment",
     "lifecycle_replacement",
     "ha_devices",
+    "maintenance",
 ]
 
 
@@ -76,11 +79,11 @@ async def test_selecting_an_asset_opens_its_hub(
     assert hub["description_placeholders"]["asset"] == "Workshop device · DL0007"
 
 
-async def test_hub_offers_exactly_the_six_rows_in_order(
+async def test_hub_offers_exactly_the_seven_rows_in_order(
     hass: HomeAssistant,
     asset_store_data: AssetStoreData,
 ) -> None:
-    """The hub's shape is fixed: four sections, Archive, then another Asset."""
+    """The hub's shape is fixed: five sections, Archive, then another Asset."""
     manager = _manager(hass, asset_store_data)
 
     _flow, hub = await _hub(hass, manager)

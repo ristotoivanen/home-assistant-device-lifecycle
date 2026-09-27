@@ -88,6 +88,7 @@ async def test_deployment_action_and_migrated_unknown_are_visible(
         "asset_installation_menu",
         "asset_lifecycle_replacement_menu",
         "ha_relationship",
+        "maintenance_menu",
         "confirm_archive_asset",
         "manage_asset",
     ]
