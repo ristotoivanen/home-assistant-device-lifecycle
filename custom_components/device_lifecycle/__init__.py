@@ -103,7 +103,16 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload after a purchase or runtime subentry changes."""
+    """Reload after a purchase or runtime subentry changes.
+
+    A Runtime writer whose subentry is gone is retired first, so it stops
+    observing at once even if the reload's unload gate later refuses. A
+    retirement that cannot persist its Runtime yet keeps it pending and
+    never prevents the reload from being scheduled.
+    """
+    manager = getattr(entry, "runtime_data", None)
+    if isinstance(manager, AssetStoreManager):
+        await manager.async_retire_orphaned_runtime_writers(entry)
     hass.config_entries.async_schedule_reload(entry.entry_id)
 
 

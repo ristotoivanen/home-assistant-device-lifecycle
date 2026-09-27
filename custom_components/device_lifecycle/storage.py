@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 import uuid
@@ -11,6 +12,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from enum import StrEnum
 from types import MappingProxyType
 from typing import Any, Mapping, TypeVar, cast
 from uuid import UUID, uuid4
@@ -23,11 +25,18 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.storage import Store
 from homeassistant.util import json as json_util
 from homeassistant.util import dt as dt_util
+from homeassistant.util.hass_dict import HassKey
 
 from .archive import (
+    ArchiveAssetRequest,
     ArchiveCompositionError,
+    ArchiveMutationError,
+    ArchiveOutcome,
     ArchiveValidationError,
+    RestoreAssetRequest,
     add_asset_archive_state,
+    apply_archive_request,
+    archive_state_matches,
     asset_is_archived,
     validate_asset_archive_state,
 )
@@ -97,7 +106,10 @@ from .models import (
     ReplacementRecordData,
 )
 from .runtime_identity import primary_device_id as _primary_device_id
-from .runtime_identity import resolve_runtime_subentry_asset
+from .runtime_identity import (
+    resolve_runtime_subentry_asset,
+    runtime_subentries_resolving_to,
+)
 from .store_shape import (
     ASSET_KEYS_4_1,
     PURCHASE_KEYS,
@@ -138,6 +150,24 @@ _MutationResultT = TypeVar("_MutationResultT")
 # A Runtime writer operation for one Asset. It returns only after every
 # observable Runtime delta is durably committed, or raises.
 RuntimeCheckpointCallback = Callable[[], Awaitable[Any]]
+
+_LOGGER = logging.getLogger(__name__)
+
+# Runtime binding reservations, per ConfigEntry ID and Asset UUID: one token
+# per Runtime subentry flow that is about to create a subentry for the Asset.
+# In memory only and kept in hass.data, not on a manager, so a reload between
+# the reservation and the subentry's creation cannot hide it from Archive.
+RUNTIME_BINDING_RESERVATIONS: HassKey[dict[tuple[str, str], set[object]]] = HassKey(
+    f"{DOMAIN}_runtime_binding_reservations"
+)
+
+# Archive blockers, in the order a preview lists them.
+ARCHIVE_ASSET_DEPLOYED = "archive_asset_deployed"
+ARCHIVE_RUNTIME_CONFIGURED = "archive_runtime_configured"
+ARCHIVE_RUNTIME_BINDING_IN_PROGRESS = "archive_runtime_binding_in_progress"
+ARCHIVE_RUNTIME_WRITER_ACTIVE = "archive_runtime_writer_active"
+ARCHIVE_RUNTIME_UNDURABLE = "archive_runtime_undurable"
+ARCHIVE_RUNTIME_UNRESOLVED = "archive_runtime_unresolved"
 _UNSET = object()
 _USER_EDITABLE_ASSET_FIELDS = (
     "name",
@@ -1329,16 +1359,56 @@ def _migrate_v3_1_to_v4_1(old_data: AssetStoreData) -> AssetStoreData:
 
 
 @dataclass(frozen=True, slots=True)
+class RuntimeWriterDurability:
+    """In-memory evidence of one Runtime writer, read synchronously.
+
+    ``observing`` is whether the writer can still create Runtime, ``pending``
+    whether it holds deltas not yet committed, and ``committed_seconds`` the
+    total its last successful commit produced.
+    """
+
+    observing: bool
+    pending: bool
+    committed_seconds: Decimal
+
+
+class RuntimeArchiveEligibility(StrEnum):
+    """Whether a Runtime writer's state allows its Asset to be archived."""
+
+    UNRESOLVED = "unresolved"
+    ABSENT = "absent"
+    ACTIVE = "active"
+    UNDURABLE = "undurable"
+    QUIESCED_DURABLE = "quiesced_durable"
+
+
+_ELIGIBILITY_BLOCKERS = {
+    RuntimeArchiveEligibility.UNRESOLVED: ARCHIVE_RUNTIME_UNRESOLVED,
+    RuntimeArchiveEligibility.ACTIVE: ARCHIVE_RUNTIME_WRITER_ACTIVE,
+    RuntimeArchiveEligibility.UNDURABLE: ARCHIVE_RUNTIME_UNDURABLE,
+}
+
+
+@dataclass(frozen=True, slots=True)
 class RuntimeWriter:
     """In-memory capabilities of the active Runtime writer for one Asset.
 
     ``checkpoint`` strictly persists observable Runtime and keeps tracking.
     ``prepare_unload`` strictly persists it, stops tracking, and quiesces the
     writer so no further Runtime can be created before entity removal.
+    ``durability`` reports the writer's in-memory evidence synchronously.
+    ``finalize`` strictly commits already-pending deltas and never seals new
+    time. ``retire`` seals observed time through now, quiesces the writer
+    even if the following strict flush fails, and keeps any pending deltas.
+    A writer registered without ``durability`` gives no evidence, so it can
+    never be treated as durable.
     """
 
     checkpoint: RuntimeCheckpointCallback
     prepare_unload: RuntimeCheckpointCallback
+    durability: Callable[[], RuntimeWriterDurability] | None = None
+    finalize: RuntimeCheckpointCallback | None = None
+    retire: RuntimeCheckpointCallback | None = None
 
 
 class AssetStoreManager:
@@ -1589,20 +1659,36 @@ class AssetStoreManager:
         checkpoint: RuntimeCheckpointCallback,
         *,
         prepare_unload: RuntimeCheckpointCallback,
+        durability: Callable[[], RuntimeWriterDurability] | None = None,
+        finalize: RuntimeCheckpointCallback | None = None,
+        retire: RuntimeCheckpointCallback | None = None,
     ) -> Callable[[], None]:
         """Register the active Runtime writer of one Asset.
 
         The registration is in memory only and belongs to this manager, so a
         reload starts empty. Only one writer may be registered per Asset; a
-        second registration fails closed. The returned callback removes only
+        second registration fails closed, and so does a registration for an
+        archived Asset. The returned callback removes only
         this registration, so a stale unregister never removes a newer writer.
         """
+        asset = self._data["assets"].get(asset_uuid)
+        if asset is not None and asset_is_archived(asset):
+            raise AssetStoreError(
+                f"Asset {asset_uuid} is archived; Runtime cannot be tracked",
+                code="runtime_asset_archived",
+            )
         if asset_uuid in self._runtime_writers:
             raise AssetStoreError(
                 f"Asset {asset_uuid} already has an active Runtime writer",
                 code="runtime_checkpoint_writer_exists",
             )
-        writer = RuntimeWriter(checkpoint, prepare_unload)
+        writer = RuntimeWriter(
+            checkpoint,
+            prepare_unload,
+            durability=durability,
+            finalize=finalize,
+            retire=retire,
+        )
         self._runtime_writers[asset_uuid] = writer
 
         def _unregister() -> None:
@@ -1680,6 +1766,283 @@ class AssetStoreManager:
                     "checkpointed before unload",
                     code="runtime_unload_checkpoint_failed",
                 ) from err
+
+    async def async_finalize_runtime(self, asset_uuid: str) -> Decimal | None:
+        """Strictly commit a writer's already-pending Runtime; seal nothing new.
+
+        For the Archive flow, awaited before ``async_archive_asset`` and never
+        while ``_mutation_lock`` is held: the writer takes its Runtime lock and
+        this manager's ``_mutation_lock`` only per delta commit. A failure
+        raises and keeps every pending delta. Unresolved Runtime of a removed
+        writer is never cleared here. Returns the canonical persisted total.
+        """
+        self.runtime_total_seconds(asset_uuid)
+        if asset_uuid in self._runtime_unresolved:
+            raise AssetStoreError(
+                f"Runtime for Asset {asset_uuid} was not persisted when its "
+                "writer was removed; reload Device Lifecycle",
+                code="runtime_checkpoint_unresolved",
+            )
+        writer = self._runtime_writers.get(asset_uuid)
+        if writer is not None:
+            if writer.finalize is None:
+                raise AssetStoreError(
+                    f"Runtime writer for Asset {asset_uuid} cannot be finalized",
+                    code="runtime_checkpoint_failed",
+                )
+            await writer.finalize()
+        return self.runtime_total_seconds(asset_uuid)
+
+    async def async_retire_orphaned_runtime_writers(self, entry: ConfigEntry) -> None:
+        """Retire every writer whose Asset has no resolving Runtime subentry.
+
+        Run before the reload that follows a subentry change. Retiring stops
+        observation at once, even if its strict flush fails; a failure is
+        logged, the writer stays registered and quiesced with its pending
+        deltas, and the reload is still scheduled by the caller. The unload
+        gate then decides whether that reload can proceed.
+        """
+        for asset_uuid in sorted(self._runtime_writers):
+            writer = self._runtime_writers.get(asset_uuid)
+            if writer is None:
+                continue
+            if runtime_subentries_resolving_to(
+                entry.subentries.values(), self._data["assets"], asset_uuid
+            ):
+                continue
+            if writer.retire is None:
+                _LOGGER.error(
+                    "Runtime writer for Asset %s cannot be retired", asset_uuid
+                )
+                continue
+            try:
+                await writer.retire()
+            except AssetStoreError as err:
+                _LOGGER.error(
+                    "Runtime tracking for Asset %s was removed and has stopped, "
+                    "but its pending Runtime could not be persisted yet; it is "
+                    "kept and retried: %s",
+                    asset_uuid,
+                    err,
+                )
+
+    def _runtime_archive_eligibility(
+        self,
+        data: AssetStoreData,
+        asset_uuid: str,
+    ) -> RuntimeArchiveEligibility:
+        """Classify the Asset's Runtime writer from in-memory evidence only.
+
+        Synchronous, so an Archive mutator reads it in the same locked
+        segment as its change. The order is authoritative: unresolved Runtime
+        of a removed writer first, then no writer, then an observing writer,
+        then pending deltas or a committed total that differs from the
+        canonical total of ``data``. Nothing is inferred or persisted.
+        """
+        if asset_uuid in self._runtime_unresolved:
+            return RuntimeArchiveEligibility.UNRESOLVED
+        writer = self._runtime_writers.get(asset_uuid)
+        if writer is None:
+            return RuntimeArchiveEligibility.ABSENT
+        if writer.durability is None:
+            return RuntimeArchiveEligibility.ACTIVE
+        durability = writer.durability()
+        if durability.observing:
+            return RuntimeArchiveEligibility.ACTIVE
+        total = data["assets"][asset_uuid]["runtime"]["total_seconds"]
+        if (
+            durability.pending
+            or total is None
+            or Decimal(total) != durability.committed_seconds
+        ):
+            return RuntimeArchiveEligibility.UNDURABLE
+        return RuntimeArchiveEligibility.QUIESCED_DURABLE
+
+    def _runtime_binding_reservations(self) -> dict[tuple[str, str], set[object]]:
+        return self.hass.data.setdefault(RUNTIME_BINDING_RESERVATIONS, {})
+
+    def _archive_blockers_in(
+        self,
+        data: AssetStoreData,
+        entry: ConfigEntry,
+        asset_uuid: str,
+    ) -> tuple[str, ...]:
+        """Return every current Archive blocker of an active Asset in ``data``."""
+        blockers: list[str] = []
+        asset = data["assets"][asset_uuid]
+        if asset[CONF_DEPLOYMENT_STATE] == DEPLOYMENT_STATE_DEPLOYED:
+            blockers.append(ARCHIVE_ASSET_DEPLOYED)
+        if runtime_subentries_resolving_to(
+            entry.subentries.values(), data["assets"], asset_uuid
+        ):
+            blockers.append(ARCHIVE_RUNTIME_CONFIGURED)
+        if self._runtime_binding_reservations().get((entry.entry_id, asset_uuid)):
+            blockers.append(ARCHIVE_RUNTIME_BINDING_IN_PROGRESS)
+        eligibility = self._runtime_archive_eligibility(data, asset_uuid)
+        if (blocker := _ELIGIBILITY_BLOCKERS.get(eligibility)) is not None:
+            blockers.append(blocker)
+        return tuple(blockers)
+
+    def archive_blockers(self, entry: ConfigEntry, asset_uuid: str) -> tuple[str, ...]:
+        """Preview what currently blocks archiving an Asset, for the UI.
+
+        Read-only and advisory: a blocker can appear or disappear before the
+        request is submitted, and ``async_archive_asset`` checks everything
+        again under the lock. An archived Asset has no blockers.
+        """
+        self._require_asset(self._data, asset_uuid)
+        if archive_state_matches(
+            self._data["assets"][asset_uuid], ArchiveAssetRequest(asset_uuid)
+        ):
+            return ()
+        return self._archive_blockers_in(self._data, entry, asset_uuid)
+
+    async def async_archive_asset(
+        self,
+        entry: ConfigEntry,
+        asset_uuid: str,
+    ) -> ArchiveOutcome:
+        """Archive an Asset once nothing can still create Runtime for it.
+
+        Every check and the change run in one synchronous mutator under
+        ``_mutation_lock``: the Asset exists; an archived Asset is NO_OP
+        before anything else; it is not deployed; no Runtime subentry
+        resolves to it; no Runtime binding is reserved for it; and its
+        Runtime writer is absent or quiesced with durable Runtime. Nothing is
+        undeployed, removed, flushed, or cleared on the caller's behalf, and
+        no Runtime writer is awaited. Only ``archived_at`` changes. An
+        ambiguous save succeeds if the persisted Asset is archived.
+        """
+
+        def _archive(data: AssetStoreData) -> ArchiveOutcome:
+            self._require_asset(data, asset_uuid)
+            request = ArchiveAssetRequest(asset_uuid)
+            if archive_state_matches(data["assets"][asset_uuid], request):
+                return ArchiveOutcome.NO_OP
+            blockers = self._archive_blockers_in(data, entry, asset_uuid)
+            if blockers:
+                raise AssetStoreError(
+                    f"Asset {asset_uuid} cannot be archived: {blockers[0]}",
+                    code=blockers[0],
+                )
+            return self._apply_archive_request(
+                data, request, observed_utc=utc_now_iso()
+            )
+
+        outcome, _changed = await self._async_mutate_reporting(
+            _archive,
+            resolve_ambiguous=self._archive_state_resolver(
+                ArchiveAssetRequest(asset_uuid)
+            ),
+        )
+        return outcome
+
+    async def async_restore_asset(self, asset_uuid: str) -> ArchiveOutcome:
+        """Return an archived Asset to current management.
+
+        No Runtime precondition, and nothing else is recreated or repaired:
+        only ``archived_at`` returns to ``None``. An active Asset is NO_OP.
+        An ambiguous save succeeds if the persisted Asset is active.
+        """
+
+        def _restore(data: AssetStoreData) -> ArchiveOutcome:
+            self._require_asset(data, asset_uuid)
+            return self._apply_archive_request(
+                data, RestoreAssetRequest(asset_uuid), observed_utc=None
+            )
+
+        outcome, _changed = await self._async_mutate_reporting(
+            _restore,
+            resolve_ambiguous=self._archive_state_resolver(
+                RestoreAssetRequest(asset_uuid)
+            ),
+        )
+        return outcome
+
+    @staticmethod
+    def _apply_archive_request(
+        data: AssetStoreData,
+        request: ArchiveAssetRequest | RestoreAssetRequest,
+        *,
+        observed_utc: str | None,
+    ) -> ArchiveOutcome:
+        try:
+            return apply_archive_request(
+                data["assets"], request, observed_utc=observed_utc
+            )
+        except ArchiveMutationError as err:
+            raise AssetStoreError(str(err), code=err.code) from err
+
+    @staticmethod
+    def _archive_state_resolver(
+        request: ArchiveAssetRequest | RestoreAssetRequest,
+    ) -> Callable[[AssetStoreData], ArchiveOutcome | None]:
+        """Prove an ambiguous Archive or Restore from the persisted state.
+
+        The requested state, not the ``archived_at`` timestamp, is the proof.
+        """
+
+        def _resolve(persisted: AssetStoreData) -> ArchiveOutcome | None:
+            asset = persisted["assets"].get(request.asset_uuid)
+            if asset is None or not archive_state_matches(asset, request):
+                return None
+            return ArchiveOutcome.CHANGED
+
+        return _resolve
+
+    async def async_reserve_runtime_binding(
+        self,
+        entry: ConfigEntry,
+        asset_uuid: str,
+    ) -> Callable[[], None]:
+        """Reserve an active Asset for a Runtime subentry about to be created.
+
+        Taken under the same ``_mutation_lock`` as Archive, so the two are
+        totally ordered: an Archive published first makes this fail, and a
+        reservation taken first makes Archive fail until it is released. The
+        reservation is kept in ``hass.data`` per ConfigEntry, so it survives a
+        manager replacement; the returned callback releases it and is safe to
+        call more than once. A replaced manager fails closed.
+        """
+        async with self._mutation_lock:
+            await self._async_recover_uncertain_persistence()
+            if getattr(entry, "runtime_data", None) is not self:
+                raise AssetStoreError(
+                    "Device Lifecycle is not loaded", code="entry_not_loaded"
+                )
+            asset = self._require_asset(self._data, asset_uuid)
+            if not archive_state_matches(asset, RestoreAssetRequest(asset_uuid)):
+                raise AssetStoreError(
+                    f"Asset {asset_uuid} is archived; Runtime cannot be tracked",
+                    code="runtime_asset_archived",
+                )
+            key = (entry.entry_id, asset_uuid)
+            token = object()
+            reservations = self._runtime_binding_reservations()
+            reservations.setdefault(key, set()).add(token)
+
+        def _release() -> None:
+            held = reservations.get(key)
+            if held is None:
+                return
+            held.discard(token)
+            if not held:
+                reservations.pop(key, None)
+
+        return _release
+
+    def runtime_binding_target(
+        self,
+        subentry_data: Mapping[str, Any],
+    ) -> tuple[str, bool] | None:
+        """Return the canonical Asset a Runtime binding resolves to, and
+        whether it is archived. Resolution sees every Asset."""
+        asset_uuid = resolve_runtime_subentry_asset(self._data["assets"], subentry_data)
+        if asset_uuid is None:
+            return None
+        return asset_uuid, not archive_state_matches(
+            self._data["assets"][asset_uuid], RestoreAssetRequest(asset_uuid)
+        )
 
     def runtime_total_seconds(self, asset_uuid: str) -> Decimal | None:
         """Return one Asset's detached canonical Runtime total."""

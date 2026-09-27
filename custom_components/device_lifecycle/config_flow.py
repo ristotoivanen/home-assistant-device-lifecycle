@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Mapping
 from datetime import date
 from math import isfinite
 from typing import Any, cast
@@ -1215,6 +1215,12 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         """Map storage failures to safe flow errors without fabricating data."""
         if isinstance(err, AssetStoreError):
             structured_codes = {
+                "archive_asset_deployed",
+                "archive_runtime_binding_in_progress",
+                "archive_runtime_configured",
+                "archive_runtime_undurable",
+                "archive_runtime_unresolved",
+                "archive_runtime_writer_active",
                 "asset_archived",
                 "asset_missing",
                 "device_already_linked",
@@ -1250,6 +1256,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 "replacement_self_reference",
                 "replacement_successor_conflict",
                 "replacement_void_reason_required",
+                "runtime_asset_archived",
                 "manual_warranty_date_required",
                 "non_physical_device_not_allowed",
                 "service_device_not_allowed",
@@ -4542,7 +4549,40 @@ class PurchaseSubentryFlow(ConfigSubentryFlow):
 
 
 class RuntimeSubentryFlow(ConfigSubentryFlow):
-    """Add and edit per-device runtime tracking."""
+    """Add and edit per-device runtime tracking.
+
+    Runtime tracking is never configured for an archived Asset. The selected
+    device is resolved to its canonical Asset over every Asset, and an
+    archived target is refused early for the person's sake. The binding is
+    then reserved in the Store manager, under the same lock as Archive,
+    immediately before the create result is returned, and released in
+    ``async_remove`` after Home Assistant has added the subentry (or when
+    the flow ends without one). Setup quarantine stays the backstop.
+    """
+
+    _runtime_binding_release: Callable[[], None] | None = None
+
+    def _loaded_manager(self, entry: ConfigEntry) -> AssetStoreManager | None:
+        """Return the parent's loaded Store manager, if it is loaded."""
+        manager = getattr(entry, "runtime_data", None)
+        if (
+            getattr(entry, "state", None) is not ConfigEntryState.LOADED
+            or not isinstance(manager, AssetStoreManager)
+        ):
+            return None
+        return manager
+
+    def _release_runtime_binding(self) -> None:
+        release = self._runtime_binding_release
+        self._runtime_binding_release = None
+        if release is not None:
+            release()
+
+    @callback
+    def async_remove(self) -> None:
+        """Release a held Runtime binding reservation when the flow ends."""
+        self._release_runtime_binding()
+        super().async_remove()
 
     def _set_runtime_context(
         self,
@@ -4561,6 +4601,24 @@ class RuntimeSubentryFlow(ConfigSubentryFlow):
     def _get_runtime_context(self) -> dict[str, Any]:
         """Return selections stored between runtime form steps."""
         return getattr(self, "_runtime_context", {})
+
+    def _reconfigure_target_abort(
+        self,
+        subentry_data: Mapping[str, Any],
+    ) -> SubentryFlowResult | None:
+        """Refuse to reconfigure tracking whose Asset is archived.
+
+        Reconfiguring cannot change the device, so a subentry that resolves
+        to an archived Asset (quarantined at setup) would stay a binding to
+        an archived Asset; it can only be removed, or the Asset restored.
+        """
+        manager = self._loaded_manager(self._get_entry())
+        if manager is None:
+            return self.async_abort(reason="entry_not_loaded")
+        target = manager.runtime_binding_target(subentry_data)
+        if target is not None and target[1]:
+            return self.async_abort(reason="runtime_asset_archived")
+        return None
 
     async def async_step_user(
         self,
@@ -4585,6 +4643,12 @@ class RuntimeSubentryFlow(ConfigSubentryFlow):
                 errors["base"] = "runtime_already_tracked"
             elif runtime_mode not in RUNTIME_MODES:
                 errors["base"] = "invalid_runtime_mode"
+            elif (manager := self._loaded_manager(entry)) is None:
+                return self.async_abort(reason="entry_not_loaded")
+            elif (
+                target := manager.runtime_binding_target({CONF_DEVICE_ID: device_id})
+            ) is not None and target[1]:
+                errors["base"] = "runtime_asset_archived"
             else:
                 self._set_runtime_context(
                     device_id=device_id,
@@ -4638,11 +4702,35 @@ class RuntimeSubentryFlow(ConfigSubentryFlow):
                 else:
                     clean = cast(dict[str, Any], clean)
                     clean[CONF_RUNTIME_DATA_VERSION] = RUNTIME_DATA_VERSION
-                    registry = dr.async_get(self.hass)
-                    return self.async_create_entry(
-                        title=_runtime_title(registry, device_id),
-                        data=clean,
-                    )
+                    entry = self._get_entry()
+                    manager = self._loaded_manager(entry)
+                    if manager is None:
+                        return self.async_abort(reason="entry_not_loaded")
+                    release: Callable[[], None] | None = None
+                    if (target := manager.runtime_binding_target(clean)) is not None:
+                        self._release_runtime_binding()
+                        try:
+                            release = await manager.async_reserve_runtime_binding(
+                                entry, target[0]
+                            )
+                        except AssetStoreError as err:
+                            if err.code == "entry_not_loaded":
+                                return self.async_abort(reason="entry_not_loaded")
+                            errors["base"] = (
+                                "runtime_asset_archived"
+                                if err.code == "runtime_asset_archived"
+                                else "device_missing"
+                            )
+                    if not errors:
+                        # No await from the reservation until the create result
+                        # is returned: Home Assistant adds the subentry before it
+                        # removes this flow, which releases the reservation.
+                        self._runtime_binding_release = release
+                        registry = dr.async_get(self.hass)
+                        return self.async_create_entry(
+                            title=_runtime_title(registry, device_id),
+                            data=clean,
+                        )
 
         return self.async_show_form(
             step_id="runtime_source",
@@ -4660,6 +4748,8 @@ class RuntimeSubentryFlow(ConfigSubentryFlow):
     ) -> SubentryFlowResult:
         """Choose the runtime detection method for an existing tracker."""
         subentry = self._get_reconfigure_subentry()
+        if (abort := self._reconfigure_target_abort(subentry.data)) is not None:
+            return abort
         device_id = str(subentry.data.get(CONF_DEVICE_ID) or "")
         errors: dict[str, str] = {}
 
@@ -4704,6 +4794,8 @@ class RuntimeSubentryFlow(ConfigSubentryFlow):
 
         entry = self._get_entry()
         subentry = self._get_reconfigure_subentry()
+        if (abort := self._reconfigure_target_abort(subentry.data)) is not None:
+            return abort
         device_id = str(context[CONF_DEVICE_ID])
         runtime_mode = str(context[CONF_RUNTIME_MODE])
         saved_defaults = dict(context.get("defaults", {}))

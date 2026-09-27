@@ -654,6 +654,7 @@ def test_archive_is_reachable_only_through_the_store_4_1_code() -> None:
             "AssetStoreManager._require_active_asset",
             "AssetStoreManager.maintenance_projection",
             "AssetStoreManager.quarantined_runtime_subentries",
+            "AssetStoreManager.register_runtime_checkpoint",
         }
     }
 

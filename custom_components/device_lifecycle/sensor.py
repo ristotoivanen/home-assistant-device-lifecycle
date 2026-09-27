@@ -80,7 +80,7 @@ from .exposure import (
 )
 from .migration import lifecycle_unique_id, runtime_unique_id
 from .models import AssetData, LifecycleEventData, PurchaseData
-from .storage import AssetStoreError, AssetStoreManager
+from .storage import AssetStoreError, AssetStoreManager, RuntimeWriterDurability
 
 RUNTIME_REFRESH_INTERVAL = timedelta(minutes=5)
 _LOGGER = logging.getLogger(__name__)
@@ -1117,6 +1117,9 @@ class DeviceRuntimeHoursSensor(SensorEntity):
             self._asset_uuid,
             self.async_checkpoint_runtime,
             prepare_unload=self.async_prepare_runtime_unload,
+            durability=self.runtime_durability,
+            finalize=self.async_finalize_runtime,
+            retire=self.async_retire_runtime,
         )
 
         current_state = self.hass.states.get(self._source_entity_id)
@@ -1201,11 +1204,18 @@ class DeviceRuntimeHoursSensor(SensorEntity):
             self.async_write_ha_state()
 
     async def _handle_periodic_checkpoint(self, _now: datetime) -> None:
-        """Seal active elapsed and durably retry all pending Runtime deltas."""
-        if self._removing:
+        """Seal active elapsed and durably retry all pending Runtime deltas.
+
+        A quiesced writer seals nothing; it only retries the Runtime it
+        already holds, best effort, so a failed retirement can still become
+        durable without a reload.
+        """
+        if self._removing and not self._pending:
             return
         async with self._runtime_lock:
             if self._removing:
+                await self._async_flush_pending()
+                self.async_write_ha_state()
                 return
             if self._active_since is not None:
                 self._seal_active(self._monotonic(), continue_active=True)
@@ -1247,10 +1257,15 @@ class DeviceRuntimeHoursSensor(SensorEntity):
         create Runtime afterwards. On failure every pending delta is kept, the
         writer stays registered, tracking continues from the sealed boundary
         without double counting, and the error is raised. A writer that is
-        already quiesced has nothing left to persist.
+        already quiesced seals nothing, but its pending deltas must still be
+        committed strictly before the unload may proceed.
         """
         async with self._runtime_lock:
             if self._removing:
+                try:
+                    await self._async_flush_pending(strict=True)
+                finally:
+                    self.async_write_ha_state()
                 return
             if self._active_since is not None:
                 self._seal_active(self._monotonic(), continue_active=True)
@@ -1261,6 +1276,50 @@ class DeviceRuntimeHoursSensor(SensorEntity):
             self._active_since = None
             self._removing = True
             self.async_write_ha_state()
+
+    def runtime_durability(self) -> RuntimeWriterDurability:
+        """Return this writer's in-memory durability evidence; no side effects."""
+        return RuntimeWriterDurability(
+            observing=not self._removing,
+            pending=bool(self._pending),
+            committed_seconds=self._committed_seconds,
+        )
+
+    async def async_finalize_runtime(self) -> Decimal:
+        """Strictly commit the already-pending deltas; seal no new time.
+
+        Under the Runtime lock. Observation is neither started nor stopped.
+        On failure every pending delta is kept and the error is raised.
+        """
+        async with self._runtime_lock:
+            try:
+                await self._async_flush_pending(strict=True)
+            finally:
+                self.async_write_ha_state()
+            return self._committed_seconds
+
+    async def async_retire_runtime(self) -> None:
+        """Stop tracking for good because the Runtime configuration is gone.
+
+        Under the Runtime lock: seal observed time through now, stop observing
+        and remove the source listener, then strictly commit every pending
+        delta. Unlike the unload preparation, the writer stays quiesced when
+        that commit fails: its configuration no longer exists, so it must
+        never observe again. The pending deltas are kept for a later retry
+        by the periodic interval, ``async_finalize_runtime``, or the unload
+        gate; none of them adds time observed after this point.
+        """
+        async with self._runtime_lock:
+            if not self._removing:
+                self._seal_active(self._monotonic(), continue_active=False)
+                self._removing = True
+                if self._unsub_source is not None:
+                    self._unsub_source()
+                    self._unsub_source = None
+            try:
+                await self._async_flush_pending(strict=True)
+            finally:
+                self.async_write_ha_state()
 
     async def _handle_shutdown(self, _event: Event) -> None:
         """Attempt a final checkpoint during normal Home Assistant shutdown."""

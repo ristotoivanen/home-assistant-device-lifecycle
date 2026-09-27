@@ -353,6 +353,17 @@ def test_deployment_relationship_confirmation_and_results_exist(
     assert _completion_keys() <= set(translation["options"]["create_entry"])
 
 
+ARCHIVE_ERROR_KEYS = (
+    "archive_asset_deployed",
+    "archive_runtime_binding_in_progress",
+    "archive_runtime_configured",
+    "archive_runtime_undurable",
+    "archive_runtime_unresolved",
+    "archive_runtime_writer_active",
+    "runtime_asset_archived",
+)
+
+
 @pytest.mark.parametrize("language", LANGUAGES)
 def test_options_ui_excludes_internal_and_out_of_scope_terminology(
     language: str,
@@ -367,6 +378,12 @@ def test_options_ui_excludes_internal_and_out_of_scope_terminology(
     assert "archived" in archived_error or "arkistoitu" in archived_error
     assert "restore" not in archived_error
     assert "palauta" not in archived_error
+    # Since WP13 the Archive refusals are stated in plain words too; they
+    # name no internals.
+    for key in ARCHIVE_ERROR_KEYS:
+        text = options["error"].pop(key).casefold()
+        assert "uuid" not in text
+        assert "subentry" not in text
     options_text = " ".join(_string_values(options)).casefold()
     forbidden = {
         "archive",

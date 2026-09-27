@@ -157,10 +157,13 @@
         "invalid_power_hysteresis": "Hystereesin pitää olla vähintään nolla.",
         "power_hysteresis_too_large": "Hystereesi ei voi olla tehorajaa suurempi.",
         "invalid_runtime_mode": "Käyttötuntiseurannan tapa ei ole kelvollinen.",
-        "service_device_not_allowed": "Valittu kohde on Home Assistant -palvelu eikä seurattava fyysinen laite."
+        "service_device_not_allowed": "Valittu kohde on Home Assistant -palvelu eikä seurattava fyysinen laite.",
+        "runtime_asset_archived": "Laite on arkistoitu, joten sille ei voi määrittää käyttötuntiseurantaa."
       },
       "abort": {
-        "reconfigure_successful": "Käyttötuntiseuranta päivitettiin."
+        "reconfigure_successful": "Käyttötuntiseuranta päivitettiin.",
+        "runtime_asset_archived": "Laite on arkistoitu, joten sille ei voi määrittää käyttötuntiseurantaa.",
+        "entry_not_loaded": "Device Lifecycle ei ole tällä hetkellä ladattu. Lataa integraatio uudelleen ja yritä uudelleen."
       }
     }
   },
@@ -236,7 +239,14 @@
       "correction_reason_required": "Anna vanhan suhteen korjaamisen syy.",
       "void_confirmation_required": "Vahvista suhteen mitätöinti.",
       "primary_device_required": "Valitse ensisijainen Home Assistant -laite.",
-      "related_device_to_add_required": "Valitse lisättävä Home Assistant -laite."
+      "related_device_to_add_required": "Valitse lisättävä Home Assistant -laite.",
+      "archive_asset_deployed": "Laite on asennettuna. Muuta sen asennustilaksi ei asennettu ennen arkistointia.",
+      "archive_runtime_configured": "Laitteelle on yhä määritetty käyttötuntiseuranta. Poista seurannan määritys ennen arkistointia; laite säilyttää kertyneet käyttötuntinsa.",
+      "archive_runtime_binding_in_progress": "Laitteelle ollaan juuri määrittämässä käyttötuntiseurantaa. Viimeistele tai peruuta määritys ja yritä sitten uudelleen.",
+      "archive_runtime_writer_active": "Laitteen käyttötuntiseuranta on yhä käynnissä. Poista seurannan määritys ja yritä uudelleen.",
+      "archive_runtime_undurable": "Laitteen viimeisimpiä käyttötunteja ei ole vielä tallennettu. Mitään ei muutettu; yritä hetken kuluttua uudelleen.",
+      "archive_runtime_unresolved": "Osaa laitteen käyttötunneista ei voitu tallentaa, kun sen seuranta poistettiin. Lataa Device Lifecycle uudelleen ja yritä sitten uudelleen.",
+      "runtime_asset_archived": "Laite on arkistoitu, joten sille ei voi määrittää käyttötuntiseurantaa."
     },
     "step": {
       "asset_deployment": {

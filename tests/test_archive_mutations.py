@@ -420,14 +420,31 @@ def _production_trees() -> dict[str, ast.Module]:
     }
 
 
-def test_wp4_symbols_are_not_used_by_production() -> None:
-    """No production module imports, constructs, or calls the WP4 mutations."""
+WP4_MANAGER_SCOPES = {
+    "AssetStoreManager.archive_blockers",
+    "AssetStoreManager.async_archive_asset",
+    "AssetStoreManager.async_restore_asset",
+    "AssetStoreManager._apply_archive_request",
+    "AssetStoreManager._archive_state_resolver",
+    "AssetStoreManager.async_reserve_runtime_binding",
+    "AssetStoreManager.runtime_binding_target",
+}
+
+
+def test_wp4_symbols_are_used_only_by_the_store_manager_api() -> None:
+    """Since WP13 the Store manager's Archive and Restore API is the only
+    production user of the WP4 mutations."""
     for name, tree in _production_trees().items():
-        assert referencing_scopes(tree, WP4_SYMBOLS) == {}, name
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom):
-                imported = {alias.name for alias in node.names}
-                assert not imported & WP4_SYMBOLS, (name, imported)
+        scopes = referencing_scopes(tree, WP4_SYMBOLS)
+        if name != "storage.py":
+            assert scopes == {}, name
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom):
+                    imported = {alias.name for alias in node.names}
+                    assert not imported & WP4_SYMBOLS, (name, imported)
+            continue
+        for symbol, users in scopes.items():
+            assert users <= WP4_MANAGER_SCOPES, (symbol, users)
 
 
 def test_archive_module_owns_no_runtime_or_home_assistant_logic() -> None:
@@ -444,8 +461,8 @@ def test_archive_module_owns_no_runtime_or_home_assistant_logic() -> None:
 async def test_production_store_is_4_1_without_archive_management(
     hass: HomeAssistant,
 ) -> None:
-    """Store 4.1 is active, so new Assets are active, and still nothing in
-    production archives or restores one."""
+    """Store 4.1 is active and new Assets are active; only the Store
+    manager's API archives or restores one."""
     assert (STORAGE_VERSION, STORAGE_MINOR_VERSION) == (4, 1)
     assert set(_empty_store_data()) == STORE_4_1_TOP_LEVEL_KEYS
     asset = await _manager(hass, _empty_store_data()).async_create_manual_asset(
@@ -457,5 +474,5 @@ async def test_production_store_is_4_1_without_archive_management(
         ast.parse((PACKAGE / "storage.py").read_text(encoding="utf-8")),
         WP4_SYMBOLS,
     )
-    assert scopes == {}
+    assert set().union(*scopes.values()) <= WP4_MANAGER_SCOPES
     assert storage.STORE_TOP_LEVEL_KEYS == STORE_4_1_TOP_LEVEL_KEYS

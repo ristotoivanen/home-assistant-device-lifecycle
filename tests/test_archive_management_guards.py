@@ -906,6 +906,7 @@ def test_archive_state_is_read_only_through_the_archive_authority() -> None:
             "AssetStoreManager._require_active_asset",
             "AssetStoreManager.maintenance_projection",
             "AssetStoreManager.quarantined_runtime_subentries",
+            "AssetStoreManager.register_runtime_checkpoint",
         }
     }
 
@@ -948,15 +949,22 @@ def test_the_guard_is_called_inside_every_guarded_mutator() -> None:
     }
 
 
-def test_no_production_archive_or_restore_api_exists() -> None:
-    """WP4 mutations stay unreachable: WP10 only guards existing paths."""
+def test_archive_and_restore_exist_only_as_the_store_manager_api() -> None:
+    """Since WP13 the WP4 mutations are reached through the Store manager's
+    Archive and Restore API; no other production module calls them."""
+    for path in sorted(PACKAGE.glob("*.py")):
+        if path.name in {"storage.py", "archive.py"}:
+            continue
+        source = path.read_text(encoding="utf-8")
+        for symbol in (
+            "apply_archive_request",
+            "ArchiveAssetRequest",
+            "RestoreAssetRequest",
+            "async_archive_asset",
+            "async_restore_asset",
+        ):
+            assert symbol not in source, (path.name, symbol)
     source = (PACKAGE / "storage.py").read_text(encoding="utf-8")
-    for symbol in (
-        "apply_archive_request",
-        "ArchiveAssetRequest",
-        "RestoreAssetRequest",
-        "async_archive_asset",
-        "async_restore_asset",
-    ):
-        assert symbol not in source
+    assert "async_archive_asset" in source
+    assert "async_restore_asset" in source
     assert "asset_archived" in source

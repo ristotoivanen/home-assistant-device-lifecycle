@@ -157,10 +157,13 @@
         "invalid_power_hysteresis": "The hysteresis must be zero or greater.",
         "power_hysteresis_too_large": "The hysteresis cannot be greater than the power threshold.",
         "invalid_runtime_mode": "The runtime tracking method is invalid.",
-        "service_device_not_allowed": "The selected item is a Home Assistant service rather than a trackable physical device."
+        "service_device_not_allowed": "The selected item is a Home Assistant service rather than a trackable physical device.",
+        "runtime_asset_archived": "The device is archived, so Runtime tracking cannot be configured for it."
       },
       "abort": {
-        "reconfigure_successful": "Runtime tracking updated."
+        "reconfigure_successful": "Runtime tracking updated.",
+        "runtime_asset_archived": "The device is archived, so Runtime tracking cannot be configured for it.",
+        "entry_not_loaded": "Device Lifecycle is not currently loaded. Reload the integration and try again."
       }
     }
   },
@@ -236,7 +239,14 @@
       "correction_reason_required": "Enter the reason for correcting the previous relationship.",
       "void_confirmation_required": "Confirm that the relationship should be voided.",
       "primary_device_required": "Select the primary Home Assistant device.",
-      "related_device_to_add_required": "Select the Home Assistant device to add."
+      "related_device_to_add_required": "Select the Home Assistant device to add.",
+      "archive_asset_deployed": "The device is installed. Change its installation to not installed before archiving it.",
+      "archive_runtime_configured": "Runtime tracking is still configured for the device. Delete the Runtime tracking configuration before archiving it; the device keeps its accumulated Runtime.",
+      "archive_runtime_binding_in_progress": "Runtime tracking is being set up for the device right now. Finish or cancel that setup, then try again.",
+      "archive_runtime_writer_active": "Runtime tracking for the device is still running. Delete its Runtime tracking configuration and try again.",
+      "archive_runtime_undurable": "The device's latest Runtime has not been saved yet. Nothing was changed; try again in a moment.",
+      "archive_runtime_unresolved": "Some of the device's Runtime could not be saved when its tracking was removed. Reload Device Lifecycle, then try again.",
+      "runtime_asset_archived": "The device is archived, so Runtime tracking cannot be configured for it."
     },
     "step": {
       "asset_deployment": {

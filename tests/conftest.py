@@ -10,7 +10,7 @@ from typing import Any
 from unittest.mock import Mock, patch
 
 import pytest
-from homeassistant.config_entries import ConfigEntries
+from homeassistant.config_entries import ConfigEntries, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 
@@ -45,6 +45,7 @@ from custom_components.device_lifecycle.const import (
     WARRANTY_TWO_YEARS,
 )
 from custom_components.device_lifecycle.models import AssetStoreData
+from custom_components.device_lifecycle.storage import AssetStoreManager
 
 pytest_plugins = "pytest_homeassistant_custom_component"
 
@@ -68,6 +69,22 @@ def device_registry_entries(registry: dr.DeviceRegistry) -> list[dr.DeviceEntry]
     if isinstance(devices, Mapping):
         return list(devices.values())
     return list(devices)
+
+
+def loaded_entry(hass: HomeAssistant, **fields: Any) -> SimpleNamespace:
+    """Return a lightweight parent entry whose Store manager is loaded.
+
+    Runtime subentry flows need the parent's loaded manager to resolve and
+    reserve the Asset they bind; this one holds an empty Store.
+    """
+    values: dict[str, Any] = {
+        "entry_id": "device-lifecycle-entry-id",
+        "state": ConfigEntryState.LOADED,
+        "runtime_data": AssetStoreManager(hass),
+        "subentries": {},
+    }
+    values.update(fields)
+    return SimpleNamespace(**values)
 
 
 @pytest.fixture(autouse=True)

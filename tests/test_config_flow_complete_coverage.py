@@ -58,6 +58,7 @@ from .conftest import (
     PURCHASE_SUBENTRY_ID,
     PURCHASE_UUID,
     capture_reloads,
+    loaded_entry,
 )
 from .test_ha_relationship_options_flow import _external_device
 from .test_options_flow import _manager, _options_flow, _store_with_purchase
@@ -469,9 +470,10 @@ async def test_runtime_create_walks_valid_two_step_flow_and_ignores_malformed_pe
         subentry_type=SUBENTRY_TYPE_RUNTIME,
         data={CONF_DEVICE_ID: "other-runtime-device"},
     )
-    entry = SimpleNamespace(subentries={"malformed": malformed, "other": other})
+    entry = loaded_entry(hass, subentries={"malformed": malformed, "other": other})
     flow = RuntimeSubentryFlow()
     flow.hass = hass
+    flow._get_entry = lambda: entry  # type: ignore[method-assign]
     with patch.object(flow, "_get_entry", return_value=entry):
         source_form = await flow.async_step_user(
             {CONF_DEVICE_ID: device.id, CONF_RUNTIME_MODE: RUNTIME_MODE_ON}
@@ -511,7 +513,7 @@ async def test_runtime_create_still_rejects_a_missing_source(
     )
     flow = RuntimeSubentryFlow()
     flow.hass = hass
-    entry = SimpleNamespace(subentries={})
+    entry = loaded_entry(hass)
     with patch.object(flow, "_get_entry", return_value=entry):
         source_form = await flow.async_step_user(
             {CONF_DEVICE_ID: device.id, CONF_RUNTIME_MODE: RUNTIME_MODE_ON}
@@ -547,7 +549,7 @@ async def test_legacy_runtime_reconfigure_source_errors_retry_then_succeed(
             CONF_SOURCE_ENTITY_ID: "switch.old_source",
         },
     )
-    entry = SimpleNamespace(subentries={subentry.subentry_id: subentry})
+    entry = loaded_entry(hass, subentries={subentry.subentry_id: subentry})
     flow = RuntimeSubentryFlow()
     flow.hass = hass
     with patch.object(flow, "_get_entry", return_value=entry), patch.object(

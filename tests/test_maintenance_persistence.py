@@ -1007,19 +1007,12 @@ async def test_projection_uses_the_pure_rules_and_canonical_state(
     assert manager._data == before
 
 
-def test_no_maintenance_ui_entities_or_archive_api() -> None:
+def test_no_maintenance_ui_or_entities() -> None:
     package = Path(storage.__file__).parent
     for name in ("config_flow.py", "sensor.py", "exposure.py", "__init__.py"):
         source = (package / name).read_text(encoding="utf-8")
         assert "async_mutate_maintenance" not in source, name
         assert "maintenance_projection" not in source, name
-    source = (package / "storage.py").read_text(encoding="utf-8")
-    for symbol in (
-        "apply_archive_request",
-        "async_archive_asset",
-        "async_restore_asset",
-    ):
-        assert symbol not in source
     assert (storage.STORAGE_VERSION, storage.STORAGE_MINOR_VERSION) == (4, 1)
 
 

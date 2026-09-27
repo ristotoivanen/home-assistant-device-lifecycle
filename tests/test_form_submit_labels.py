@@ -269,7 +269,15 @@ def test_a_saved_edit_is_confirmed_in_words(language: str) -> None:
     }[language]
 
     for kind, text in expected.items():
-        assert subentries[kind]["abort"] == {"reconfigure_successful": text}
+        assert subentries[kind]["abort"]["reconfigure_successful"] == text
+    # Since WP13 a Runtime flow can also stop because the parent is not
+    # loaded or the device is archived; neither is a saved edit.
+    assert set(subentries["purchase"]["abort"]) == {"reconfigure_successful"}
+    assert set(subentries["runtime"]["abort"]) == {
+        "reconfigure_successful",
+        "entry_not_loaded",
+        "runtime_asset_archived",
+    }
 
 
 # --- The label matches what the step does ------------------------------------
