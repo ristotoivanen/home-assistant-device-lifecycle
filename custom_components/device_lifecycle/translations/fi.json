@@ -182,7 +182,11 @@
       "asset_related_device_removed": "Liittyvä Home Assistant -laite poistettiin.",
       "asset_replacement_updated": "Korvaaminen päivitettiin.",
       "asset_updated": "Perustiedot päivitettiin.",
-      "quick_asset_created": "{asset_name} lisättiin Device Lifecycleen."
+      "quick_asset_created": "{asset_name} lisättiin Device Lifecycleen.",
+      "archive_completed": "Laite arkistoitiin. Se ei ole enää osa aktiivihallintaa.",
+      "archive_unchanged": "Laite oli jo arkistoitu.",
+      "restore_completed": "Laite palautettiin aktiivihallintaan.",
+      "restore_unchanged": "Laite oli jo aktiivihallinnassa."
     },
     "error": {
       "asset_archived": "Valittu laite on arkistoitu, eikä sitä voi muuttaa. Mitään ei muutettu.",
@@ -246,7 +250,13 @@
       "archive_runtime_writer_active": "Laitteen käyttötuntiseuranta on yhä käynnissä. Poista seurannan määritys ja yritä uudelleen.",
       "archive_runtime_undurable": "Laitteen viimeisimpiä käyttötunteja ei ole vielä tallennettu. Mitään ei muutettu; yritä hetken kuluttua uudelleen.",
       "archive_runtime_unresolved": "Osaa laitteen käyttötunneista ei voitu tallentaa, kun sen seuranta poistettiin. Lataa Device Lifecycle uudelleen ja yritä sitten uudelleen.",
-      "runtime_asset_archived": "Laite on arkistoitu, joten sille ei voi määrittää käyttötuntiseurantaa."
+      "runtime_asset_archived": "Laite on arkistoitu, joten sille ei voi määrittää käyttötuntiseurantaa.",
+      "archive_confirmation_required": "Vahvista arkistointi jatkaaksesi.",
+      "restore_confirmation_required": "Vahvista palautus jatkaaksesi.",
+      "archived_asset_required": "Valitse arkistoitu laite.",
+      "no_archived_assets": "Arkistoituja laitteita ei ole.",
+      "runtime_checkpoint_failed": "Laitteen viimeisimpiä käyttötunteja ei voitu tallentaa. Mitään ei muutettu ja käyttötunnit säilyvät; yritä uudelleen.",
+      "runtime_checkpoint_unresolved": "Osaa laitteen käyttötunneista ei voitu tallentaa, kun sen seuranta poistettiin. Lataa Device Lifecycle uudelleen ja yritä sitten uudelleen."
     },
     "step": {
       "asset_deployment": {
@@ -488,7 +498,8 @@
       "init": {
         "menu_options": {
           "quick_add": "Lisää laite",
-          "manage_asset": "Hallitse laitteita"
+          "manage_asset": "Hallitse laitteita",
+          "archived_assets": "Arkistoidut laitteet"
         },
         "title": "Laitteiden hallinta"
       },
@@ -513,6 +524,7 @@
           "asset_installation_menu": "Asennus ja sijainti",
           "asset_lifecycle_replacement_menu": "Elinkaari ja korvaaminen",
           "ha_relationship": "Home Assistant -laitteet",
+          "confirm_archive_asset": "Arkistoi tämä laite",
           "manage_asset": "Valitse toinen laite"
         },
         "title": "Hallitse laitetta"
@@ -562,6 +574,47 @@
         "description": "{asset}\n\nValitse vanha laite, jonka tämä laite korvaa.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
         "submit": "Tallenna ja palaa",
         "title": "Tämä laite korvaa…"
+      },
+      "confirm_archive_asset": {
+        "title": "Arkistoi laite",
+        "description": "{asset}\n\nArkistointi poistaa laitteen aktiivihallinnasta. Se ei ole elinkaaren tila eikä poisto: laite säilyttää laitetunnuksensa, historiansa, huoltohistoriansa ja Home Assistant -entiteettinsä, ja sen voi palauttaa myöhemmin.\n\nAsennustilaa ei muuteta eikä käyttötuntiseurantaa poisteta puolestasi.\n\n**Ennen arkistointia**\n{blockers}\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
+        "data": {
+          "confirm_archive": "Vahvista arkistointi"
+        },
+        "submit": "Arkistoi laite"
+      },
+      "archived_assets": {
+        "title": "Arkistoidut laitteet",
+        "description": "Valitse arkistoitu laite sen nimen ja laitetunnuksen perusteella. Arkistoidut laitteet säilyvät historioineen; ne eivät ole osa aktiivihallintaa.",
+        "data": {
+          "asset_uuid": "Arkistoitu laite"
+        },
+        "submit": "Avaa"
+      },
+      "archived_asset": {
+        "title": "Arkistoitu laite",
+        "description": "{asset}\n\n{result}\n\n{facts}",
+        "menu_options": {
+          "confirm_restore_asset": "Palauta aktiivihallintaan",
+          "archived_void_replacement": "Mitätöi korvaussuhde",
+          "archived_assets": "← Takaisin arkistoituihin laitteisiin"
+        }
+      },
+      "archived_void_replacement": {
+        "title": "Mitätöi korvaussuhde",
+        "description": "{asset}\n\nValitse mitätöitävä korvaussuhde. Mitätöinti korjaa historiaa; laite pysyy arkistoituna.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
+        "data": {
+          "replacement_uuid": "Aktiivinen suhde"
+        },
+        "submit": "Jatka"
+      },
+      "confirm_restore_asset": {
+        "title": "Palauta laite",
+        "description": "{asset}\n\nPalauttaminen tuo laitteen takaisin aktiivihallintaan samalla laitetunnuksella, historialla ja Home Assistant -entiteeteillä.\n\nKäyttötuntiseurantaa ei luoda uudelleen; määritä se tarvittaessa uudelleen. Arkistoinnin ajalta ei arvioida käyttötunteja. Laitteen yhä nimeämät Home Assistant -laitteet, joita ei enää ole, voivat näkyä uudelleen korjausehdotuksissa, eikä mitään korjata puolestasi. Huolto voi olla heti erääntynyt.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
+        "data": {
+          "confirm_restore": "Vahvista palautus"
+        },
+        "submit": "Palauta laite"
       }
     }
   },

@@ -436,6 +436,17 @@ def test_wp4_symbols_are_used_only_by_the_store_manager_api() -> None:
     production user of the WP4 mutations."""
     for name, tree in _production_trees().items():
         scopes = referencing_scopes(tree, WP4_SYMBOLS)
+        if name == "config_flow.py":
+            # Since WP15 the OptionsFlow reads the manager API's result type,
+            # and only that, in its Archive and Restore steps.
+            assert scopes == {
+                "ArchiveOutcome": {
+                    "DeviceLifecycleOptionsFlow.async_step_confirm_archive_asset",
+                    "DeviceLifecycleOptionsFlow._async_archive",
+                    "DeviceLifecycleOptionsFlow.async_step_confirm_restore_asset",
+                }
+            }
+            continue
         if name != "storage.py":
             assert scopes == {}, name
             for node in ast.walk(tree):

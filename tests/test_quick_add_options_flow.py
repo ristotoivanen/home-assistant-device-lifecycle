@@ -196,7 +196,7 @@ async def test_init_and_source_menus(hass: HomeAssistant) -> None:
     initial = await flow.async_step_init()
     sources = await flow.async_step_quick_add()
 
-    assert initial["menu_options"] == ["quick_add", "manage_asset"]
+    assert initial["menu_options"] == ["quick_add", "manage_asset", "archived_assets"]
     assert sources["menu_options"] == ["quick_add_from_ha", "quick_add_manual"]
 
 

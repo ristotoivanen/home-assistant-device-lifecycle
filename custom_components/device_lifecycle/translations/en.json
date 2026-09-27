@@ -182,7 +182,11 @@
       "asset_related_device_removed": "Related Home Assistant device removed.",
       "asset_replacement_updated": "Replacement updated.",
       "asset_updated": "Asset details updated.",
-      "quick_asset_created": "{asset_name} was added to Device Lifecycle."
+      "quick_asset_created": "{asset_name} was added to Device Lifecycle.",
+      "archive_completed": "Device archived. It is no longer part of active management.",
+      "archive_unchanged": "The device was already archived.",
+      "restore_completed": "Device restored to active management.",
+      "restore_unchanged": "The device was already in active management."
     },
     "error": {
       "asset_archived": "The selected Asset is archived and cannot be changed. Nothing was changed.",
@@ -246,7 +250,13 @@
       "archive_runtime_writer_active": "Runtime tracking for the device is still running. Delete its Runtime tracking configuration and try again.",
       "archive_runtime_undurable": "The device's latest Runtime has not been saved yet. Nothing was changed; try again in a moment.",
       "archive_runtime_unresolved": "Some of the device's Runtime could not be saved when its tracking was removed. Reload Device Lifecycle, then try again.",
-      "runtime_asset_archived": "The device is archived, so Runtime tracking cannot be configured for it."
+      "runtime_asset_archived": "The device is archived, so Runtime tracking cannot be configured for it.",
+      "archive_confirmation_required": "Confirm archiving to continue.",
+      "restore_confirmation_required": "Confirm restoring to continue.",
+      "archived_asset_required": "Select an archived device.",
+      "no_archived_assets": "There are no archived devices.",
+      "runtime_checkpoint_failed": "The device's latest Runtime could not be saved. Nothing was changed and the Runtime is kept; try again.",
+      "runtime_checkpoint_unresolved": "Some of the device's Runtime could not be saved when its tracking was removed. Reload Device Lifecycle, then try again."
     },
     "step": {
       "asset_deployment": {
@@ -488,7 +498,8 @@
       "init": {
         "menu_options": {
           "quick_add": "Add device",
-          "manage_asset": "Manage devices"
+          "manage_asset": "Manage devices",
+          "archived_assets": "Archived devices"
         },
         "title": "Asset management"
       },
@@ -513,6 +524,7 @@
           "asset_installation_menu": "Installation & location",
           "asset_lifecycle_replacement_menu": "Lifecycle & replacement",
           "ha_relationship": "Home Assistant devices",
+          "confirm_archive_asset": "Archive this device",
           "manage_asset": "Choose another device"
         },
         "title": "Manage Asset"
@@ -562,6 +574,47 @@
         "description": "{asset}\n\nSelect the old Asset that this Asset replaces.\n\nClose the window without saving by using the X button in the upper-left corner.",
         "submit": "Save and return",
         "title": "This Asset replaces…"
+      },
+      "confirm_archive_asset": {
+        "title": "Archive device",
+        "description": "{asset}\n\nArchiving removes this device from active management. It is not a lifecycle status and not a deletion: the device keeps its Asset ID, its history, its Maintenance history, and its Home Assistant entities, and it can be restored later.\n\nInstallation is not changed and Runtime tracking is not removed for you.\n\n**Before archiving**\n{blockers}\n\nClose the window without saving by using the X button in the upper-left corner.",
+        "data": {
+          "confirm_archive": "Confirm archiving"
+        },
+        "submit": "Archive device"
+      },
+      "archived_assets": {
+        "title": "Archived devices",
+        "description": "Select an archived device by its name and Asset ID. Archived devices are kept with their history; they are not part of active management.",
+        "data": {
+          "asset_uuid": "Archived device"
+        },
+        "submit": "Open"
+      },
+      "archived_asset": {
+        "title": "Archived device",
+        "description": "{asset}\n\n{result}\n\n{facts}",
+        "menu_options": {
+          "confirm_restore_asset": "Restore to active management",
+          "archived_void_replacement": "Void a replacement relationship",
+          "archived_assets": "← Back to archived devices"
+        }
+      },
+      "archived_void_replacement": {
+        "title": "Void replacement relationship",
+        "description": "{asset}\n\nSelect the replacement relationship to void. Voiding corrects history; the device stays archived.\n\nClose the window without saving by using the X button in the upper-left corner.",
+        "data": {
+          "replacement_uuid": "Active relationship"
+        },
+        "submit": "Continue"
+      },
+      "confirm_restore_asset": {
+        "title": "Restore device",
+        "description": "{asset}\n\nRestoring returns this device to active management with the same Asset ID, history, and Home Assistant entities.\n\nRuntime tracking is not recreated; configure it again if you need it. No Runtime is estimated for the archived period. Home Assistant devices it still names that no longer exist may show up again in Repairs, and nothing is repaired for you. Maintenance may be due at once.\n\nClose the window without saving by using the X button in the upper-left corner.",
+        "data": {
+          "confirm_restore": "Confirm restoring"
+        },
+        "submit": "Restore device"
       }
     }
   },

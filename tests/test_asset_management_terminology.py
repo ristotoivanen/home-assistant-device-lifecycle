@@ -328,7 +328,8 @@ def test_home_assistant_devices_are_always_named_in_full(
 
 @pytest.mark.parametrize("language", ["en", "fi"])
 def test_the_hub_rows_carry_the_frozen_names(language: str) -> None:
-    """The five hub rows are the frozen vocabulary, in order."""
+    """The hub rows are the frozen vocabulary, in order; Archive joined in
+    WP15 with its own management label."""
     rows = _translation(language)["options"]["step"]["manage_asset_menu"][
         "menu_options"
     ]
@@ -339,6 +340,7 @@ def test_the_hub_rows_carry_the_frozen_names(language: str) -> None:
             "asset_installation_menu": "Installation & location",
             "asset_lifecycle_replacement_menu": "Lifecycle & replacement",
             "ha_relationship": "Home Assistant devices",
+            "confirm_archive_asset": "Archive this device",
             "manage_asset": "Choose another device",
         }
     else:
@@ -347,6 +349,7 @@ def test_the_hub_rows_carry_the_frozen_names(language: str) -> None:
             "asset_installation_menu": "Asennus ja sijainti",
             "asset_lifecycle_replacement_menu": "Elinkaari ja korvaaminen",
             "ha_relationship": "Home Assistant -laitteet",
+            "confirm_archive_asset": "Arkistoi tämä laite",
             "manage_asset": "Valitse toinen laite",
         }
 

@@ -806,6 +806,12 @@ CALL_SITE_CLASSIFICATION: dict[tuple[str, str, str], tuple[int, str]] = {
         "async_sync_stale_reference_issues",
         "active_assets",
     ): (1, MANAGEMENT),
+    # WP15: the archived-device selector lists what Restore can act on.
+    (
+        "config_flow.py",
+        "DeviceLifecycleOptionsFlow._archived_choices",
+        "archived_assets",
+    ): (1, MANAGEMENT),
 }
 INVENTORIED = frozenset(
     {"assets", "active_assets", "archived_assets", "asset_for_primary_device_id"}
@@ -961,10 +967,12 @@ def test_archive_and_restore_exist_only_as_the_store_manager_api() -> None:
             "apply_archive_request",
             "ArchiveAssetRequest",
             "RestoreAssetRequest",
-            "async_archive_asset",
-            "async_restore_asset",
         ):
             assert symbol not in source, (path.name, symbol)
+        # Since WP15 the OptionsFlow calls the manager API, and nothing else.
+        if path.name != "config_flow.py":
+            assert "async_archive_asset" not in source, path.name
+            assert "async_restore_asset" not in source, path.name
     source = (PACKAGE / "storage.py").read_text(encoding="utf-8")
     assert "async_archive_asset" in source
     assert "async_restore_asset" in source

@@ -730,12 +730,13 @@ def test_each_hub_row_carries_its_own_summary(language: str) -> None:
 
 @pytest.mark.parametrize("language", ["en", "fi"])
 def test_only_the_four_section_rows_are_described(language: str) -> None:
-    """Choosing another Asset is navigation, so it summarizes nothing."""
+    """Choosing another Asset is navigation and Archive is an action, so
+    neither summarizes anything."""
     step = _hub_step(language)
 
-    assert len(step["menu_options"]) == 5
+    assert len(step["menu_options"]) == 6
     assert set(step["menu_option_descriptions"]) == (
-        set(step["menu_options"]) - {"manage_asset"}
+        set(step["menu_options"]) - {"manage_asset", "confirm_archive_asset"}
     )
 
 

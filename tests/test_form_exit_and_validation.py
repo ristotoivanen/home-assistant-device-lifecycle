@@ -87,9 +87,13 @@ EDIT_FORMS = {
     "quick_add_details",
     "quick_add_replacement",
     "quick_add_confirm",
+    # WP15: Archive, Restore, and the archived-device Replacement void.
+    "confirm_archive_asset",
+    "confirm_restore_asset",
+    "archived_void_replacement",
 }
-# The Asset picker only opens an Asset: there is nothing to save or discard.
-NOT_EDIT_FORMS = {"manage_asset"}
+# The Asset pickers only open an Asset: there is nothing to save or discard.
+NOT_EDIT_FORMS = {"manage_asset", "archived_assets"}
 # Purchase and runtime forms open from the integration page: every one of
 # them is a form whose X closes it without saving.
 SUBENTRY_FORMS = {

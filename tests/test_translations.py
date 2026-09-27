@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import ast
-from copy import deepcopy
 import inspect
 import json
 import re
@@ -261,6 +260,7 @@ def test_every_menu_action_and_step_has_translation(language: str) -> None:
     assert set(steps["init"]["menu_options"]) == {
         "quick_add",
         "manage_asset",
+        "archived_assets",
     }
     assert set(steps["quick_add"]["menu_options"]) == {
         "quick_add_from_ha",
@@ -271,7 +271,13 @@ def test_every_menu_action_and_step_has_translation(language: str) -> None:
         "asset_installation_menu",
         "asset_lifecycle_replacement_menu",
         "ha_relationship",
+        "confirm_archive_asset",
         "manage_asset",
+    }
+    assert set(steps["archived_asset"]["menu_options"]) == {
+        "confirm_restore_asset",
+        "archived_void_replacement",
+        "archived_assets",
     }
     section_menus = {
         "asset_details_warranty_menu": {
@@ -308,6 +314,7 @@ def test_every_menu_action_and_step_has_translation(language: str) -> None:
         ),
         *steps["ha_relationship"]["menu_options"],
         *steps["asset_replacement"]["menu_options"],
+        *steps["archived_asset"]["menu_options"],
     }
     menu_actions.remove("quick_add_manual")
     assert menu_actions <= set(steps)
@@ -353,41 +360,19 @@ def test_deployment_relationship_confirmation_and_results_exist(
     assert _completion_keys() <= set(translation["options"]["create_entry"])
 
 
-ARCHIVE_ERROR_KEYS = (
-    "archive_asset_deployed",
-    "archive_runtime_binding_in_progress",
-    "archive_runtime_configured",
-    "archive_runtime_undurable",
-    "archive_runtime_unresolved",
-    "archive_runtime_writer_active",
-    "runtime_asset_archived",
-)
-
-
 @pytest.mark.parametrize("language", LANGUAGES)
 def test_options_ui_excludes_internal_and_out_of_scope_terminology(
     language: str,
 ) -> None:
-    """Ordinary UI does not expose internals, archive, or owned-device concepts.
+    """Ordinary UI does not expose internals or owned-device concepts.
 
-    The one exception is the ``asset_archived`` error: the Store refuses to
-    change an archived Asset, and that refusal is stated in plain words.
+    Since WP15 Archive and Restore are part of Asset management, so their
+    words are in scope; the internals behind them never are.
     """
-    options = deepcopy(_translation(language)["options"])
-    archived_error = options["error"].pop("asset_archived").casefold()
-    assert "archived" in archived_error or "arkistoitu" in archived_error
-    assert "restore" not in archived_error
-    assert "palauta" not in archived_error
-    # Since WP13 the Archive refusals are stated in plain words too; they
-    # name no internals.
-    for key in ARCHIVE_ERROR_KEYS:
-        text = options["error"].pop(key).casefold()
-        assert "uuid" not in text
-        assert "subentry" not in text
-    options_text = " ".join(_string_values(options)).casefold()
+    options_text = " ".join(
+        _string_values(_translation(language)["options"])
+    ).casefold()
     forbidden = {
-        "archive",
-        "restore",
         "asset store",
         "asset uuid",
         "config subentry",
@@ -396,14 +381,88 @@ def test_options_ui_excludes_internal_and_out_of_scope_terminology(
         "provenance",
         "purchase_uuid",
         "storage schema",
+        "subentry",
         "uuid",
-        "arkistoi",
         "omistama laite",
-        "palauta arkistosta",
         "tallennusskeema",
     }
 
     assert not {term for term in forbidden if term in options_text}
+
+
+# The management Archive labels (WP15) and the dashboard's Lifecycle group.
+ARCHIVE_LABELS = {
+    "en": {
+        "action": "Archive this device",
+        "confirm": "Archive device",
+        "menu": "Archived devices",
+        "restore": "Restore to active management",
+        "restore_confirm": "Restore device",
+        "lifecycle_group": "Archived",
+    },
+    "fi": {
+        "action": "Arkistoi tämä laite",
+        "confirm": "Arkistoi laite",
+        "menu": "Arkistoidut laitteet",
+        "restore": "Palauta aktiivihallintaan",
+        "restore_confirm": "Palauta laite",
+        "lifecycle_group": "Arkistoidut",
+    },
+}
+
+
+@pytest.mark.parametrize("language", LANGUAGES)
+def test_archive_management_labels_stay_distinct_from_the_lifecycle_group(
+    language: str,
+) -> None:
+    """Archive is a management state, not the dashboard's Lifecycle group,
+    and it never reads as deletion."""
+    labels = ARCHIVE_LABELS[language]
+    steps = _translation(language)["options"]["step"]
+    assert steps["manage_asset_menu"]["menu_options"]["confirm_archive_asset"] == (
+        labels["action"]
+    )
+    assert steps["confirm_archive_asset"]["submit"] == labels["confirm"]
+    assert steps["confirm_archive_asset"]["title"] == labels["confirm"]
+    assert steps["init"]["menu_options"]["archived_assets"] == labels["menu"]
+    assert steps["archived_assets"]["title"] == labels["menu"]
+    assert steps["archived_asset"]["menu_options"]["confirm_restore_asset"] == (
+        labels["restore"]
+    )
+    assert steps["confirm_restore_asset"]["submit"] == labels["restore_confirm"]
+
+    management = {
+        labels["action"],
+        labels["confirm"],
+        labels["menu"],
+        labels["restore"],
+        labels["restore_confirm"],
+    }
+    assert labels["lifecycle_group"] not in management
+    dashboard = (
+        Path(__file__).parents[1]
+        / "dashboard"
+        / f"device-lifecycle-dashboard.{language}.yaml"
+    ).read_text(encoding="utf-8")
+    assert f"#### {labels['lifecycle_group']} ·" in dashboard
+    for label in management:
+        assert f"#### {label} ·" not in dashboard
+
+    archive_copy = " ".join(
+        _string_values(
+            {
+                key: steps[key]
+                for key in (
+                    "confirm_archive_asset",
+                    "archived_assets",
+                    "archived_asset",
+                )
+            }
+        )
+    ).casefold()
+    assert "delete device" not in archive_copy
+    assert "poista laite" not in archive_copy
+    assert "deleted" not in archive_copy or "not a deletion" in archive_copy
 
 
 def test_purchase_creation_copy_explicitly_allows_zero_devices() -> None:

@@ -38,6 +38,8 @@ from .const import (
     CONF_CONFIRM_DISPOSED,
     CONF_CONFIRM_AREA_CLEAR,
     CONF_CONFIRM_QUICK_ADD,
+    CONF_CONFIRM_ARCHIVE,
+    CONF_CONFIRM_RESTORE,
     CONF_CONFIRM_VOID,
     CONF_CURRENCY,
     CONF_DEPLOYMENT_STATE,
@@ -115,6 +117,7 @@ from .models import AssetData, PurchaseData, ReplacementRecordData
 from .storage import (
     FIELD_SOURCE_HOME_ASSISTANT,
     FIELD_SOURCE_USER,
+    ArchiveOutcome,
     AssetStoreError,
     AssetStoreManager,
     QuickAssetCreateRequest,
@@ -1257,6 +1260,8 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 "replacement_successor_conflict",
                 "replacement_void_reason_required",
                 "runtime_asset_archived",
+                "runtime_checkpoint_failed",
+                "runtime_checkpoint_unresolved",
                 "manual_warranty_date_required",
                 "non_physical_device_not_allowed",
                 "service_device_not_allowed",
@@ -2125,7 +2130,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             return self.async_abort(reason="entry_not_loaded")
         return self.async_show_menu(
             step_id="init",
-            menu_options=["quick_add", "manage_asset"],
+            menu_options=["quick_add", "manage_asset", "archived_assets"],
         )
 
     async def async_step_quick_add(
@@ -2823,6 +2828,11 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         asset = self._manager.asset(asset_uuid)
         if asset is None:
             return self._show_asset_selection(errors={"base": "asset_missing"})
+        if self._manager.asset_archived(asset["asset_uuid"]):
+            # Archived since this flow opened it: its view offers only what
+            # an archived Asset still allows.
+            return await self.async_step_archived_asset()
+        self._archive_context = False
 
         placeholders = {
             **self._hub_placeholders(asset),
@@ -2835,6 +2845,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 "asset_installation_menu",
                 "asset_lifecycle_replacement_menu",
                 "ha_relationship",
+                "confirm_archive_asset",
                 "manage_asset",
             ],
             description_placeholders=placeholders,
@@ -3786,9 +3797,16 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         asset = self._manager.asset(asset_uuid)
         replacement_uuid = getattr(self, "_pending_replacement_uuid", None)
         record = self._manager.replacement_record(replacement_uuid)
+        archive_context = getattr(self, "_archive_context", False)
         if asset is None:
+            if archive_context:
+                return self._show_archived_selection(errors={"base": "asset_missing"})
             return self._show_asset_selection(errors={"base": "asset_missing"})
         if record is None or record["voided_at"] is not None:
+            if archive_context:
+                return self._show_archived_void_form(
+                    asset, errors={"base": "replacement_missing"}
+                )
             return self._show_manage_replacement_form(
                 asset,
                 errors={"base": "replacement_missing"},
@@ -3817,6 +3835,15 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                     if refreshed is None:
                         return self._show_asset_selection(
                             errors={"base": "asset_missing"}
+                        )
+                    if archive_context:
+                        # Voiding is history; the Asset stays archived and
+                        # the person stays in its archived view.
+                        return await self._finish_asset_action(
+                            refreshed,
+                            "asset_replacement_updated",
+                            reload=False,
+                            destination=self.async_step_archived_asset,
                         )
                     return await self._finish_asset_action(
                         refreshed,
@@ -4421,6 +4448,382 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             asset,
             "asset_related_device_removed",
             destination=self.async_step_ha_relationship,
+        )
+
+
+    # --- Archive and Restore ----------------------------------------------------
+
+    def _archive_blocker_lines(self, blockers: tuple[str, ...]) -> list[str]:
+        """Say what currently prevents archiving, and what resolves it.
+
+        Only a preview: the manager checks everything again on submit.
+        """
+        guidance = {
+            "archive_asset_deployed": (
+                (
+                    "The device is installed. Change its installation to not "
+                    "installed first; archiving never changes it for you."
+                ),
+                (
+                    "Laite on asennettuna. Muuta sen asennustilaksi ensin ei "
+                    "asennettu; arkistointi ei muuta sitä puolestasi."
+                ),
+            ),
+            "archive_runtime_configured": (
+                (
+                    "Runtime tracking is configured for the device. Delete that "
+                    "Runtime tracking configuration first; the device keeps its "
+                    "accumulated Runtime."
+                ),
+                (
+                    "Laitteelle on määritetty käyttötuntiseuranta. Poista "
+                    "seurannan määritys ensin; laite säilyttää kertyneet "
+                    "käyttötuntinsa."
+                ),
+            ),
+            "archive_runtime_binding_in_progress": (
+                (
+                    "Runtime tracking is being set up for the device right now. "
+                    "Finish or cancel that setup, then try again."
+                ),
+                (
+                    "Laitteelle ollaan juuri määrittämässä käyttötuntiseurantaa. "
+                    "Viimeistele tai peruuta määritys ja yritä uudelleen."
+                ),
+            ),
+            "archive_runtime_writer_active": (
+                (
+                    "Runtime tracking for the device is still running. Delete its "
+                    "Runtime tracking configuration first."
+                ),
+                (
+                    "Laitteen käyttötuntiseuranta on yhä käynnissä. Poista "
+                    "seurannan määritys ensin."
+                ),
+            ),
+            "archive_runtime_undurable": (
+                (
+                    "The device's latest Runtime is not saved yet. Archiving "
+                    "saves it first; nothing is estimated or discarded."
+                ),
+                (
+                    "Laitteen viimeisimpiä käyttötunteja ei ole vielä tallennettu. "
+                    "Arkistointi tallentaa ne ensin; mitään ei arvioida eikä "
+                    "hylätä."
+                ),
+            ),
+            "archive_runtime_unresolved": (
+                (
+                    "Some of the device's Runtime could not be saved when its "
+                    "tracking was removed. Reload Device Lifecycle, then try again."
+                ),
+                (
+                    "Osaa laitteen käyttötunneista ei voitu tallentaa, kun sen "
+                    "seuranta poistettiin. Lataa Device Lifecycle uudelleen ja "
+                    "yritä sitten uudelleen."
+                ),
+            ),
+        }
+        if not blockers:
+            return [
+                self._localized_label(
+                    "Nothing currently prevents archiving.",
+                    "Mikään ei tällä hetkellä estä arkistointia.",
+                )
+            ]
+        return [
+            "• " + self._localized_label(*guidance[code])
+            for code in blockers
+            if code in guidance
+        ]
+
+    async def async_step_confirm_archive_asset(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Preview what Archive does and what blocks it, then archive.
+
+        The blockers shown come from the manager's read-only preview; on
+        submit only the manager decides. Runtime that already stopped but is
+        not saved yet is saved first. Deployment and Runtime tracking are
+        never changed here, and nothing reloads.
+        """
+        asset_uuid = getattr(self, "_selected_asset_uuid", None)
+        asset = self._manager.asset(asset_uuid)
+        if asset is None:
+            return self._show_asset_selection(errors={"base": "asset_missing"})
+        if user_input is None and self._manager.asset_archived(asset["asset_uuid"]):
+            return await self.async_step_archived_asset()
+
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            if not user_input.get(CONF_CONFIRM_ARCHIVE):
+                errors[CONF_CONFIRM_ARCHIVE] = "archive_confirmation_required"
+            else:
+                outcome, error = await self._async_archive(asset["asset_uuid"])
+                if error is not None:
+                    errors["base"] = error
+                else:
+                    return await self._finish_asset_action(
+                        asset,
+                        "archive_completed"
+                        if outcome is ArchiveOutcome.CHANGED
+                        else "archive_unchanged",
+                        reload=False,
+                        destination=self.async_step_archived_asset,
+                    )
+
+        blockers = self._manager.archive_blockers(
+            self.config_entry, asset["asset_uuid"]
+        )
+        return self.async_show_form(
+            step_id="confirm_archive_asset",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_CONFIRM_ARCHIVE,
+                        default=False,
+                    ): selector.BooleanSelector()
+                }
+            ),
+            errors=errors,
+            description_placeholders={
+                "asset": _asset_label(asset),
+                "blockers": "\n".join(self._archive_blocker_lines(blockers)),
+            },
+        )
+
+    async def _async_archive(
+        self, asset_uuid: str
+    ) -> tuple[ArchiveOutcome | None, str | None]:
+        """Save pending Runtime of a stopped writer if needed, then archive.
+
+        Finalizing only commits Runtime that is already pending; it never
+        stops tracking, removes configuration, or infers time. The manager's
+        locked Archive checks then decide.
+        """
+        if "archive_runtime_undurable" in self._manager.archive_blockers(
+            self.config_entry, asset_uuid
+        ):
+            try:
+                await self._manager.async_finalize_runtime(asset_uuid)
+            except (AssetStoreError, OSError) as err:
+                return None, self._storage_error_key(err)
+        try:
+            outcome = await self._manager.async_archive_asset(
+                self.config_entry, asset_uuid
+            )
+        except (AssetStoreError, OSError) as err:
+            return None, self._storage_error_key(err)
+        return outcome, None
+
+    def _archived_choices(self) -> list[selector.SelectOptionDict]:
+        """Return archived Assets, ordered and labelled like every selector."""
+        return [
+            selector.SelectOptionDict(
+                value=asset["asset_uuid"],
+                label=_asset_label(asset),
+            )
+            for asset in sorted(
+                self._manager.archived_assets(),
+                key=lambda item: (str(item["name"]).casefold(), item["asset_id"]),
+            )
+        ]
+
+    def _show_archived_selection(
+        self,
+        *,
+        errors: dict[str, str] | None = None,
+    ) -> ConfigFlowResult:
+        """Show the archived-device selector, or say that there are none."""
+        choices = self._archived_choices()
+        if not choices and not errors:
+            errors = {"base": "no_archived_assets"}
+        return self.async_show_form(
+            step_id="archived_assets",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_ASSET_UUID, default=NOT_SELECTED
+                    ): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=[self._not_selected_option(), *choices],
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    )
+                }
+            ),
+            errors=errors or {},
+        )
+
+    async def async_step_archived_assets(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Choose an archived device by its name and Asset ID."""
+        if user_input is not None:
+            asset_uuid = str(user_input.get(CONF_ASSET_UUID) or "")
+            if asset_uuid in ("", NOT_SELECTED):
+                return self._show_archived_selection(
+                    errors={CONF_ASSET_UUID: "archived_asset_required"}
+                )
+            if asset_uuid not in {
+                choice["value"] for choice in self._archived_choices()
+            }:
+                return self._show_archived_selection(
+                    errors={"base": "asset_missing"}
+                )
+            self._selected_asset_uuid = asset_uuid
+            self._last_result = None
+            return await self.async_step_archived_asset()
+        return self._show_archived_selection()
+
+    def _archived_facts(self, asset: AssetData) -> list[str]:
+        """The facts an archived device is still shown with."""
+        facts = [
+            self._localized_label(
+                f"Asset ID: {asset['asset_id']}",
+                f"Laitetunnus: {asset['asset_id']}",
+            ),
+            self._localized_label(
+                "Archived: removed from active management",
+                "Arkistoitu: poistettu aktiivihallinnasta",
+            ),
+        ]
+        category = _short_name(" ".join(str(asset.get(CONF_CATEGORY) or "").split()))
+        if category:
+            facts.append(
+                self._localized_label(f"Category: {category}", f"Luokka: {category}")
+            )
+        return [*facts, *self._lifecycle_facts(asset)]
+
+    async def async_step_archived_asset(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Show an archived device: its facts, Restore, and history only.
+
+        No current-management action is offered here.
+        """
+        asset = self._manager.asset(getattr(self, "_selected_asset_uuid", None))
+        if asset is None:
+            return self._show_archived_selection(errors={"base": "asset_missing"})
+        if not self._manager.asset_archived(asset["asset_uuid"]):
+            # Restored since this view was opened: back to active management.
+            return await self.async_step_manage_asset_menu()
+        self._archive_context = True
+        menu_options = ["confirm_restore_asset"]
+        if self._manager.replacement_records_for_asset(asset["asset_uuid"]):
+            menu_options.append("archived_void_replacement")
+        menu_options.append("archived_assets")
+        return self.async_show_menu(
+            step_id="archived_asset",
+            menu_options=menu_options,
+            description_placeholders={
+                "asset": _view_asset_label(asset),
+                "result": await self._result_message(asset),
+                "facts": "\n".join(self._archived_facts(asset)),
+            },
+        )
+
+    def _show_archived_void_form(
+        self,
+        asset: AssetData,
+        *,
+        errors: dict[str, str] | None = None,
+    ) -> ConfigFlowResult:
+        """Choose one active Replacement of an archived device to void."""
+        options = [
+            selector.SelectOptionDict(
+                value=record["replacement_uuid"],
+                label=self._replacement_record_label(record),
+            )
+            for record in self._manager.replacement_records_for_asset(
+                asset["asset_uuid"]
+            )
+        ]
+        return self.async_show_form(
+            step_id="archived_void_replacement",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_REPLACEMENT_UUID): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=options,
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    )
+                }
+            ),
+            errors=errors or {},
+            description_placeholders={"asset": _asset_label(asset)},
+        )
+
+    async def async_step_archived_void_replacement(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Void a Replacement of an archived device: history, not management."""
+        asset = self._manager.asset(getattr(self, "_selected_asset_uuid", None))
+        if asset is None:
+            return self._show_archived_selection(errors={"base": "asset_missing"})
+        records = self._manager.replacement_records_for_asset(asset["asset_uuid"])
+        if not records:
+            return await self.async_step_archived_asset()
+        if user_input is None:
+            return self._show_archived_void_form(asset)
+        replacement_uuid = str(user_input.get(CONF_REPLACEMENT_UUID) or "")
+        if replacement_uuid not in {record["replacement_uuid"] for record in records}:
+            return self._show_archived_void_form(
+                asset, errors={"base": "replacement_missing"}
+            )
+        self._archive_context = True
+        self._pending_replacement_uuid = replacement_uuid
+        return await self.async_step_confirm_void_replacement()
+
+    async def async_step_confirm_restore_asset(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Explain what Restore does and does not do, then restore.
+
+        No Runtime precondition; nothing is recreated, repaired, or reloaded.
+        """
+        asset = self._manager.asset(getattr(self, "_selected_asset_uuid", None))
+        if asset is None:
+            return self._show_archived_selection(errors={"base": "asset_missing"})
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            if not user_input.get(CONF_CONFIRM_RESTORE):
+                errors[CONF_CONFIRM_RESTORE] = "restore_confirmation_required"
+            else:
+                try:
+                    outcome = await self._manager.async_restore_asset(
+                        asset["asset_uuid"]
+                    )
+                except (AssetStoreError, OSError) as err:
+                    errors["base"] = self._storage_error_key(err)
+                else:
+                    return await self._finish_asset_action(
+                        asset,
+                        "restore_completed"
+                        if outcome is ArchiveOutcome.CHANGED
+                        else "restore_unchanged",
+                        reload=False,
+                    )
+        elif not self._manager.asset_archived(asset["asset_uuid"]):
+            return await self.async_step_manage_asset_menu()
+        return self.async_show_form(
+            step_id="confirm_restore_asset",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_CONFIRM_RESTORE,
+                        default=False,
+                    ): selector.BooleanSelector()
+                }
+            ),
+            errors=errors,
+            description_placeholders={"asset": _asset_label(asset)},
         )
 
 

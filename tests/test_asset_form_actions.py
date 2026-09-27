@@ -32,8 +32,12 @@ CONTINUE = ("Continue", "Jatka")
 SAVE_AND_RETURN = ("Save and return", "Tallenna ja palaa")
 # Form step -> (English, Finnish) button text, by what the step does.
 SUBMIT = {
-    # Opens the chosen Asset's hub.
+    # Opens the chosen Asset's hub, or an archived device's view.
     "manage_asset": ("Open", "Avaa"),
+    "archived_assets": ("Open", "Avaa"),
+    # Archive and Restore say what they do (WP15).
+    "confirm_archive_asset": ("Archive device", "Arkistoi laite"),
+    "confirm_restore_asset": ("Restore device", "Palauta laite"),
     # Change one thing, then return.
     "edit_asset_metadata": SAVE_AND_RETURN,
     "change_asset_purchase": SAVE_AND_RETURN,
@@ -49,6 +53,7 @@ SUBMIT = {
     "confirm_void_replacement": ("Void and return", "Mitätöi ja palaa"),
     # Only choose where to go next.
     "manage_asset_replacement": CONTINUE,
+    "archived_void_replacement": CONTINUE,
     "quick_add_from_ha": CONTINUE,
     "quick_add_details": CONTINUE,
     "quick_add_replacement": CONTINUE,
