@@ -1045,10 +1045,12 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         return english
 
     def _asset_choices(self) -> list[selector.SelectOptionDict]:
-        """Return every Asset keyed by immutable UUID.
+        """Return every active Asset keyed by immutable UUID.
 
-        Ordered the way the labels read: by display name, case-insensitively,
-        with the Asset ID breaking ties between identically named Assets.
+        These are current-management candidates, so archived Assets are
+        omitted; the Store refuses them again inside the mutation. Ordered
+        the way the labels read: by display name, case-insensitively, with
+        the Asset ID breaking ties between identically named Assets.
         """
         return [
             selector.SelectOptionDict(
@@ -1056,7 +1058,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 label=_asset_label(asset),
             )
             for asset in sorted(
-                self._manager.assets(),
+                self._manager.active_assets(),
                 key=lambda item: (str(item["name"]).casefold(), item["asset_id"]),
             )
         ]
@@ -1080,10 +1082,13 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         ]
 
     def _quick_replacement_choices(self) -> list[selector.SelectOptionDict]:
-        """Return name-first predecessor choices with safe duplicate labels."""
-        assets = self._manager.assets()
+        """Return name-first predecessor choices with safe duplicate labels.
+
+        Only active Assets can be predecessors, but labels are disambiguated
+        against every Asset, archived ones included.
+        """
         name_counts: dict[str, int] = {}
-        for asset in assets:
+        for asset in self._manager.assets():
             name_counts[asset["name"]] = name_counts.get(asset["name"], 0) + 1
         choices = [
             selector.SelectOptionDict(
@@ -1092,7 +1097,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             )
         ]
         for asset in sorted(
-            assets,
+            self._manager.active_assets(),
             key=lambda item: (item["name"].casefold(), item["asset_id"]),
         ):
             choices.append(
@@ -1210,6 +1215,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         """Map storage failures to safe flow errors without fabricating data."""
         if isinstance(err, AssetStoreError):
             structured_codes = {
+                "asset_archived",
                 "asset_missing",
                 "device_already_linked",
                 "device_lifecycle_device_not_allowed",
@@ -2521,13 +2527,16 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 )
             quick_predecessor = getattr(self, "_quick_predecessor", None)
             if error_key in {
+                "asset_archived",
                 "asset_missing",
                 "replacement_predecessor_conflict",
             } and quick_predecessor is not None:
                 predecessor = self._manager.asset(
                     quick_predecessor["asset_uuid"]
                 )
-                if predecessor is None:
+                # An archived predecessor is no longer a management candidate,
+                # so its selection is cleared like that of a missing one.
+                if predecessor is None or error_key == "asset_archived":
                     self._quick_details_input[
                         CONF_REPLACEMENT_TARGET_ASSET_UUID
                     ] = NO_REPLACEMENT_SELECTION

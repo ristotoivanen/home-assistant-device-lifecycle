@@ -89,7 +89,9 @@ async def _rich_store(hass: HomeAssistant, data: AssetStoreData) -> dict[str, An
     return rich
 
 
-def _store_4_1_asset(asset_store_data_v3_1: AssetStoreData, **fields: Any) -> dict[str, Any]:
+def _store_4_1_asset(
+    asset_store_data_v3_1: AssetStoreData, **fields: Any
+) -> dict[str, Any]:
     asset = deepcopy(asset_store_data_v3_1["assets"][ASSET_UUID])
     asset[ARCHIVED_AT] = None
     asset.update(fields)
@@ -328,7 +330,9 @@ def test_missing_archived_at_is_never_read_as_active(
 def test_valid_archive_states(
     asset_store_data_v3_1: AssetStoreData, archived_at: str | None
 ) -> None:
-    assets = {ASSET_UUID: _store_4_1_asset(asset_store_data_v3_1, archived_at=archived_at)}
+    assets = {
+        ASSET_UUID: _store_4_1_asset(asset_store_data_v3_1, archived_at=archived_at)
+    }
     snapshot, before = deepcopy(assets), _serialized(assets)
     validate_asset_archive_state(assets)
     assert assets == snapshot
@@ -384,13 +388,17 @@ def test_non_canonical_archived_at_fails_closed(
     assert assets == snapshot
 
 
-def test_missing_archived_at_fails_validation(asset_store_data_v3_1: AssetStoreData) -> None:
+def test_missing_archived_at_fails_validation(
+    asset_store_data_v3_1: AssetStoreData,
+) -> None:
     assets = deepcopy(asset_store_data_v3_1["assets"])
     with pytest.raises(ArchiveValidationError, match="has no archived_at"):
         validate_asset_archive_state(assets)
 
 
-def test_archived_and_deployed_fails_closed(asset_store_data_v3_1: AssetStoreData) -> None:
+def test_archived_and_deployed_fails_closed(
+    asset_store_data_v3_1: AssetStoreData,
+) -> None:
     assets = {
         ASSET_UUID: _store_4_1_asset(
             asset_store_data_v3_1,
@@ -442,7 +450,9 @@ def test_archived_asset_accepts_non_deployed_states(
     )
 
 
-def test_validation_owns_only_archive_state(asset_store_data_v3_1: AssetStoreData) -> None:
+def test_validation_owns_only_archive_state(
+    asset_store_data_v3_1: AssetStoreData,
+) -> None:
     """Other Asset rules belong to the whole-Store validator."""
     asset = _store_4_1_asset(asset_store_data_v3_1)
     asset["asset_id"] = "not-an-id"
@@ -457,7 +467,9 @@ def test_non_mapping_assets_fails_validation(assets: Any) -> None:
         validate_asset_archive_state(assets)
 
 
-def test_non_mapping_asset_fails_validation(asset_store_data_v3_1: AssetStoreData) -> None:
+def test_non_mapping_asset_fails_validation(
+    asset_store_data_v3_1: AssetStoreData,
+) -> None:
     with pytest.raises(ArchiveValidationError, match=f"Asset {SECOND_UUID}"):
         validate_asset_archive_state(
             {ASSET_UUID: _store_4_1_asset(asset_store_data_v3_1), SECOND_UUID: []}
@@ -614,7 +626,9 @@ def test_archive_is_reachable_only_through_the_store_4_1_code() -> None:
             assert _imported_modules(path) & {"archive", "archive.asset_is_archived"}
             assert "ARCHIVED_AT" not in source
             continue
-        for symbol in unused:
+        for symbol in unused - (
+            {"asset_is_archived"} if path.name == "storage.py" else set()
+        ):
             assert symbol not in source, (path.name, symbol)
         if path.name == "storage.py":
             continue
@@ -629,6 +643,15 @@ def test_archive_is_reachable_only_through_the_store_4_1_code() -> None:
     tree = ast.parse((PACKAGE / "storage.py").read_text(encoding="utf-8"))
     for symbol, scopes in referencing_scopes(tree, future_only).items():
         assert scopes <= STORE_4_1_SCOPES, (symbol, scopes)
+    # Since WP10 the manager reads Archive state through the one authority,
+    # and only in its filtering helpers and the current-management guard.
+    assert referencing_scopes(tree, frozenset({"asset_is_archived"})) == {
+        "asset_is_archived": {
+            "AssetStoreManager.active_assets",
+            "AssetStoreManager.archived_assets",
+            "AssetStoreManager._require_active_asset",
+        }
+    }
 
 
 async def test_production_store_is_4_1_and_new_assets_are_active(

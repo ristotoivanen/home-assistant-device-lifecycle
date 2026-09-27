@@ -182,6 +182,7 @@
       "quick_asset_created": "{asset_name} lisättiin Device Lifecycleen."
     },
     "error": {
+      "asset_archived": "Valittu laite on arkistoitu, eikä sitä voi muuttaa. Mitään ei muutettu.",
       "asset_missing": "Valittua laitetta ei enää ole.",
       "asset_store_error": "Muutosta ei voitu tallentaa. Mitään ei muutettu.",
       "confirmation_required": "Vahvista toiminto jatkaaksesi.",

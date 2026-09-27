@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+from copy import deepcopy
 import inspect
 import json
 import re
@@ -353,10 +354,17 @@ def test_deployment_relationship_confirmation_and_results_exist(
 def test_options_ui_excludes_internal_and_out_of_scope_terminology(
     language: str,
 ) -> None:
-    """Ordinary UI does not expose internals, archive, or owned-device concepts."""
-    options_text = " ".join(
-        _string_values(_translation(language)["options"])
-    ).casefold()
+    """Ordinary UI does not expose internals, archive, or owned-device concepts.
+
+    The one exception is the ``asset_archived`` error: the Store refuses to
+    change an archived Asset, and that refusal is stated in plain words.
+    """
+    options = deepcopy(_translation(language)["options"])
+    archived_error = options["error"].pop("asset_archived").casefold()
+    assert "archived" in archived_error or "arkistoitu" in archived_error
+    assert "restore" not in archived_error
+    assert "palauta" not in archived_error
+    options_text = " ".join(_string_values(options)).casefold()
     forbidden = {
         "archive",
         "restore",

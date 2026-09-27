@@ -28,6 +28,7 @@ from .archive import (
     ArchiveCompositionError,
     ArchiveValidationError,
     add_asset_archive_state,
+    asset_is_archived,
     validate_asset_archive_state,
 )
 from .const import (
@@ -1459,7 +1460,7 @@ class AssetStoreManager:
         """Atomically initialize a new marked Runtime from null to zero."""
 
         def _initialize(data: AssetStoreData) -> Decimal:
-            asset = self._require_asset(data, asset_uuid)
+            asset = self._require_active_asset(data, asset_uuid)
             total = asset["runtime"]["total_seconds"]
             if total is None:
                 asset["runtime"]["total_seconds"] = "0"
@@ -1477,7 +1478,7 @@ class AssetStoreManager:
         normalized = _runtime_seconds(total_seconds)
 
         def _initialize(data: AssetStoreData) -> Decimal:
-            asset = self._require_asset(data, asset_uuid)
+            asset = self._require_active_asset(data, asset_uuid)
             current = asset["runtime"]["total_seconds"]
             if current is not None:
                 return Decimal(current)
@@ -1499,7 +1500,7 @@ class AssetStoreManager:
         committed = expected + increment
 
         def _commit(data: AssetStoreData) -> Decimal:
-            asset = self._require_asset(data, asset_uuid)
+            asset = self._require_active_asset(data, asset_uuid)
             stored = asset["runtime"]["total_seconds"]
             if stored is None:
                 raise AssetStoreError(
@@ -1639,6 +1640,26 @@ class AssetStoreManager:
             raise AssetStoreError(
                 f"Asset {asset_uuid} does not exist",
                 code="asset_missing",
+            )
+        return asset
+
+    def _require_active_asset(
+        self,
+        data: AssetStoreData,
+        asset_uuid: str,
+    ) -> AssetData:
+        """Return an active Asset from a transaction snapshot for management.
+
+        The authoritative current-management guard. It runs inside the locked
+        mutator on the mutation candidate, so a selector rendered before the
+        Asset was archived cannot change it. Archive is not deletion: identity
+        lookups still see archived Assets, only current management is refused.
+        """
+        asset = self._require_asset(data, asset_uuid)
+        if asset_is_archived(asset):
+            raise AssetStoreError(
+                f"Asset {asset_uuid} is archived",
+                code="asset_archived",
             )
         return asset
 
@@ -2533,7 +2554,9 @@ class AssetStoreManager:
 
         predecessor: AssetData | None = None
         if request.predecessor_asset_uuid is not None:
-            predecessor = self._require_asset(data, request.predecessor_asset_uuid)
+            predecessor = self._require_active_asset(
+                data, request.predecessor_asset_uuid
+            )
             lifecycle = predecessor["lifecycle"]
             if (
                 lifecycle["status"]
@@ -2721,7 +2744,7 @@ class AssetStoreManager:
         """
 
         def _set_lifecycle(data: AssetStoreData) -> AssetData:
-            asset = self._require_asset(data, asset_uuid)
+            asset = self._require_active_asset(data, asset_uuid)
             self._append_lifecycle_transition(
                 data,
                 asset,
@@ -2841,9 +2864,13 @@ class AssetStoreManager:
         notes: str | None,
         recorded_at: str | None = None,
     ) -> ReplacementRecordData:
-        """Create one active record inside an existing atomic mutation."""
-        self._require_asset(data, predecessor_asset_uuid)
-        self._require_asset(data, successor_asset_uuid)
+        """Create one active record inside an existing atomic mutation.
+
+        Creating a relationship is current management, so both Assets must be
+        active. Voiding one is history and stays allowed for archived Assets.
+        """
+        self._require_active_asset(data, predecessor_asset_uuid)
+        self._require_active_asset(data, successor_asset_uuid)
         if predecessor_asset_uuid == successor_asset_uuid:
             raise AssetStoreError(
                 "An Asset cannot replace itself",
@@ -2967,6 +2994,10 @@ class AssetStoreManager:
                     "A non-empty void reason is required",
                     code="replacement_void_reason_required",
                 )
+            # The correction creates a new relationship, which is current
+            # management: refuse an archived side before voiding anything.
+            self._require_active_asset(data, predecessor_asset_uuid)
+            self._require_active_asset(data, successor_asset_uuid)
             old_record["voided_at"] = datetime.now(UTC).isoformat()
             old_record["void_reason"] = void_reason.strip()
             return self._create_replacement_record(
@@ -3056,7 +3087,7 @@ class AssetStoreManager:
             )
 
         def _update(data: AssetStoreData) -> AssetData:
-            asset = self._require_asset(data, asset_uuid)
+            asset = self._require_active_asset(data, asset_uuid)
             sources = asset.setdefault("field_sources", {})
             for field, value in normalized.items():
                 asset[field] = value  # type: ignore[literal-required]
@@ -3084,7 +3115,7 @@ class AssetStoreManager:
         """Same as async_set_asset_purchase, also reporting a canonical no-op."""
 
         def _set_purchase(data: AssetStoreData) -> AssetData:
-            asset = self._require_asset(data, asset_uuid)
+            asset = self._require_active_asset(data, asset_uuid)
             return self._assign_asset_purchase_in_snapshot(
                 data,
                 asset,
@@ -3165,7 +3196,7 @@ class AssetStoreManager:
         }
 
         def _set_deployment(data: AssetStoreData) -> AssetData:
-            asset = self._require_asset(data, asset_uuid)
+            asset = self._require_active_asset(data, asset_uuid)
             return self._set_asset_deployment_in_snapshot(asset, updates)
 
         return await self._async_mutate_reporting(_set_deployment)
@@ -3227,7 +3258,7 @@ class AssetStoreManager:
         device_id = device_id.strip()
 
         def _link(data: AssetStoreData) -> AssetData:
-            asset = self._require_asset(data, asset_uuid)
+            asset = self._require_active_asset(data, asset_uuid)
             current = _primary_device_id(asset)
             if (
                 expected_current_device_id is not _UNSET
@@ -3276,7 +3307,7 @@ class AssetStoreManager:
         """Same as async_unlink_asset_device, also reporting a canonical no-op."""
 
         def _unlink(data: AssetStoreData) -> AssetData:
-            asset = self._require_asset(data, asset_uuid)
+            asset = self._require_active_asset(data, asset_uuid)
             current = _primary_device_id(asset)
             if expected_device_id is not _UNSET and current != expected_device_id:
                 raise AssetStoreError(
@@ -3317,7 +3348,7 @@ class AssetStoreManager:
         device_id = device_id.strip()
 
         def _add_related(data: AssetStoreData) -> AssetData:
-            asset = self._require_asset(data, asset_uuid)
+            asset = self._require_active_asset(data, asset_uuid)
             for reference in asset.get("ha_device_refs", []):
                 if reference.get("device_id") != device_id:
                     continue
@@ -3346,7 +3377,7 @@ class AssetStoreManager:
         device_id = device_id.strip()
 
         def _remove_related(data: AssetStoreData) -> AssetData:
-            asset = self._require_asset(data, asset_uuid)
+            asset = self._require_active_asset(data, asset_uuid)
             asset["ha_device_refs"] = [
                 reference
                 for reference in asset.get("ha_device_refs", [])
@@ -3740,8 +3771,33 @@ class AssetStoreManager:
         return deepcopy(purchase)
 
     def assets(self) -> list[AssetData]:
-        """Return detached snapshots of all persistent Assets."""
+        """Return detached snapshots of all persistent Assets.
+
+        Identity and reconciliation view: archived Assets are included, since
+        Archive is not deletion and frees no identity. Current-management
+        candidates come from ``active_assets``.
+        """
         return deepcopy(list(self._data["assets"].values()))
+
+    def active_assets(self) -> list[AssetData]:
+        """Return detached snapshots of the Assets open to current management."""
+        return deepcopy(
+            [
+                asset
+                for asset in self._data["assets"].values()
+                if not asset_is_archived(asset)
+            ]
+        )
+
+    def archived_assets(self) -> list[AssetData]:
+        """Return detached snapshots of the archived Assets."""
+        return deepcopy(
+            [
+                asset
+                for asset in self._data["assets"].values()
+                if asset_is_archived(asset)
+            ]
+        )
 
     def purchases(self) -> list[PurchaseData]:
         """Return detached snapshots of all persistent Purchases."""

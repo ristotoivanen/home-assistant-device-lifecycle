@@ -182,6 +182,7 @@
       "quick_asset_created": "{asset_name} was added to Device Lifecycle."
     },
     "error": {
+      "asset_archived": "The selected Asset is archived and cannot be changed. Nothing was changed.",
       "asset_missing": "The selected Asset no longer exists.",
       "asset_store_error": "The change could not be saved. Nothing was changed.",
       "confirmation_required": "Confirm this operation to continue.",
