@@ -448,6 +448,8 @@ Entity Registry migration preserves the existing `entity_id`, recorder identity,
 
 Runtime configuration remains owned by its existing Runtime ConfigSubentry, so the Runtime Entity Registry `config_subentry_id` is unchanged. In 0.6.0 its `device_id` points to the owned Asset Device rather than the external primary device. This placement change does not alter canonical total ownership, RestoreSensor import, source validation, monotonic timing, pending deltas, checkpoint frequency, CAS semantics, power thresholds, hysteresis, state class, units, precision, or shutdown/unload behavior. Related devices never become Runtime targets or fallbacks.
 
+Since the 0.8.x Runtime ownership change (Store 4.1 implementation plan WP7), the Runtime entity's Entity Registry identity is parent/Asset-owned (`config_subentry_id = null`); the Runtime ConfigSubentry owns only the Runtime tracking configuration and whether a Runtime writer exists. Removing Runtime tracking therefore no longer deletes the entity, and adding tracking again for the same Asset reuses the same registry entry, `entity_id`, and unique ID. Exposure moves an installed subentry-owned Runtime entity to the parent in place, preserving its entity ID, unique ID, name, icon, area, `disabled_by`, and `hidden_by`, with the same compensating rollback as every other placement change.
+
 ## Exposure registry migration and recovery
 
 The 0.6.0 registry migration is deliberately separate from Asset Store migration and from the existing 0.4.x entity unique-ID migration. Setup order is:
@@ -460,7 +462,7 @@ The 0.6.0 registry migration is deliberately separate from Asset Store migration
 6. Build the complete read-only 0.6.0 exposure plan.
 7. Ensure deterministic Asset Devices.
 8. Reparent existing Lifecycle entities to the parent ConfigEntry and Asset Device.
-9. Relink existing Runtime entities to the Asset Device while preserving their Runtime subentry.
+9. Relink existing Runtime entities to the Asset Device and, since WP7, to the parent ConfigEntry (`config_subentry_id = null`).
 10. Publish `runtime_data` and forward sensor platform setup.
 11. Create any missing parent-owned exposure entities and register the centralized relationship listener.
 
@@ -545,7 +547,7 @@ Responsibilities are now separate:
 | Step | Owns | Does not do |
 |---|---|---|
 | Legacy entity migration (`migration.py`) | legacy entity discovery, the 0.4.x unique-ID move to Asset UUID-based unique IDs, the ambiguity check that refuses to merge a legacy and an Asset Core entity, and the stale-device warning | change `device_id` or `config_subentry_id` of any entity |
-| Exposure reconciliation (`exposure.py`) | canonical placement: every entity on its Asset Device, Lifecycle and the other Asset exposure entities parent-owned, Runtime in its Runtime subentry, with compensating rollback | change unique IDs |
+| Exposure reconciliation (`exposure.py`) | canonical placement: every entity on its Asset Device, Lifecycle, Runtime (since WP7; before it, the Runtime subentry), and the other Asset exposure entities parent-owned, with compensating rollback | change unique IDs |
 | Home Assistant entity platform | the same device and config subentry when the sensor platform adds each entity | |
 
 Before 0.7.7 the migration also attached each Lifecycle entity to the external Home Assistant device and the Purchase subentry that a configuration lists, and each Runtime entity to that external device, even though exposure then moved them straight back. Every setup and reload therefore wrote those placements twice. If exposure then failed, the temporary placement stayed: removing that Purchase in this state made Home Assistant delete the Lifecycle entity from the Entity Registry, and exposure's rollback restored the temporary placement instead of the one setup started from. Since 0.7.7:
@@ -725,7 +727,7 @@ Frozen summary (the canonical document is authoritative):
 - **Home Assistant.** Archive and Restore refresh entities and Repairs through an integration-local refresh, without a parent ConfigEntry reload. Maintenance entities of an archived Asset report no active projection, never a false `off`. Stale-reference Repairs are suppressed while archived. An archived Asset with a resolving Runtime ConfigSubentry at setup is quarantined with its own Repair instead of failing the entry. The Runtime entity's registry identity becomes Asset/parent-owned so it survives removal of the Runtime ConfigSubentry.
 - **Migration.** Store 3.1 migrates to Store 4.1 after a read-only exact-shape preflight of the Store 3.1 Asset and Purchase records. Every Asset receives `archived_at = null` and Maintenance starts empty.
 
-Until the implementation lands, the current behavior described elsewhere in this document is unchanged, including the Runtime entity's Runtime-subentry ownership in [0.7.7 Entity Registry placement ownership](#077-entity-registry-placement-ownership) and the reload after each saved change.
+Until the implementation lands, the current behavior described elsewhere in this document is unchanged, including the reload after each saved change. The Runtime entity's parent-owned Entity Registry identity is already in effect (WP7); see [Exposure registry migration and recovery](#exposure-registry-migration-and-recovery).
 
 The dashboard's existing "Archived" inventory group is only a presentation of Lifecycle `retired`, `disposed`, and `lost` and has no connection to Asset Archive. A future user interface uses distinct labels for the two concepts.
 

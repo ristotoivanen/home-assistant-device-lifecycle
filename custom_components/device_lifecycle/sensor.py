@@ -445,10 +445,9 @@ async def async_setup_entry(
             )
 
             if runtime_entities:
-                async_add_entities(
-                    runtime_entities,
-                    config_subentry_id=subentry.subentry_id,
-                )
+                # Parent-owned: the Runtime subentry owns only the tracking
+                # configuration, so removing it keeps the entity's identity.
+                async_add_entities(runtime_entities)
 
 
 def _remove_unexpected_subentry_entities(

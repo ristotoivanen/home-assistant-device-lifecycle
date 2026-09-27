@@ -614,10 +614,11 @@ async def test_historical_installations_upgrade_to_canonical_placement(
         asset_device.id,
         None,
     )
+    # Since WP7 the Runtime entity is parent-owned.
     assert _placement(hass, runtime_unique_id(asset_uuid)) == (
         runtime_entity_id,
         asset_device.id,
-        _subentry_id(entry, SUBENTRY_TYPE_RUNTIME),
+        None,
     )
     assert entity_registry.async_get(lifecycle_entity_id).name == "Kept name"
     assert manager.runtime_total_seconds(asset_uuid) == expected_total

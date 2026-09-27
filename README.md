@@ -492,6 +492,8 @@ While active, Runtime checkpoints to Asset Store every five minutes. It also che
 
 Runtime configuration remains owned by its Runtime subentry, and the external primary relationship remains its configured target. In 0.6.0 only the entity's Device Registry placement changes to the owned Asset Device. Runtime unique ID, entity ID, subentry ID, total, source behavior, initialization, restore import, thresholds, hysteresis, units, precision, state class, checkpointing, and CAS behavior are unchanged.
 
+In the 0.8.x development line the Runtime entity's Entity Registry identity is parent-owned instead: the Runtime configuration still decides whether Runtime is tracked and how, but removing it keeps the Runtime entity, its entity ID, and its history, and adding Runtime tracking again for the same device reuses that entity. The Runtime total continues from where it stopped; time while tracking was removed is not added.
+
 ## Upgrade notes
 
 ### Upgrading from 0.7.6 to 0.7.7

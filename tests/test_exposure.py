@@ -457,7 +457,9 @@ async def test_lifecycle_and_runtime_registry_ownership_migrates_in_place(
     assert migrated_lifecycle.name == "User lifecycle name"
     assert migrated_runtime.entity_id == runtime_entity_id
     assert migrated_runtime.unique_id == runtime_unique_id(ASSET_UUID)
-    assert migrated_runtime.config_subentry_id == runtime_subentry.subentry_id
+    # Since WP7 the Runtime entity is parent-owned; the subentry keeps only
+    # the tracking configuration.
+    assert migrated_runtime.config_subentry_id is None
     assert migrated_runtime.device_id == asset_device.id
     assert manager.runtime_total_seconds(ASSET_UUID) == 1234
     assert manager._data == store_before
@@ -880,10 +882,7 @@ async def test_partial_migration_after_rollback_failure_recovers_on_reload(
     assert entity_registry.async_get(lifecycle.entity_id).device_id == partial_device.id
     assert entity_registry.async_get(lifecycle.entity_id).config_subentry_id is None
     assert entity_registry.async_get(runtime.entity_id).device_id == partial_device.id
-    assert (
-        entity_registry.async_get(runtime.entity_id).config_subentry_id
-        == runtime_subentry.subentry_id
-    )
+    assert entity_registry.async_get(runtime.entity_id).config_subentry_id is None
     assert manager._data == store_before
     assert manager.runtime_total_seconds(ASSET_UUID) == 900
     assert (
@@ -1143,5 +1142,5 @@ async def test_direct_legacy_upgrade_runs_identity_then_exposure_migration(
     assert lifecycle.config_subentry_id is None
     assert runtime.entity_id == runtime_entity_id
     assert runtime.device_id == asset_device.id
-    assert runtime.config_subentry_id == runtime_subentry.subentry_id
+    assert runtime.config_subentry_id is None
     assert manager._data == store_before

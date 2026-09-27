@@ -1588,11 +1588,12 @@ async def test_runtime_create_reload_persists_correct_data_title_and_entity(
     assert entity_id is not None
     registry_entry = entity_registry.async_get(entity_id)
     assert registry_entry is not None
-    assert registry_entry.config_subentry_id == subentry.subentry_id
+    # Parent-owned since WP7: the subentry owns only the tracking config.
+    assert registry_entry.config_subentry_id is None
     assert hass.states.get(entity_id) is not None
 
 
-async def test_runtime_remove_reloads_once_and_removes_entity_cleanly(
+async def test_runtime_remove_reloads_once_and_keeps_entity_identity(
     hass: HomeAssistant,
     hass_storage: dict,
     device_registry: dr.DeviceRegistry,
@@ -1600,9 +1601,10 @@ async def test_runtime_remove_reloads_once_and_removes_entity_cleanly(
     asset_store_data: AssetStoreData,
     runtime_subentry_data: dict,
 ) -> None:
-    """0.7.2 WP6 / 072-08 Runtime Case I: removing a Runtime subentry reloads
-    exactly once and the Runtime Hours entity is fully removed from the
-    Entity Registry via HA core's own async_clear_config_subentry."""
+    """0.7.2 WP6 / 072-08 Runtime Case I, revised by WP7: removing a Runtime
+    subentry reloads exactly once. The Runtime Hours entity is parent-owned,
+    so HA core's async_clear_config_subentry no longer deletes it: the same
+    Entity Registry identity stays, and no Runtime writer remains."""
     entry, subentry_id = await _setup_runtime_entry(
         hass,
         hass_storage,
@@ -1634,13 +1636,17 @@ async def test_runtime_remove_reloads_once_and_removes_entity_cleanly(
         schedule_reload.assert_called_once_with(entry.entry_id)
 
     assert subentry_id not in entry.subentries
-    assert entity_registry.async_get(entity_id) is None
+    kept = entity_registry.async_get(entity_id)
+    assert kept is not None
+    assert kept.unique_id == expected_unique_id
+    assert kept.config_subentry_id is None
     assert (
         entity_registry.async_get_entity_id(
             Platform.SENSOR, DOMAIN, expected_unique_id
         )
-        is None
+        == entity_id
     )
+    assert entry.runtime_data._runtime_writers == {}
 
 
 async def test_runtime_recreate_after_removal_keeps_stable_unique_id(
@@ -1651,9 +1657,9 @@ async def test_runtime_recreate_after_removal_keeps_stable_unique_id(
     asset_store_data: AssetStoreData,
     runtime_subentry_data: dict,
 ) -> None:
-    """0.7.2 WP6 / 072-08 Runtime Case J: recreating Runtime for the same
-    Asset/source after removal reuses the stable Asset-owned unique_id and
-    does not create a duplicate entity identity."""
+    """0.7.2 WP6 / 072-08 Runtime Case J, revised by WP7: recreating Runtime
+    for the same Asset/source after removal reuses the same Entity Registry
+    entry (unique_id and entity_id) and creates no duplicate identity."""
     entry, subentry_id = await _setup_runtime_entry(
         hass,
         hass_storage,
@@ -1667,12 +1673,10 @@ async def test_runtime_recreate_after_removal_keeps_stable_unique_id(
     )
     device_id = entry.subentries[subentry_id].data[CONF_DEVICE_ID]
     expected_unique_id = runtime_unique_id(ASSET_UUID)
-    assert (
-        entity_registry.async_get_entity_id(
-            Platform.SENSOR, DOMAIN, expected_unique_id
-        )
-        is not None
+    original_entity_id = entity_registry.async_get_entity_id(
+        Platform.SENSOR, DOMAIN, expected_unique_id
     )
+    assert original_entity_id is not None
 
     with _verified_store_readback(hass_storage):
         hass.config_entries.async_remove_subentry(entry, subentry_id)
@@ -1682,7 +1686,7 @@ async def test_runtime_recreate_after_removal_keeps_stable_unique_id(
         entity_registry.async_get_entity_id(
             Platform.SENSOR, DOMAIN, expected_unique_id
         )
-        is None
+        == original_entity_id
     )
 
     original_schedule_reload = hass.config_entries.async_schedule_reload
@@ -1718,7 +1722,7 @@ async def test_runtime_recreate_after_removal_keeps_stable_unique_id(
     recreated_entity_id = entity_registry.async_get_entity_id(
         Platform.SENSOR, DOMAIN, expected_unique_id
     )
-    assert recreated_entity_id is not None
+    assert recreated_entity_id == original_entity_id
     matches = [
         item
         for item in er.async_entries_for_config_entry(entity_registry, entry.entry_id)

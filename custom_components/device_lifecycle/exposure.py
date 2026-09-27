@@ -293,7 +293,11 @@ def build_exposure_migration_plan(
             )
         )
 
-    runtime_subentries = _runtime_subentries_by_asset(entry, assets_by_uuid)
+    # Runtime subentries must still be consistent with the canonical Assets,
+    # but they no longer own the Runtime entity: since WP7 its Entity Registry
+    # identity is parent/Asset-owned so that removing Runtime tracking never
+    # deletes it. The subentry only decides whether a Runtime writer exists.
+    _runtime_subentries_by_asset(entry, assets_by_uuid)
     unique_ids_by_kind: dict[ExposureEntityKind, dict[str, str]] = {
         "lifecycle": {
             lifecycle_unique_id(asset_uuid): asset_uuid for asset_uuid in assets_by_uuid
@@ -380,14 +384,6 @@ def build_exposure_migration_plan(
                 unique_id=unique_id,
             )
 
-            desired_subentry_id = (
-                runtime_subentries.get(asset_uuid) if kind == "runtime" else None
-            )
-            # A stale Runtime entity with no active Runtime subentry is left for
-            # the existing platform cleanup; there is no subentry to infer.
-            if kind == "runtime" and desired_subentry_id is None:
-                continue
-
             update_plans.append(
                 EntityRegistryUpdatePlan(
                     kind=kind,
@@ -397,7 +393,7 @@ def build_exposure_migration_plan(
                     original_device_id=registry_entry.device_id,
                     original_config_subentry_id=(registry_entry.config_subentry_id),
                     original_disabled_by=registry_entry.disabled_by,
-                    desired_config_subentry_id=desired_subentry_id,
+                    desired_config_subentry_id=None,
                     enable_integration_disabled=(
                         kind == "replacement"
                         and asset_uuid in active_replacement_asset_uuids
