@@ -53,6 +53,7 @@ from custom_components.device_lifecycle.models import AssetStoreData
 from .conftest import SOURCE_ENTITY_ID, capture_reloads
 from .test_exposure_options_reload import (
     _power_source_input,
+    _readback_bridge_through_teardown,  # noqa: F401 - autouse fixture
     _setup_runtime_entry,
     _verified_store_readback,
 )
@@ -90,8 +91,12 @@ OPTIONS_LABELS = {
     "en": {
         "add_related_device": "Add and return",
         "asset_deployment": "Save and return",
+        "archived_assets": "Open",
+        "archived_void_replacement": "Continue",
         "asset_lifecycle": "Save and return",
         "change_asset_purchase": "Save and return",
+        "confirm_archive_asset": "Archive device",
+        "confirm_restore_asset": "Restore device",
         "confirm_disposed": "Save and return",
         "confirm_not_deployed": "Save and return",
         "confirm_void_replacement": "Void and return",
@@ -106,12 +111,35 @@ OPTIONS_LABELS = {
         "quick_add_replacement": "Continue",
         "remove_related_device": "Remove and return",
         "replacement_replaces": "Save and return",
+        "maintenance_open_schedule": "Open",
+        "maintenance_add_schedule": "Continue",
+        "maintenance_schedule_reminder": "Continue",
+        "maintenance_start_known": "Save and return",
+        "maintenance_edit_schedule": "Continue",
+        "maintenance_delete_schedule": "Delete and return",
+        "maintenance_add_calendar": "Continue",
+        "maintenance_add_runtime": "Continue",
+        "maintenance_remove_interval": "Remove and return",
+        "maintenance_confirm_destroy_baseline": "Remove permanently",
+        "maintenance_record": "Continue",
+        "maintenance_event_just_now": "Save and return",
+        "maintenance_event_earlier": "Save and return",
+        "maintenance_event_lock": "Continue",
+        "maintenance_event_ambiguity": "Save anyway",
+        "maintenance_history_filter": "Continue",
+        "maintenance_select_event": "Continue",
+        "maintenance_void_event_confirm": "Void and return",
+        "maintenance_correct_event_form": "Save correction",
     },
     "fi": {
         "add_related_device": "Lisää ja palaa",
         "asset_deployment": "Tallenna ja palaa",
+        "archived_assets": "Avaa",
+        "archived_void_replacement": "Jatka",
         "asset_lifecycle": "Tallenna ja palaa",
         "change_asset_purchase": "Tallenna ja palaa",
+        "confirm_archive_asset": "Arkistoi laite",
+        "confirm_restore_asset": "Palauta laite",
         "confirm_disposed": "Tallenna ja palaa",
         "confirm_not_deployed": "Tallenna ja palaa",
         "confirm_void_replacement": "Mitätöi ja palaa",
@@ -126,6 +154,25 @@ OPTIONS_LABELS = {
         "quick_add_replacement": "Jatka",
         "remove_related_device": "Poista ja palaa",
         "replacement_replaces": "Tallenna ja palaa",
+        "maintenance_open_schedule": "Avaa",
+        "maintenance_add_schedule": "Jatka",
+        "maintenance_schedule_reminder": "Jatka",
+        "maintenance_start_known": "Tallenna ja palaa",
+        "maintenance_edit_schedule": "Jatka",
+        "maintenance_delete_schedule": "Poista ja palaa",
+        "maintenance_add_calendar": "Jatka",
+        "maintenance_add_runtime": "Jatka",
+        "maintenance_remove_interval": "Poista ja palaa",
+        "maintenance_confirm_destroy_baseline": "Poista pysyvästi",
+        "maintenance_record": "Jatka",
+        "maintenance_event_just_now": "Tallenna ja palaa",
+        "maintenance_event_earlier": "Tallenna ja palaa",
+        "maintenance_event_lock": "Jatka",
+        "maintenance_event_ambiguity": "Tallenna silti",
+        "maintenance_history_filter": "Jatka",
+        "maintenance_select_event": "Jatka",
+        "maintenance_void_event_confirm": "Mitätöi ja palaa",
+        "maintenance_correct_event_form": "Tallenna korjaus",
     },
 }
 
@@ -268,7 +315,15 @@ def test_a_saved_edit_is_confirmed_in_words(language: str) -> None:
     }[language]
 
     for kind, text in expected.items():
-        assert subentries[kind]["abort"] == {"reconfigure_successful": text}
+        assert subentries[kind]["abort"]["reconfigure_successful"] == text
+    # Since WP13 a Runtime flow can also stop because the parent is not
+    # loaded or the device is archived; neither is a saved edit.
+    assert set(subentries["purchase"]["abort"]) == {"reconfigure_successful"}
+    assert set(subentries["runtime"]["abort"]) == {
+        "reconfigure_successful",
+        "entry_not_loaded",
+        "runtime_asset_archived",
+    }
 
 
 # --- The label matches what the step does ------------------------------------

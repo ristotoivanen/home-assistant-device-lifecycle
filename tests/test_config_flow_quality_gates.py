@@ -70,7 +70,13 @@ from custom_components.device_lifecycle.const import (
 )
 from custom_components.device_lifecycle.storage import AssetStoreError
 
-from .conftest import ASSET_UUID, DEVICE_ID, PURCHASE_SUBENTRY_ID, PURCHASE_UUID
+from .conftest import (
+    ASSET_UUID,
+    DEVICE_ID,
+    PURCHASE_SUBENTRY_ID,
+    PURCHASE_UUID,
+    loaded_entry,
+)
 from .test_options_flow import _manager, _options_flow
 
 
@@ -639,7 +645,8 @@ async def test_runtime_subentry_validation_and_recovery_branches(
     """Runtime two-step create/reconfigure paths surface every authoritative error."""
     flow = RuntimeSubentryFlow()
     flow.hass = hass
-    entry = SimpleNamespace(subentries={})
+    entry = loaded_entry(hass)
+    flow._get_entry = lambda: entry  # type: ignore[method-assign]
     with patch.object(flow, "_get_entry", return_value=entry):
         initial = await flow.async_step_user()
     assert initial["step_id"] == "user"

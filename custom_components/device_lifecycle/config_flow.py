@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Coroutine
+from collections import Counter
+from collections.abc import Callable, Coroutine, Mapping
 from datetime import date
+from decimal import Decimal
 from math import isfinite
 from typing import Any, cast
 from uuid import uuid4
@@ -29,6 +31,7 @@ from homeassistant.helpers import translation as translation_helper
 from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_conversion import PowerConverter
 
+from .canonical import CanonicalValueError, decimal_from_input, format_decimal
 from .const import (
     CONF_ASSET_NAME,
     CONF_ASSET_UUID,
@@ -38,7 +41,30 @@ from .const import (
     CONF_CONFIRM_DISPOSED,
     CONF_CONFIRM_AREA_CLEAR,
     CONF_CONFIRM_QUICK_ADD,
+    CONF_CONFIRM_ARCHIVE,
+    CONF_CONFIRM_RESTORE,
     CONF_CONFIRM_VOID,
+    CONF_CALENDAR_UNIT,
+    CONF_CALENDAR_VALUE,
+    CONF_CONFIRM_BASELINE_LOCK,
+    CONF_CONFIRM_DELETE_SCHEDULE,
+    CONF_CONFIRM_DESTROY_BASELINE,
+    CONF_CONFIRM_REMOVE_INTERVAL,
+    CONF_DATE_FROM,
+    CONF_DATE_TO,
+    CONF_EVENT_RUNTIME_HOURS,
+    CONF_EVENT_TITLE,
+    CONF_EVENT_UUID,
+    CONF_LEAD_DAYS,
+    CONF_PERFORMED_DATE,
+    CONF_REMINDER_MESSAGE,
+    CONF_RUNTIME_HOURS,
+    CONF_SCHEDULE_NAME,
+    CONF_SCHEDULE_UUID,
+    CONF_SCHEDULE_UUIDS,
+    CONF_STARTING_DATE,
+    CONF_STARTING_RUNTIME_HOURS,
+    MAINTENANCE_HISTORY_SUMMARY_LIMIT,
     CONF_CURRENCY,
     CONF_DEPLOYMENT_STATE,
     CONF_DEVICE_ID,
@@ -111,10 +137,34 @@ from .const import (
     WARRANTY_TWO_YEARS,
     WARRANTY_TYPES,
 )
-from .models import AssetData, PurchaseData, ReplacementRecordData
+from .maintenance_mutations import (
+    AddIntervalRequest,
+    CalendarIntervalInput,
+    CorrectEventRequest,
+    CreateScheduleRequest,
+    DeleteScheduleRequest,
+    EditScheduleRequest,
+    InitialAnchorInput,
+    IntervalDimension,
+    MutationOutcome,
+    PreparationReminderInput,
+    RecordEventRequest,
+    RemoveIntervalRequest,
+    SetEnabledRequest,
+    SetInitialAnchorRequest,
+    VoidEventRequest,
+)
+from .models import (
+    AssetData,
+    MaintenanceEventData,
+    MaintenanceScheduleData,
+    PurchaseData,
+    ReplacementRecordData,
+)
 from .storage import (
     FIELD_SOURCE_HOME_ASSISTANT,
     FIELD_SOURCE_USER,
+    ArchiveOutcome,
     AssetStoreError,
     AssetStoreManager,
     QuickAssetCreateRequest,
@@ -698,6 +748,98 @@ def _view_asset_label(asset: AssetData) -> str:
     return _summary_line(_short_name(asset["name"]), asset["asset_id"])
 
 
+# A Maintenance Event's presented state; derived, never persisted.
+_EVENT_ACTIVE = "active"
+_EVENT_VOIDED = "voided"
+_EVENT_CORRECTED = "corrected"
+_SECONDS_PER_HOUR = Decimal(3600)
+_HOURS_DISPLAY = Decimal("0.000001")
+
+
+def _colliding(labels: dict[str, str]) -> set[str]:
+    """The values whose labels read alike, compared ignoring case."""
+    counts = Counter(label.casefold() for label in labels.values())
+    return {value for value, label in labels.items() if counts[label.casefold()] > 1}
+
+
+def _unique_labels(
+    labels: dict[str, str],
+    readable: Callable[[str], str] | None = None,
+) -> dict[str, str]:
+    """Make every label distinct, touching only labels that read alike.
+
+    ``labels`` maps a canonical UUID to its ordinary label. Labels that read
+    alike first get ``readable(value)``, once. Then, while any labels still
+    read alike, each of them gets its own UUID, and the whole set is checked
+    again.
+
+    This ends with every label distinct: two labels that read alike and
+    both get their own, different UUID appended differ right after their
+    common text, and later passes only append, so that pair never reads
+    alike again. Every pass therefore separates at least one pair that has
+    never been separated before; with n values there are at most
+    n * (n - 1) / 2 such pairs, so the loop stops, and it stops only when
+    no two labels read alike. The result depends only on the values and
+    their labels, never on their order.
+    """
+    result = dict(labels)
+    if readable is not None:
+        for value in _colliding(result):
+            result[value] = f"{result[value]} ({readable(value)})"
+    while colliding := _colliding(result):
+        for value in colliding:
+            result[value] = f"{result[value]} ({value})"
+    return result
+
+
+def _hours_selector() -> selector.NumberSelector:
+    """Hours of Runtime as typed by the person."""
+    return selector.NumberSelector(
+        selector.NumberSelectorConfig(
+            min=0, step="any", mode=selector.NumberSelectorMode.BOX
+        )
+    )
+
+
+def _hours_to_seconds(value: Any) -> Decimal | None:
+    """Convert entered hours exactly: never through a binary float product."""
+    try:
+        return decimal_from_input(value) * _SECONDS_PER_HOUR
+    except CanonicalValueError:
+        return None
+
+
+def _hours_value(seconds: str) -> str:
+    """Seconds as hours for a form field, to six decimals."""
+    hours = (Decimal(seconds) / _SECONDS_PER_HOUR).quantize(_HOURS_DISPLAY)
+    return format(hours.normalize(), "f")
+
+
+def _hours_text(seconds: str) -> str:
+    """Seconds as hours for reading, to two decimals."""
+    hours = (Decimal(seconds) / _SECONDS_PER_HOUR).quantize(Decimal("0.01"))
+    return format(hours, "f")
+
+
+def _same_hours(submitted: Any, seconds: str) -> bool:
+    """Whether the hours field still shows the stored Runtime unchanged."""
+    try:
+        return decimal_from_input(submitted) == Decimal(_hours_value(seconds))
+    except CanonicalValueError:
+        return False
+
+
+def _whole_number(value: Any) -> int | None:
+    """A positive whole number from a number field, else None."""
+    try:
+        parsed = decimal_from_input(value)
+    except CanonicalValueError:
+        return None
+    if parsed != parsed.to_integral_value() or parsed < 1:
+        return None
+    return int(parsed)
+
+
 def _purchase_asset_summary(
     entry: ConfigEntry,
     subentry_id: str,
@@ -1045,10 +1187,12 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         return english
 
     def _asset_choices(self) -> list[selector.SelectOptionDict]:
-        """Return every Asset keyed by immutable UUID.
+        """Return every active Asset keyed by immutable UUID.
 
-        Ordered the way the labels read: by display name, case-insensitively,
-        with the Asset ID breaking ties between identically named Assets.
+        These are current-management candidates, so archived Assets are
+        omitted; the Store refuses them again inside the mutation. Ordered
+        the way the labels read: by display name, case-insensitively, with
+        the Asset ID breaking ties between identically named Assets.
         """
         return [
             selector.SelectOptionDict(
@@ -1056,7 +1200,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 label=_asset_label(asset),
             )
             for asset in sorted(
-                self._manager.assets(),
+                self._manager.active_assets(),
                 key=lambda item: (str(item["name"]).casefold(), item["asset_id"]),
             )
         ]
@@ -1080,10 +1224,13 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         ]
 
     def _quick_replacement_choices(self) -> list[selector.SelectOptionDict]:
-        """Return name-first predecessor choices with safe duplicate labels."""
-        assets = self._manager.assets()
+        """Return name-first predecessor choices with safe duplicate labels.
+
+        Only active Assets can be predecessors, but labels are disambiguated
+        against every Asset, archived ones included.
+        """
         name_counts: dict[str, int] = {}
-        for asset in assets:
+        for asset in self._manager.assets():
             name_counts[asset["name"]] = name_counts.get(asset["name"], 0) + 1
         choices = [
             selector.SelectOptionDict(
@@ -1092,7 +1239,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             )
         ]
         for asset in sorted(
-            assets,
+            self._manager.active_assets(),
             key=lambda item: (item["name"].casefold(), item["asset_id"]),
         ):
             choices.append(
@@ -1210,6 +1357,13 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         """Map storage failures to safe flow errors without fabricating data."""
         if isinstance(err, AssetStoreError):
             structured_codes = {
+                "archive_asset_deployed",
+                "archive_runtime_binding_in_progress",
+                "archive_runtime_configured",
+                "archive_runtime_undurable",
+                "archive_runtime_unresolved",
+                "archive_runtime_writer_active",
+                "asset_archived",
                 "asset_missing",
                 "device_already_linked",
                 "device_lifecycle_device_not_allowed",
@@ -1229,6 +1383,25 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 "lifecycle_date_in_future",
                 "lifecycle_date_not_applicable",
                 "persistence_error",
+                "maintenance_anchor_requires_interval",
+                "maintenance_asset_not_found",
+                "maintenance_baseline_locked",
+                "maintenance_confirm_baseline_lock",
+                "maintenance_confirm_destroy_baseline",
+                "maintenance_date_in_future",
+                "maintenance_event_not_active",
+                "maintenance_event_not_found",
+                "maintenance_interval_exists",
+                "maintenance_interval_required",
+                "maintenance_interval_type_change",
+                "maintenance_invalid_request",
+                "maintenance_last_interval",
+                "maintenance_reminder_requires_calendar",
+                "maintenance_replay_conflict",
+                "maintenance_runtime_above_current",
+                "maintenance_schedule_not_found",
+                "maintenance_schedule_other_asset",
+                "maintenance_schedule_referenced",
                 "predecessor_changed",
                 "purchase_changed",
                 "purchase_date_required_for_warranty",
@@ -1244,6 +1417,9 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 "replacement_self_reference",
                 "replacement_successor_conflict",
                 "replacement_void_reason_required",
+                "runtime_asset_archived",
+                "runtime_checkpoint_failed",
+                "runtime_checkpoint_unresolved",
                 "manual_warranty_date_required",
                 "non_physical_device_not_allowed",
                 "service_device_not_allowed",
@@ -2112,7 +2288,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             return self.async_abort(reason="entry_not_loaded")
         return self.async_show_menu(
             step_id="init",
-            menu_options=["quick_add", "manage_asset"],
+            menu_options=["quick_add", "manage_asset", "archived_assets"],
         )
 
     async def async_step_quick_add(
@@ -2521,13 +2697,16 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 )
             quick_predecessor = getattr(self, "_quick_predecessor", None)
             if error_key in {
+                "asset_archived",
                 "asset_missing",
                 "replacement_predecessor_conflict",
             } and quick_predecessor is not None:
                 predecessor = self._manager.asset(
                     quick_predecessor["asset_uuid"]
                 )
-                if predecessor is None:
+                # An archived predecessor is no longer a management candidate,
+                # so its selection is cleared like that of a missing one.
+                if predecessor is None or error_key == "asset_archived":
                     self._quick_details_input[
                         CONF_REPLACEMENT_TARGET_ASSET_UUID
                     ] = NO_REPLACEMENT_SELECTION
@@ -2791,6 +2970,7 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
             "deployment": self._summary_deployment(asset),
             "lifecycle_replacement": self._summary_lifecycle_replacement(asset),
             "ha_devices": self._summary_ha_devices(asset),
+            "maintenance": self._maintenance_hub_summary(asset),
         }
 
     async def async_step_manage_asset_menu(
@@ -2807,6 +2987,11 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         asset = self._manager.asset(asset_uuid)
         if asset is None:
             return self._show_asset_selection(errors={"base": "asset_missing"})
+        if self._manager.asset_archived(asset["asset_uuid"]):
+            # Archived since this flow opened it: its view offers only what
+            # an archived Asset still allows.
+            return await self.async_step_archived_asset()
+        self._archive_context = False
 
         placeholders = {
             **self._hub_placeholders(asset),
@@ -2819,6 +3004,8 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                 "asset_installation_menu",
                 "asset_lifecycle_replacement_menu",
                 "ha_relationship",
+                "maintenance_menu",
+                "confirm_archive_asset",
                 "manage_asset",
             ],
             description_placeholders=placeholders,
@@ -3770,9 +3957,16 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         asset = self._manager.asset(asset_uuid)
         replacement_uuid = getattr(self, "_pending_replacement_uuid", None)
         record = self._manager.replacement_record(replacement_uuid)
+        archive_context = getattr(self, "_archive_context", False)
         if asset is None:
+            if archive_context:
+                return self._show_archived_selection(errors={"base": "asset_missing"})
             return self._show_asset_selection(errors={"base": "asset_missing"})
         if record is None or record["voided_at"] is not None:
+            if archive_context:
+                return self._show_archived_void_form(
+                    asset, errors={"base": "replacement_missing"}
+                )
             return self._show_manage_replacement_form(
                 asset,
                 errors={"base": "replacement_missing"},
@@ -3801,6 +3995,15 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                     if refreshed is None:
                         return self._show_asset_selection(
                             errors={"base": "asset_missing"}
+                        )
+                    if archive_context:
+                        # Voiding is history; the Asset stays archived and
+                        # the person stays in its archived view.
+                        return await self._finish_asset_action(
+                            refreshed,
+                            "asset_replacement_updated",
+                            reload=False,
+                            destination=self.async_step_archived_asset,
                         )
                     return await self._finish_asset_action(
                         refreshed,
@@ -4408,6 +4611,2462 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
         )
 
 
+    # --- Archive and Restore ----------------------------------------------------
+
+    def _archive_blocker_lines(self, blockers: tuple[str, ...]) -> list[str]:
+        """Say what currently prevents archiving, and what resolves it.
+
+        Only a preview: the manager checks everything again on submit.
+        """
+        guidance = {
+            "archive_asset_deployed": (
+                (
+                    "The device is installed. Change its installation to not "
+                    "installed first; archiving never changes it for you."
+                ),
+                (
+                    "Laite on asennettuna. Muuta sen asennustilaksi ensin ei "
+                    "asennettu; arkistointi ei muuta sitä puolestasi."
+                ),
+            ),
+            "archive_runtime_configured": (
+                (
+                    "Runtime tracking is configured for the device. Delete that "
+                    "Runtime tracking configuration first; the device keeps its "
+                    "accumulated Runtime."
+                ),
+                (
+                    "Laitteelle on määritetty käyttötuntiseuranta. Poista "
+                    "seurannan määritys ensin; laite säilyttää kertyneet "
+                    "käyttötuntinsa."
+                ),
+            ),
+            "archive_runtime_binding_in_progress": (
+                (
+                    "Runtime tracking is being set up for the device right now. "
+                    "Finish or cancel that setup, then try again."
+                ),
+                (
+                    "Laitteelle ollaan juuri määrittämässä käyttötuntiseurantaa. "
+                    "Viimeistele tai peruuta määritys ja yritä uudelleen."
+                ),
+            ),
+            "archive_runtime_writer_active": (
+                (
+                    "Runtime tracking for the device is still running. Delete its "
+                    "Runtime tracking configuration first."
+                ),
+                (
+                    "Laitteen käyttötuntiseuranta on yhä käynnissä. Poista "
+                    "seurannan määritys ensin."
+                ),
+            ),
+            "archive_runtime_undurable": (
+                (
+                    "The device's latest Runtime is not saved yet. Archiving "
+                    "saves it first; nothing is estimated or discarded."
+                ),
+                (
+                    "Laitteen viimeisimpiä käyttötunteja ei ole vielä tallennettu. "
+                    "Arkistointi tallentaa ne ensin; mitään ei arvioida eikä "
+                    "hylätä."
+                ),
+            ),
+            "archive_runtime_unresolved": (
+                (
+                    "Some of the device's Runtime could not be saved when its "
+                    "tracking was removed. Reload Device Lifecycle, then try again."
+                ),
+                (
+                    "Osaa laitteen käyttötunneista ei voitu tallentaa, kun sen "
+                    "seuranta poistettiin. Lataa Device Lifecycle uudelleen ja "
+                    "yritä sitten uudelleen."
+                ),
+            ),
+        }
+        if not blockers:
+            return [
+                self._localized_label(
+                    "Nothing currently prevents archiving.",
+                    "Mikään ei tällä hetkellä estä arkistointia.",
+                )
+            ]
+        return [
+            "• " + self._localized_label(*guidance[code])
+            for code in blockers
+            if code in guidance
+        ]
+
+    async def async_step_confirm_archive_asset(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Preview what Archive does and what blocks it, then archive.
+
+        The blockers shown come from the manager's read-only preview; on
+        submit only the manager decides. Runtime that already stopped but is
+        not saved yet is saved first. Deployment and Runtime tracking are
+        never changed here, and nothing reloads.
+        """
+        asset_uuid = getattr(self, "_selected_asset_uuid", None)
+        asset = self._manager.asset(asset_uuid)
+        if asset is None:
+            return self._show_asset_selection(errors={"base": "asset_missing"})
+        if user_input is None and self._manager.asset_archived(asset["asset_uuid"]):
+            return await self.async_step_archived_asset()
+
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            if not user_input.get(CONF_CONFIRM_ARCHIVE):
+                errors[CONF_CONFIRM_ARCHIVE] = "archive_confirmation_required"
+            else:
+                outcome, error = await self._async_archive(asset["asset_uuid"])
+                if error is not None:
+                    errors["base"] = error
+                else:
+                    return await self._finish_asset_action(
+                        asset,
+                        "archive_completed"
+                        if outcome is ArchiveOutcome.CHANGED
+                        else "archive_unchanged",
+                        reload=False,
+                        destination=self.async_step_archived_asset,
+                    )
+
+        blockers = self._manager.archive_blockers(
+            self.config_entry, asset["asset_uuid"]
+        )
+        return self.async_show_form(
+            step_id="confirm_archive_asset",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_CONFIRM_ARCHIVE,
+                        default=False,
+                    ): selector.BooleanSelector()
+                }
+            ),
+            errors=errors,
+            description_placeholders={
+                "asset": _asset_label(asset),
+                "blockers": "\n".join(self._archive_blocker_lines(blockers)),
+            },
+        )
+
+    async def _async_archive(
+        self, asset_uuid: str
+    ) -> tuple[ArchiveOutcome | None, str | None]:
+        """Save pending Runtime of a stopped writer if needed, then archive.
+
+        Finalizing only commits Runtime that is already pending; it never
+        stops tracking, removes configuration, or infers time. The manager's
+        locked Archive checks then decide.
+        """
+        if "archive_runtime_undurable" in self._manager.archive_blockers(
+            self.config_entry, asset_uuid
+        ):
+            try:
+                await self._manager.async_finalize_runtime(asset_uuid)
+            except (AssetStoreError, OSError) as err:
+                return None, self._storage_error_key(err)
+        try:
+            outcome = await self._manager.async_archive_asset(
+                self.config_entry, asset_uuid
+            )
+        except (AssetStoreError, OSError) as err:
+            return None, self._storage_error_key(err)
+        return outcome, None
+
+    def _archived_choices(self) -> list[selector.SelectOptionDict]:
+        """Return archived Assets, ordered and labelled like every selector."""
+        return [
+            selector.SelectOptionDict(
+                value=asset["asset_uuid"],
+                label=_asset_label(asset),
+            )
+            for asset in sorted(
+                self._manager.archived_assets(),
+                key=lambda item: (str(item["name"]).casefold(), item["asset_id"]),
+            )
+        ]
+
+    def _show_archived_selection(
+        self,
+        *,
+        errors: dict[str, str] | None = None,
+    ) -> ConfigFlowResult:
+        """Show the archived-device selector, or say that there are none."""
+        choices = self._archived_choices()
+        if not choices and not errors:
+            errors = {"base": "no_archived_assets"}
+        return self.async_show_form(
+            step_id="archived_assets",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_ASSET_UUID, default=NOT_SELECTED
+                    ): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=[self._not_selected_option(), *choices],
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    )
+                }
+            ),
+            errors=errors or {},
+        )
+
+    async def async_step_archived_assets(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Choose an archived device by its name and Asset ID."""
+        if user_input is not None:
+            asset_uuid = str(user_input.get(CONF_ASSET_UUID) or "")
+            if asset_uuid in ("", NOT_SELECTED):
+                return self._show_archived_selection(
+                    errors={CONF_ASSET_UUID: "archived_asset_required"}
+                )
+            if asset_uuid not in {
+                choice["value"] for choice in self._archived_choices()
+            }:
+                return self._show_archived_selection(
+                    errors={"base": "asset_missing"}
+                )
+            self._selected_asset_uuid = asset_uuid
+            self._last_result = None
+            return await self.async_step_archived_asset()
+        return self._show_archived_selection()
+
+    def _archived_facts(self, asset: AssetData) -> list[str]:
+        """The facts an archived device is still shown with."""
+        facts = [
+            self._localized_label(
+                f"Asset ID: {asset['asset_id']}",
+                f"Laitetunnus: {asset['asset_id']}",
+            ),
+            self._localized_label(
+                "Archived: removed from active management",
+                "Arkistoitu: poistettu aktiivihallinnasta",
+            ),
+        ]
+        category = _short_name(" ".join(str(asset.get(CONF_CATEGORY) or "").split()))
+        if category:
+            facts.append(
+                self._localized_label(f"Category: {category}", f"Luokka: {category}")
+            )
+        return [*facts, *self._lifecycle_facts(asset)]
+
+    async def async_step_archived_asset(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Show an archived device: its facts, Restore, and history only.
+
+        No current-management action is offered here.
+        """
+        asset = self._manager.asset(getattr(self, "_selected_asset_uuid", None))
+        if asset is None:
+            return self._show_archived_selection(errors={"base": "asset_missing"})
+        if not self._manager.asset_archived(asset["asset_uuid"]):
+            # Restored since this view was opened: back to active management.
+            return await self.async_step_manage_asset_menu()
+        self._archive_context = True
+        menu_options = ["confirm_restore_asset"]
+        if self._manager.replacement_records_for_asset(asset["asset_uuid"]):
+            menu_options.append("archived_void_replacement")
+        # History only: correcting recorded maintenance stays possible.
+        menu_options.append("maintenance_history")
+        menu_options.append("archived_assets")
+        return self.async_show_menu(
+            step_id="archived_asset",
+            menu_options=menu_options,
+            description_placeholders={
+                "asset": _view_asset_label(asset),
+                "result": await self._result_message(asset),
+                "facts": "\n".join(self._archived_facts(asset)),
+            },
+        )
+
+    def _show_archived_void_form(
+        self,
+        asset: AssetData,
+        *,
+        errors: dict[str, str] | None = None,
+    ) -> ConfigFlowResult:
+        """Choose one active Replacement of an archived device to void."""
+        options = [
+            selector.SelectOptionDict(
+                value=record["replacement_uuid"],
+                label=self._replacement_record_label(record),
+            )
+            for record in self._manager.replacement_records_for_asset(
+                asset["asset_uuid"]
+            )
+        ]
+        return self.async_show_form(
+            step_id="archived_void_replacement",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_REPLACEMENT_UUID): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=options,
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    )
+                }
+            ),
+            errors=errors or {},
+            description_placeholders={"asset": _asset_label(asset)},
+        )
+
+    async def async_step_archived_void_replacement(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Void a Replacement of an archived device: history, not management."""
+        asset = self._manager.asset(getattr(self, "_selected_asset_uuid", None))
+        if asset is None:
+            return self._show_archived_selection(errors={"base": "asset_missing"})
+        records = self._manager.replacement_records_for_asset(asset["asset_uuid"])
+        if not records:
+            return await self.async_step_archived_asset()
+        if user_input is None:
+            return self._show_archived_void_form(asset)
+        replacement_uuid = str(user_input.get(CONF_REPLACEMENT_UUID) or "")
+        if replacement_uuid not in {record["replacement_uuid"] for record in records}:
+            return self._show_archived_void_form(
+                asset, errors={"base": "replacement_missing"}
+            )
+        self._archive_context = True
+        self._pending_replacement_uuid = replacement_uuid
+        return await self.async_step_confirm_void_replacement()
+
+    async def async_step_confirm_restore_asset(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Explain what Restore does and does not do, then restore.
+
+        No Runtime precondition; nothing is recreated, repaired, or reloaded.
+        """
+        asset = self._manager.asset(getattr(self, "_selected_asset_uuid", None))
+        if asset is None:
+            return self._show_archived_selection(errors={"base": "asset_missing"})
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            if not user_input.get(CONF_CONFIRM_RESTORE):
+                errors[CONF_CONFIRM_RESTORE] = "restore_confirmation_required"
+            else:
+                try:
+                    outcome = await self._manager.async_restore_asset(
+                        asset["asset_uuid"]
+                    )
+                except (AssetStoreError, OSError) as err:
+                    errors["base"] = self._storage_error_key(err)
+                else:
+                    return await self._finish_asset_action(
+                        asset,
+                        "restore_completed"
+                        if outcome is ArchiveOutcome.CHANGED
+                        else "restore_unchanged",
+                        reload=False,
+                    )
+        elif not self._manager.asset_archived(asset["asset_uuid"]):
+            return await self.async_step_manage_asset_menu()
+        return self.async_show_form(
+            step_id="confirm_restore_asset",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_CONFIRM_RESTORE,
+                        default=False,
+                    ): selector.BooleanSelector()
+                }
+            ),
+            errors=errors,
+            description_placeholders={"asset": _asset_label(asset)},
+        )
+
+
+    # --- Maintenance ------------------------------------------------------------
+    #
+    # Every write is one request to ``async_mutate_maintenance``; the pure
+    # Maintenance layer owns every rule and the Store publish refreshes the
+    # entities, so nothing here reloads. The flow keeps only identities and
+    # the person's draft input between steps, and re-reads everything else.
+
+    def _maintenance_state_label(self, state: str) -> str:
+        labels = {
+            "ok": ("OK", "Kunnossa"),
+            "unknown": ("Unknown", "Tuntematon"),
+            "due": ("Due", "Ajankohtainen"),
+            "overdue": ("Overdue", "Myöhässä"),
+            "disabled": ("Disabled", "Pois käytöstä"),
+        }
+        return self._localized_label(*labels.get(state, (state, state)))
+
+    def _calendar_interval_text(self, value: int, unit: str) -> str:
+        english = {"days": "day(s)", "months": "month(s)", "years": "year(s)"}
+        finnish = {"days": "pv", "months": "kk", "years": "v"}
+        return self._localized_label(
+            f"every {value} {english.get(unit, unit)}",
+            f"{value} {finnish.get(unit, unit)} välein",
+        )
+
+    def _runtime_interval_text(self, seconds: str) -> str:
+        hours = _hours_text(seconds)
+        return self._localized_label(
+            f"every {hours} h of Runtime", f"{hours} käyttötunnin välein"
+        )
+
+    def _schedule_interval_text(self, schedule: MaintenanceScheduleData) -> str:
+        parts = []
+        calendar = schedule["calendar_interval"]
+        if calendar is not None:
+            parts.append(self._calendar_interval_text(calendar["value"], calendar["unit"]))
+        if schedule["runtime_interval_seconds"] is not None:
+            parts.append(self._runtime_interval_text(schedule["runtime_interval_seconds"]))
+        return self._localized_label(" or ", " tai ").join(parts)
+
+    def _schedule_status(self, schedule: MaintenanceScheduleData) -> tuple[str, str]:
+        """Return the presented state and a known calendar due date, or ''."""
+        projection = self._manager.maintenance_projection(schedule["schedule_uuid"])
+        if projection is None:
+            return "unknown", ""
+        if not projection.active:
+            if not schedule["enabled"]:
+                return "disabled", ""
+            return "unknown", ""
+        due = ""
+        if projection.calendar is not None and projection.calendar.due is not None:
+            due = projection.calendar.due.isoformat()
+        return str(projection.combined_state), due
+
+    def _schedule_summary_line(self, schedule: MaintenanceScheduleData) -> str:
+        state, due = self._schedule_status(schedule)
+        parts = [
+            _short_name(schedule["name"]),
+            self._maintenance_state_label(state),
+        ]
+        if due:
+            parts.append(
+                self._localized_label(
+                    f"due {self._localized_date(due)}",
+                    f"erääntyy {self._localized_date(due)}",
+                )
+            )
+        return "• " + " · ".join(parts)
+
+    def _maintenance_hub_summary(self, asset: AssetData) -> str:
+        """One hub row line: how many Schedules and how many need attention."""
+        schedules = self._manager.maintenance_schedules_for_asset(asset["asset_uuid"])
+        if not schedules:
+            return self._localized_label("No schedules", "Ei huoltoaikatauluja")
+        attention = sum(
+            1
+            for schedule in schedules
+            if self._schedule_status(schedule)[0] in ("due", "overdue")
+        )
+        return _summary_line(
+            self._localized_label(
+                f"Schedules: {len(schedules)}", f"Aikatauluja: {len(schedules)}"
+            ),
+            self._localized_label(
+                f"Due or overdue: {attention}", f"Ajankohtaisia: {attention}"
+            ),
+        )
+
+    def _maintenance_asset(self) -> AssetData | None:
+        return self._manager.asset(getattr(self, "_selected_asset_uuid", None))
+
+    async def _maintenance_active_guard(
+        self,
+    ) -> tuple[AssetData | None, ConfigFlowResult | None]:
+        """Return the active Asset, or where to go instead.
+
+        An archived Asset never reaches current management: it goes to its
+        archived view, which offers only History.
+        """
+        asset = self._maintenance_asset()
+        if asset is None:
+            return None, self._show_asset_selection(errors={"base": "asset_missing"})
+        if self._manager.asset_archived(asset["asset_uuid"]):
+            if (
+                getattr(self, "_event_draft", None) is not None
+                or getattr(self, "_schedule_draft", None) is not None
+                or getattr(self, "_anchor_context", None) is not None
+            ):
+                # Archived while something was being entered: nothing saved.
+                self._last_result = "maintenance_archived_meanwhile"
+            self._event_draft = None
+            self._schedule_draft = None
+            self._anchor_context = None
+            return None, await self.async_step_archived_asset()
+        return asset, None
+
+    def _selected_schedule(
+        self, asset: AssetData
+    ) -> MaintenanceScheduleData | None:
+        schedule = self._manager.maintenance_schedule(
+            getattr(self, "_maintenance_schedule_uuid", None)
+        )
+        if schedule is None or schedule["asset_uuid"] != asset["asset_uuid"]:
+            return None
+        return schedule
+
+    async def _maintenance_schedule_guard(
+        self,
+    ) -> tuple[
+        AssetData | None, MaintenanceScheduleData | None, ConfigFlowResult | None
+    ]:
+        """Return the active Asset and its selected Schedule, or a redirect."""
+        asset, redirect = await self._maintenance_active_guard()
+        if redirect is not None or asset is None:
+            return None, None, redirect
+        schedule = self._selected_schedule(asset)
+        if schedule is None:
+            self._last_result = "maintenance_schedule_missing"
+            return None, None, await self.async_step_maintenance_menu()
+        return asset, schedule, None
+
+    async def _maintenance_mutate(
+        self, request: Any
+    ) -> tuple[MutationOutcome | None, str | None, ConfigFlowResult | None]:
+        """Send one request; return its outcome, an error key, or a redirect.
+
+        CHANGED, NO_OP, and REPLAY are successes. An Asset archived since the
+        form was shown sends the person to its archived view.
+        """
+        try:
+            result = await self._manager.async_mutate_maintenance(request)
+        except (AssetStoreError, OSError) as err:
+            if isinstance(err, AssetStoreError) and err.code == "asset_archived":
+                self._event_draft = None
+                self._schedule_draft = None
+                self._last_result = "maintenance_archived_meanwhile"
+                return None, None, await self.async_step_archived_asset()
+            return None, self._storage_error_key(err), None
+        return result.outcome, None, None
+
+    async def _finish_maintenance(
+        self,
+        asset: AssetData,
+        outcome: MutationOutcome,
+        changed_key: str,
+        destination: Callable[[], Coroutine[Any, Any, ConfigFlowResult]],
+    ) -> ConfigFlowResult:
+        """Report the outcome where the person continues; never reload."""
+        key = (
+            "maintenance_unchanged" if outcome is MutationOutcome.NO_OP else changed_key
+        )
+        return await self._finish_asset_action(
+            asset, key, reload=False, destination=destination
+        )
+
+    async def async_step_maintenance_menu(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Show an active Asset's Schedules and the Maintenance actions."""
+        asset, redirect = await self._maintenance_active_guard()
+        if redirect is not None or asset is None:
+            return redirect  # type: ignore[return-value]
+        self._archive_context = False
+        schedules = self._manager.maintenance_schedules_for_asset(asset["asset_uuid"])
+        lines = [self._schedule_summary_line(schedule) for schedule in schedules]
+        menu_options = ["maintenance_add_schedule"]
+        if schedules:
+            menu_options.append("maintenance_open_schedule")
+        menu_options.extend(
+            ["maintenance_record", "maintenance_history", "manage_asset_menu"]
+        )
+        return self.async_show_menu(
+            step_id="maintenance_menu",
+            menu_options=menu_options,
+            description_placeholders={
+                "asset": _view_asset_label(asset),
+                "result": await self._result_message(asset),
+                "schedules": "\n".join(lines)
+                or self._localized_label(
+                    "No maintenance schedules yet.",
+                    "Huoltoaikatauluja ei ole vielä.",
+                ),
+            },
+        )
+
+    # Schedule selection and view
+
+    def _schedule_choices(self, asset: AssetData) -> list[selector.SelectOptionDict]:
+        """This Asset's Schedules by name, every label distinct.
+
+        A shared name gets its interval; labels that still match get the
+        Schedule's identity, the only permanent distinction it has.
+        """
+        schedules = self._manager.maintenance_schedules_for_asset(asset["asset_uuid"])
+        by_uuid = {schedule["schedule_uuid"]: schedule for schedule in schedules}
+        labels = _unique_labels(
+            {uuid: _short_name(schedule["name"]) for uuid, schedule in by_uuid.items()},
+            lambda uuid: self._schedule_interval_text(by_uuid[uuid]),
+        )
+        return [
+            selector.SelectOptionDict(value=uuid, label=labels[uuid])
+            for uuid in by_uuid
+        ]
+
+    def _show_open_schedule_form(
+        self, asset: AssetData, *, errors: dict[str, str] | None = None
+    ) -> ConfigFlowResult:
+        return self.async_show_form(
+            step_id="maintenance_open_schedule",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_SCHEDULE_UUID, default=NOT_SELECTED
+                    ): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=[
+                                self._not_selected_option(),
+                                *self._schedule_choices(asset),
+                            ],
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    )
+                }
+            ),
+            errors=errors or {},
+            description_placeholders={"asset": _asset_label(asset)},
+        )
+
+    async def async_step_maintenance_open_schedule(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Choose one of this Asset's Schedules; nothing is preselected."""
+        asset, redirect = await self._maintenance_active_guard()
+        if redirect is not None or asset is None:
+            return redirect  # type: ignore[return-value]
+        if user_input is None:
+            return self._show_open_schedule_form(asset)
+        schedule_uuid = str(user_input.get(CONF_SCHEDULE_UUID) or "")
+        if schedule_uuid in ("", NOT_SELECTED):
+            return self._show_open_schedule_form(
+                asset, errors={CONF_SCHEDULE_UUID: "maintenance_schedule_required"}
+            )
+        if schedule_uuid not in {
+            choice["value"] for choice in self._schedule_choices(asset)
+        }:
+            return self._show_open_schedule_form(
+                asset, errors={"base": "maintenance_schedule_not_found"}
+            )
+        self._maintenance_schedule_uuid = schedule_uuid
+        return await self.async_step_maintenance_schedule()
+
+    def _schedule_facts(self, schedule: MaintenanceScheduleData) -> list[str]:
+        state, due = self._schedule_status(schedule)
+        facts = [
+            self._localized_label(
+                f"Status: {self._maintenance_state_label(state)}",
+                f"Tila: {self._maintenance_state_label(state)}",
+            ),
+            self._localized_label(
+                f"Interval: {self._schedule_interval_text(schedule)}",
+                f"Väli: {self._schedule_interval_text(schedule)}",
+            ),
+        ]
+        if due:
+            facts.append(
+                self._localized_label(
+                    f"Next maintenance: {self._localized_date(due)}",
+                    f"Seuraava huolto: {self._localized_date(due)}",
+                )
+            )
+        facts.append(self._starting_point_fact(schedule))
+        reminder = schedule["preparation_reminder"]
+        if reminder is not None:
+            facts.append(
+                self._localized_label(
+                    f"Preparation reminder: {reminder['lead_days']} day(s) before",
+                    f"Valmistautumismuistutus: {reminder['lead_days']} pv ennen",
+                )
+            )
+        return facts
+
+    def _starting_point_fact(self, schedule: MaintenanceScheduleData) -> str:
+        anchor = schedule["initial_anchor"]
+        parts = []
+        if anchor is not None and anchor["date"] is not None:
+            parts.append(self._localized_date(anchor["date"]))
+        if anchor is not None and anchor["runtime_seconds"] is not None:
+            parts.append(f"{_hours_text(anchor['runtime_seconds'])} h")
+        known = ", ".join(parts) or self._localized_label("not known", "ei tiedossa")
+        if self._manager.maintenance_baseline_locked(schedule["schedule_uuid"]):
+            return self._localized_label(
+                f"Starting point: {known} (locked by maintenance history)",
+                f"Lähtötilanne: {known} (lukittu huoltohistorian vuoksi)",
+            )
+        return self._localized_label(
+            f"Starting point: {known}", f"Lähtötilanne: {known}"
+        )
+
+    async def async_step_maintenance_schedule(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Show one Schedule and what can be done with it."""
+        asset, schedule, redirect = await self._maintenance_schedule_guard()
+        if redirect is not None or asset is None or schedule is None:
+            return redirect  # type: ignore[return-value]
+        schedule_uuid = schedule["schedule_uuid"]
+        menu_options = [
+            "maintenance_mark_done",
+            "maintenance_edit_schedule",
+            "maintenance_intervals",
+        ]
+        if not self._manager.maintenance_baseline_locked(schedule_uuid):
+            menu_options.append("maintenance_starting_point")
+        menu_options.append(
+            "maintenance_disable_schedule"
+            if schedule["enabled"]
+            else "maintenance_enable_schedule"
+        )
+        if self._manager.maintenance_schedule_deletable(schedule_uuid):
+            menu_options.append("maintenance_delete_schedule")
+        menu_options.append("maintenance_menu")
+        return self.async_show_menu(
+            step_id="maintenance_schedule",
+            menu_options=menu_options,
+            description_placeholders={
+                "asset": _view_asset_label(asset),
+                "schedule": _short_name(schedule["name"]),
+                "result": await self._result_message(asset),
+                "facts": "\n".join(self._schedule_facts(schedule)),
+            },
+        )
+
+    # Create and edit
+
+    def _interval_fields(
+        self,
+        *,
+        calendar: bool = True,
+        runtime: bool = True,
+        required: bool = False,
+    ) -> dict[Any, Any]:
+        """Calendar value and unit, and Runtime hours, as the form asks them."""
+        marker = vol.Required if required else vol.Optional
+        fields: dict[Any, Any] = {}
+        if calendar:
+            fields[marker(CONF_CALENDAR_VALUE)] = selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=1, step=1, mode=selector.NumberSelectorMode.BOX
+                )
+            )
+            fields[vol.Required(CONF_CALENDAR_UNIT, default="months")] = (
+                selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=["days", "months", "years"],
+                        translation_key="maintenance_interval_unit",
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                )
+            )
+        if runtime:
+            fields[marker(CONF_RUNTIME_HOURS)] = _hours_selector()
+        return fields
+
+    def _read_intervals(
+        self, user_input: dict[str, Any], *, calendar: bool, runtime: bool
+    ) -> tuple[CalendarIntervalInput | None, Decimal | None, str | None]:
+        """Read the interval fields; returns an error key on invalid input."""
+        calendar_input = None
+        runtime_seconds = None
+        if calendar and user_input.get(CONF_CALENDAR_VALUE) not in (None, ""):
+            value = _whole_number(user_input.get(CONF_CALENDAR_VALUE))
+            if value is None:
+                return None, None, "maintenance_invalid_number"
+            calendar_input = CalendarIntervalInput(
+                value, str(user_input.get(CONF_CALENDAR_UNIT) or "")
+            )
+        if runtime and user_input.get(CONF_RUNTIME_HOURS) not in (None, ""):
+            runtime_seconds = _hours_to_seconds(user_input.get(CONF_RUNTIME_HOURS))
+            if runtime_seconds is None:
+                return None, None, "maintenance_invalid_number"
+        return calendar_input, runtime_seconds, None
+
+    def _show_add_schedule_form(
+        self,
+        asset: AssetData,
+        *,
+        user_input: dict[str, Any] | None = None,
+        errors: dict[str, str] | None = None,
+    ) -> ConfigFlowResult:
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_SCHEDULE_NAME): _text_selector(),
+                **self._interval_fields(),
+            }
+        )
+        return self.async_show_form(
+            step_id="maintenance_add_schedule",
+            data_schema=self.add_suggested_values_to_schema(schema, user_input or {}),
+            errors=errors or {},
+            description_placeholders={"asset": _asset_label(asset)},
+        )
+
+    async def async_step_maintenance_add_schedule(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Name the Schedule and give at least one interval.
+
+        The intervals given decide what the Schedule follows; there is no
+        separate type choice. A calendar interval then offers a preparation
+        reminder, and every Schedule asks for its starting point.
+        """
+        asset, redirect = await self._maintenance_active_guard()
+        if redirect is not None or asset is None:
+            return redirect  # type: ignore[return-value]
+        if user_input is None:
+            return self._show_add_schedule_form(asset)
+        calendar, runtime_seconds, error = self._read_intervals(
+            user_input, calendar=True, runtime=True
+        )
+        if error is None and calendar is None and runtime_seconds is None:
+            error = "maintenance_interval_required"
+        if error is not None:
+            return self._show_add_schedule_form(
+                asset, user_input=user_input, errors={"base": error}
+            )
+        draft = getattr(self, "_schedule_draft", None)
+        # One Schedule UUID per draft, reused by every retry of this create.
+        schedule_uuid = (
+            draft["schedule_uuid"]
+            if draft is not None and draft.get("mode") == "create"
+            else str(uuid4())
+        )
+        self._schedule_draft = {
+            "mode": "create",
+            "schedule_uuid": schedule_uuid,
+            "asset_uuid": asset["asset_uuid"],
+            "name": str(user_input.get(CONF_SCHEDULE_NAME) or ""),
+            "calendar": calendar,
+            "runtime_seconds": runtime_seconds,
+            "reminder": None,
+        }
+        self._anchor_context = {"mode": "create"}
+        if calendar is not None:
+            return self._show_reminder_form(asset)
+        return await self.async_step_maintenance_start_choice()
+
+    def _show_reminder_form(
+        self,
+        asset: AssetData,
+        *,
+        user_input: dict[str, Any] | None = None,
+        errors: dict[str, str] | None = None,
+    ) -> ConfigFlowResult:
+        draft = self._schedule_draft or {}
+        suggested = dict(user_input or {})
+        reminder = draft.get("reminder")
+        if user_input is None and reminder is not None:
+            suggested = {
+                CONF_LEAD_DAYS: reminder.lead_days,
+                CONF_REMINDER_MESSAGE: reminder.message or "",
+            }
+        schema = vol.Schema(
+            {
+                vol.Optional(CONF_LEAD_DAYS): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=1, step=1, mode=selector.NumberSelectorMode.BOX
+                    )
+                ),
+                vol.Optional(CONF_REMINDER_MESSAGE): _text_selector(),
+            }
+        )
+        return self.async_show_form(
+            step_id="maintenance_schedule_reminder",
+            data_schema=self.add_suggested_values_to_schema(schema, suggested),
+            errors=errors or {},
+            description_placeholders={
+                "asset": _asset_label(asset),
+                "schedule": _short_name(str(draft.get("name") or "")),
+            },
+        )
+
+    async def async_step_maintenance_schedule_reminder(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Optionally remind a number of days before a calendar due date."""
+        asset, redirect = await self._maintenance_active_guard()
+        if redirect is not None or asset is None:
+            return redirect  # type: ignore[return-value]
+        draft = getattr(self, "_schedule_draft", None)
+        if draft is None:
+            return await self.async_step_maintenance_menu()
+        if user_input is None:
+            return self._show_reminder_form(asset)
+        reminder = None
+        if user_input.get(CONF_LEAD_DAYS) not in (None, ""):
+            lead_days = _whole_number(user_input.get(CONF_LEAD_DAYS))
+            if lead_days is None:
+                return self._show_reminder_form(
+                    asset,
+                    user_input=user_input,
+                    errors={"base": "maintenance_invalid_number"},
+                )
+            reminder = PreparationReminderInput(
+                lead_days, user_input.get(CONF_REMINDER_MESSAGE) or None
+            )
+        draft["reminder"] = reminder
+        if draft["mode"] == "create":
+            return await self.async_step_maintenance_start_choice()
+        return await self._async_save_schedule_edit(asset)
+
+    def _show_edit_schedule_form(
+        self,
+        asset: AssetData,
+        schedule: MaintenanceScheduleData,
+        *,
+        user_input: dict[str, Any] | None = None,
+        errors: dict[str, str] | None = None,
+    ) -> ConfigFlowResult:
+        calendar = schedule["calendar_interval"]
+        runtime = schedule["runtime_interval_seconds"]
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_SCHEDULE_NAME): _text_selector(),
+                **self._interval_fields(
+                    calendar=calendar is not None,
+                    runtime=runtime is not None,
+                    required=True,
+                ),
+            }
+        )
+        suggested: dict[str, Any] = {CONF_SCHEDULE_NAME: schedule["name"]}
+        if calendar is not None:
+            suggested[CONF_CALENDAR_VALUE] = calendar["value"]
+            suggested[CONF_CALENDAR_UNIT] = calendar["unit"]
+        if runtime is not None:
+            suggested[CONF_RUNTIME_HOURS] = float(_hours_value(runtime))
+        suggested.update(user_input or {})
+        return self.async_show_form(
+            step_id="maintenance_edit_schedule",
+            data_schema=self.add_suggested_values_to_schema(schema, suggested),
+            errors=errors or {},
+            description_placeholders={
+                "asset": _asset_label(asset),
+                "schedule": _short_name(schedule["name"]),
+            },
+        )
+
+    async def async_step_maintenance_edit_schedule(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Edit the name and the values of the configured intervals.
+
+        Adding or removing an interval type belongs to Intervals.
+        """
+        asset, schedule, redirect = await self._maintenance_schedule_guard()
+        if redirect is not None or asset is None or schedule is None:
+            return redirect  # type: ignore[return-value]
+        if user_input is None:
+            return self._show_edit_schedule_form(asset, schedule)
+        calendar, runtime_seconds, error = self._read_intervals(
+            user_input,
+            calendar=schedule["calendar_interval"] is not None,
+            runtime=schedule["runtime_interval_seconds"] is not None,
+        )
+        if error is not None:
+            return self._show_edit_schedule_form(
+                asset, schedule, user_input=user_input, errors={"base": error}
+            )
+        stored_runtime = schedule["runtime_interval_seconds"]
+        runtime_value: Any = runtime_seconds
+        if stored_runtime is not None and _same_hours(
+            user_input.get(CONF_RUNTIME_HOURS), stored_runtime
+        ):
+            # The field still shows the stored interval: send it as stored.
+            runtime_value = stored_runtime
+        reminder = schedule["preparation_reminder"]
+        self._schedule_draft = {
+            "mode": "edit",
+            "schedule_uuid": schedule["schedule_uuid"],
+            "asset_uuid": asset["asset_uuid"],
+            "name": str(user_input.get(CONF_SCHEDULE_NAME) or ""),
+            "enabled": schedule["enabled"],
+            "calendar": calendar,
+            "runtime_seconds": runtime_value,
+            "reminder": None
+            if reminder is None
+            else PreparationReminderInput(reminder["lead_days"], reminder["message"]),
+        }
+        if calendar is not None:
+            return self._show_reminder_form(asset)
+        return await self._async_save_schedule_edit(asset)
+
+    async def _async_save_schedule_edit(self, asset: AssetData) -> ConfigFlowResult:
+        draft = self._schedule_draft or {}
+        request = EditScheduleRequest(
+            schedule_uuid=draft["schedule_uuid"],
+            name=draft["name"],
+            enabled=draft["enabled"],
+            calendar_interval=draft["calendar"],
+            runtime_interval_seconds=draft["runtime_seconds"],
+            preparation_reminder=draft["reminder"],
+        )
+        outcome, error, redirect = await self._maintenance_mutate(request)
+        if redirect is not None:
+            return redirect
+        if error is not None or outcome is None:
+            schedule = self._selected_schedule(asset)
+            if schedule is None:
+                self._last_result = "maintenance_schedule_missing"
+                return await self.async_step_maintenance_menu()
+            return self._show_edit_schedule_form(
+                asset, schedule, errors={"base": error or "asset_store_error"}
+            )
+        self._schedule_draft = None
+        return await self._finish_maintenance(
+            asset,
+            outcome,
+            "maintenance_schedule_updated",
+            self.async_step_maintenance_schedule,
+        )
+
+    # Starting point
+
+    def _anchor_dimensions(self) -> tuple[bool, bool]:
+        """Which starting-point components the current context asks for."""
+        context = getattr(self, "_anchor_context", None) or {}
+        mode = context.get("mode")
+        if mode == "create":
+            draft = self._schedule_draft or {}
+            return draft.get("calendar") is not None, (
+                draft.get("runtime_seconds") is not None
+            )
+        if mode == "add":
+            return (
+                context["dimension"] is IntervalDimension.CALENDAR,
+                context["dimension"] is IntervalDimension.RUNTIME,
+            )
+        asset = self._maintenance_asset()
+        schedule = None if asset is None else self._selected_schedule(asset)
+        if schedule is None:
+            return False, False
+        return schedule["calendar_interval"] is not None, (
+            schedule["runtime_interval_seconds"] is not None
+        )
+
+    async def async_step_maintenance_start_choice(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Ask explicitly whether the starting point is known; no default."""
+        asset, redirect = await self._maintenance_active_guard()
+        if redirect is not None or asset is None:
+            return redirect  # type: ignore[return-value]
+        if getattr(self, "_anchor_context", None) is None:
+            return await self.async_step_maintenance_menu()
+        return self.async_show_menu(
+            step_id="maintenance_start_choice",
+            menu_options=[
+                "maintenance_start_unknown",
+                "maintenance_start_known",
+                "maintenance_start_back",
+            ],
+            description_placeholders={"asset": _view_asset_label(asset)},
+        )
+
+    async def async_step_maintenance_start_back(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Leave the starting-point question without saving anything."""
+        context = getattr(self, "_anchor_context", None) or {}
+        self._anchor_context = None
+        if context.get("mode") == "create":
+            self._schedule_draft = None
+            return await self.async_step_maintenance_menu()
+        if context.get("mode") == "add":
+            return await self.async_step_maintenance_intervals()
+        return await self.async_step_maintenance_schedule()
+
+    async def async_step_maintenance_start_unknown(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Save with the starting point unknown; nothing is inferred."""
+        return await self._async_apply_anchor(None, None)
+
+    def _show_start_known_form(
+        self,
+        asset: AssetData,
+        *,
+        user_input: dict[str, Any] | None = None,
+        errors: dict[str, str] | None = None,
+    ) -> ConfigFlowResult:
+        calendar, runtime = self._anchor_dimensions()
+        fields: dict[Any, Any] = {}
+        if calendar:
+            fields[vol.Optional(CONF_STARTING_DATE)] = selector.DateSelector()
+        if runtime:
+            fields[vol.Optional(CONF_STARTING_RUNTIME_HOURS)] = _hours_selector()
+        return self.async_show_form(
+            step_id="maintenance_start_known",
+            data_schema=self.add_suggested_values_to_schema(
+                vol.Schema(fields), user_input or {}
+            ),
+            errors=errors or {},
+            description_placeholders={"asset": _asset_label(asset)},
+        )
+
+    async def async_step_maintenance_start_known(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Ask only for the components the Schedule follows."""
+        asset, redirect = await self._maintenance_active_guard()
+        if redirect is not None or asset is None:
+            return redirect  # type: ignore[return-value]
+        if getattr(self, "_anchor_context", None) is None:
+            return await self.async_step_maintenance_menu()
+        if user_input is None:
+            return self._show_start_known_form(asset)
+        calendar, runtime = self._anchor_dimensions()
+        start_date = (
+            str(user_input.get(CONF_STARTING_DATE) or "") or None if calendar else None
+        )
+        start_runtime = None
+        if runtime and user_input.get(CONF_STARTING_RUNTIME_HOURS) not in (None, ""):
+            start_runtime = _hours_to_seconds(
+                user_input.get(CONF_STARTING_RUNTIME_HOURS)
+            )
+            if start_runtime is None:
+                return self._show_start_known_form(
+                    asset,
+                    user_input=user_input,
+                    errors={"base": "maintenance_invalid_number"},
+                )
+        if start_date is None and start_runtime is None:
+            return self._show_start_known_form(
+                asset,
+                user_input=user_input,
+                errors={"base": "maintenance_starting_point_required"},
+            )
+        return await self._async_apply_anchor(
+            start_date, start_runtime, user_input=user_input
+        )
+
+    async def _async_apply_anchor(
+        self,
+        start_date: str | None,
+        start_runtime: Decimal | None,
+        *,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Create, add an interval, or set the starting point, as chosen."""
+        asset, redirect = await self._maintenance_active_guard()
+        if redirect is not None or asset is None:
+            return redirect  # type: ignore[return-value]
+        context = getattr(self, "_anchor_context", None)
+        if context is None:
+            return await self.async_step_maintenance_menu()
+        anchor = (
+            None
+            if start_date is None and start_runtime is None
+            else InitialAnchorInput(start_date, start_runtime)
+        )
+        mode = context["mode"]
+        request: Any
+        if mode == "create":
+            draft = self._schedule_draft or {}
+            request = CreateScheduleRequest(
+                schedule_uuid=draft["schedule_uuid"],
+                asset_uuid=draft["asset_uuid"],
+                name=draft["name"],
+                calendar_interval=draft["calendar"],
+                runtime_interval_seconds=draft["runtime_seconds"],
+                initial_anchor=anchor,
+                preparation_reminder=draft["reminder"],
+            )
+            result_key = "maintenance_schedule_created"
+        elif mode == "add":
+            request = AddIntervalRequest(
+                schedule_uuid=context["schedule_uuid"],
+                dimension=context["dimension"],
+                calendar_interval=context.get("calendar"),
+                runtime_interval_seconds=context.get("runtime_seconds"),
+                anchor_component=start_date
+                if context["dimension"] is IntervalDimension.CALENDAR
+                else start_runtime,
+            )
+            result_key = "maintenance_interval_added"
+        else:
+            request = SetInitialAnchorRequest(
+                schedule_uuid=context["schedule_uuid"], initial_anchor=anchor
+            )
+            result_key = "maintenance_starting_point_updated"
+        outcome, error, redirect = await self._maintenance_mutate(request)
+        if redirect is not None:
+            return redirect
+        if error is not None or outcome is None:
+            return self._show_start_known_form(
+                asset, user_input=user_input, errors={"base": error or "asset_store_error"}
+            )
+        self._anchor_context = None
+        if mode == "create":
+            self._schedule_draft = None
+            self._maintenance_schedule_uuid = request.schedule_uuid
+        destination = (
+            self.async_step_maintenance_intervals
+            if mode == "add"
+            else self.async_step_maintenance_schedule
+        )
+        return await self._finish_maintenance(asset, outcome, result_key, destination)
+
+    async def async_step_maintenance_starting_point(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Change the starting point while no maintenance has referenced it."""
+        asset, schedule, redirect = await self._maintenance_schedule_guard()
+        if redirect is not None or asset is None or schedule is None:
+            return redirect  # type: ignore[return-value]
+        if self._manager.maintenance_baseline_locked(schedule["schedule_uuid"]):
+            self._last_result = "maintenance_starting_point_locked"
+            return await self.async_step_maintenance_schedule()
+        self._anchor_context = {
+            "mode": "set",
+            "schedule_uuid": schedule["schedule_uuid"],
+        }
+        return await self.async_step_maintenance_start_choice()
+
+    # Enable, disable, delete
+
+    async def _async_set_enabled(self, enabled: bool) -> ConfigFlowResult:
+        asset, schedule, redirect = await self._maintenance_schedule_guard()
+        if redirect is not None or asset is None or schedule is None:
+            return redirect  # type: ignore[return-value]
+        outcome, error, redirect = await self._maintenance_mutate(
+            SetEnabledRequest(schedule["schedule_uuid"], enabled)
+        )
+        if redirect is not None:
+            return redirect
+        if error is not None or outcome is None:
+            self._last_result = "maintenance_action_failed"
+            return await self.async_step_maintenance_schedule()
+        return await self._finish_maintenance(
+            asset,
+            outcome,
+            "maintenance_schedule_enabled"
+            if enabled
+            else "maintenance_schedule_disabled",
+            self.async_step_maintenance_schedule,
+        )
+
+    async def async_step_maintenance_enable_schedule(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Enable the Schedule; history and starting point are untouched."""
+        return await self._async_set_enabled(True)
+
+    async def async_step_maintenance_disable_schedule(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Disable the Schedule; it is not archived and keeps its history."""
+        return await self._async_set_enabled(False)
+
+    async def async_step_maintenance_delete_schedule(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Delete a Schedule that no maintenance record has ever used."""
+        asset, schedule, redirect = await self._maintenance_schedule_guard()
+        if redirect is not None or asset is None or schedule is None:
+            return redirect  # type: ignore[return-value]
+        errors: dict[str, str] = {}
+        if user_input is None and not self._manager.maintenance_schedule_deletable(
+            schedule["schedule_uuid"]
+        ):
+            return await self.async_step_maintenance_schedule()
+        if user_input is not None:
+            if not user_input.get(CONF_CONFIRM_DELETE_SCHEDULE):
+                errors[CONF_CONFIRM_DELETE_SCHEDULE] = (
+                    "maintenance_confirmation_required"
+                )
+            else:
+                outcome, error, redirect = await self._maintenance_mutate(
+                    DeleteScheduleRequest(schedule["schedule_uuid"])
+                )
+                if redirect is not None:
+                    return redirect
+                if error is None and outcome is not None:
+                    self._maintenance_schedule_uuid = None
+                    return await self._finish_maintenance(
+                        asset,
+                        outcome,
+                        "maintenance_schedule_deleted",
+                        self.async_step_maintenance_menu,
+                    )
+                errors["base"] = error or "asset_store_error"
+        return self.async_show_form(
+            step_id="maintenance_delete_schedule",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_CONFIRM_DELETE_SCHEDULE, default=False
+                    ): selector.BooleanSelector()
+                }
+            ),
+            errors=errors,
+            description_placeholders={
+                "asset": _asset_label(asset),
+                "schedule": _short_name(schedule["name"]),
+            },
+        )
+
+    # Intervals
+
+    async def async_step_maintenance_intervals(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Show the configured intervals; add a missing one or remove one.
+
+        The last interval is never offered for removal.
+        """
+        asset, schedule, redirect = await self._maintenance_schedule_guard()
+        if redirect is not None or asset is None or schedule is None:
+            return redirect  # type: ignore[return-value]
+        has_calendar = schedule["calendar_interval"] is not None
+        has_runtime = schedule["runtime_interval_seconds"] is not None
+        menu_options = []
+        if not has_calendar:
+            menu_options.append("maintenance_add_calendar")
+        if not has_runtime:
+            menu_options.append("maintenance_add_runtime")
+        if has_calendar and has_runtime:
+            menu_options.extend(
+                ["maintenance_remove_calendar", "maintenance_remove_runtime"]
+            )
+        menu_options.append("maintenance_schedule")
+        return self.async_show_menu(
+            step_id="maintenance_intervals",
+            menu_options=menu_options,
+            description_placeholders={
+                "asset": _view_asset_label(asset),
+                "schedule": _short_name(schedule["name"]),
+                "result": await self._result_message(asset),
+                "intervals": self._schedule_interval_text(schedule),
+                "starting_point": self._starting_point_fact(schedule),
+            },
+        )
+
+    def _show_add_interval_form(
+        self,
+        asset: AssetData,
+        schedule: MaintenanceScheduleData,
+        dimension: IntervalDimension,
+        *,
+        user_input: dict[str, Any] | None = None,
+        errors: dict[str, str] | None = None,
+    ) -> ConfigFlowResult:
+        calendar = dimension is IntervalDimension.CALENDAR
+        schema = vol.Schema(
+            self._interval_fields(calendar=calendar, runtime=not calendar, required=True)
+        )
+        form: dict[str, Any] = {
+            "data_schema": self.add_suggested_values_to_schema(
+                schema, user_input or {}
+            ),
+            "errors": errors or {},
+            "description_placeholders": {
+                "asset": _asset_label(asset),
+                "schedule": _short_name(schedule["name"]),
+                "starting_point": self._starting_point_fact(schedule),
+            },
+        }
+        if calendar:
+            return self.async_show_form(step_id="maintenance_add_calendar", **form)
+        return self.async_show_form(step_id="maintenance_add_runtime", **form)
+
+    async def _async_add_interval(
+        self, dimension: IntervalDimension, user_input: dict[str, Any] | None
+    ) -> ConfigFlowResult:
+        asset, schedule, redirect = await self._maintenance_schedule_guard()
+        if redirect is not None or asset is None or schedule is None:
+            return redirect  # type: ignore[return-value]
+        if user_input is None:
+            return self._show_add_interval_form(asset, schedule, dimension)
+        calendar_input, runtime_seconds, error = self._read_intervals(
+            user_input,
+            calendar=dimension is IntervalDimension.CALENDAR,
+            runtime=dimension is IntervalDimension.RUNTIME,
+        )
+        if error is None and calendar_input is None and runtime_seconds is None:
+            error = "maintenance_interval_required"
+        if error is not None:
+            return self._show_add_interval_form(
+                asset, schedule, dimension, user_input=user_input, errors={"base": error}
+            )
+        self._anchor_context = {
+            "mode": "add",
+            "schedule_uuid": schedule["schedule_uuid"],
+            "dimension": dimension,
+            "calendar": calendar_input,
+            "runtime_seconds": runtime_seconds,
+        }
+        if self._manager.maintenance_baseline_locked(schedule["schedule_uuid"]):
+            # Locked: the new interval gets no starting-point component.
+            return await self._async_apply_anchor(None, None)
+        return await self.async_step_maintenance_start_choice()
+
+    async def async_step_maintenance_add_calendar(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Add a calendar interval."""
+        return await self._async_add_interval(IntervalDimension.CALENDAR, user_input)
+
+    async def async_step_maintenance_add_runtime(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Add a Runtime interval in hours."""
+        return await self._async_add_interval(IntervalDimension.RUNTIME, user_input)
+
+    async def async_step_maintenance_remove_calendar(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Choose to remove the calendar interval."""
+        self._removal_dimension = IntervalDimension.CALENDAR
+        return await self.async_step_maintenance_remove_interval()
+
+    async def async_step_maintenance_remove_runtime(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Choose to remove the Runtime interval."""
+        self._removal_dimension = IntervalDimension.RUNTIME
+        return await self.async_step_maintenance_remove_interval()
+
+    def _removal_effects(self, dimension: IntervalDimension) -> str:
+        if dimension is IntervalDimension.CALENDAR:
+            return self._localized_label(
+                "The calendar interval, its starting date, and the preparation "
+                "reminder are removed.",
+                "Kalenteriväli, sen lähtöpäivä ja valmistautumismuistutus "
+                "poistetaan.",
+            )
+        return self._localized_label(
+            "The Runtime interval and its starting Runtime are removed.",
+            "Käyttötuntiväli ja sen lähtökäyttötunnit poistetaan.",
+        )
+
+    async def async_step_maintenance_remove_interval(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Confirm removing one interval; a locked component asks again."""
+        asset, schedule, redirect = await self._maintenance_schedule_guard()
+        if redirect is not None or asset is None or schedule is None:
+            return redirect  # type: ignore[return-value]
+        dimension = getattr(self, "_removal_dimension", None)
+        if dimension is None:
+            return await self.async_step_maintenance_intervals()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            if not user_input.get(CONF_CONFIRM_REMOVE_INTERVAL):
+                errors[CONF_CONFIRM_REMOVE_INTERVAL] = (
+                    "maintenance_confirmation_required"
+                )
+            else:
+                return await self._async_remove_interval(
+                    asset, dimension, confirm_destroy=False
+                )
+        return self.async_show_form(
+            step_id="maintenance_remove_interval",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_CONFIRM_REMOVE_INTERVAL, default=False
+                    ): selector.BooleanSelector()
+                }
+            ),
+            errors=errors,
+            description_placeholders={
+                "asset": _asset_label(asset),
+                "schedule": _short_name(schedule["name"]),
+                "effects": self._removal_effects(dimension),
+            },
+        )
+
+    async def _async_remove_interval(
+        self,
+        asset: AssetData,
+        dimension: IntervalDimension,
+        *,
+        confirm_destroy: bool,
+    ) -> ConfigFlowResult:
+        schedule_uuid = str(getattr(self, "_maintenance_schedule_uuid", ""))
+        outcome, error, redirect = await self._maintenance_mutate(
+            RemoveIntervalRequest(
+                schedule_uuid, dimension, confirm_destroy_baseline=confirm_destroy
+            )
+        )
+        if redirect is not None:
+            return redirect
+        if error == "maintenance_confirm_destroy_baseline":
+            # The pure rule says a locked starting point would be lost.
+            return await self.async_step_maintenance_confirm_destroy_baseline()
+        if error is not None or outcome is None:
+            self._last_result = (
+                "maintenance_last_interval"
+                if error == "maintenance_last_interval"
+                else "maintenance_action_failed"
+            )
+            return await self.async_step_maintenance_intervals()
+        self._removal_dimension = None
+        return await self._finish_maintenance(
+            asset,
+            outcome,
+            "maintenance_interval_removed",
+            self.async_step_maintenance_intervals,
+        )
+
+    async def async_step_maintenance_confirm_destroy_baseline(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Name the locked starting-point component that would be lost.
+
+        Only an explicit confirmation here sends the destroy confirmation.
+        """
+        asset, schedule, redirect = await self._maintenance_schedule_guard()
+        if redirect is not None or asset is None or schedule is None:
+            return redirect  # type: ignore[return-value]
+        dimension = getattr(self, "_removal_dimension", None)
+        if dimension is None:
+            return await self.async_step_maintenance_intervals()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            if not user_input.get(CONF_CONFIRM_DESTROY_BASELINE):
+                errors[CONF_CONFIRM_DESTROY_BASELINE] = (
+                    "maintenance_confirmation_required"
+                )
+            else:
+                return await self._async_remove_interval(
+                    asset, dimension, confirm_destroy=True
+                )
+        anchor = schedule["initial_anchor"] or {"date": None, "runtime_seconds": None}
+        if dimension is IntervalDimension.CALENDAR:
+            lost = self._localized_label(
+                "the calendar starting date "
+                f"{self._localized_date(anchor['date'])} and the preparation "
+                "reminder",
+                "kalenterin lähtöpäivä "
+                f"{self._localized_date(anchor['date'])} ja "
+                "valmistautumismuistutus",
+            )
+        else:
+            hours = (
+                _hours_text(anchor["runtime_seconds"])
+                if anchor["runtime_seconds"] is not None
+                else "—"
+            )
+            lost = self._localized_label(
+                f"the Runtime starting value {hours} h",
+                f"lähtökäyttötunnit {hours} h",
+            )
+        return self.async_show_form(
+            step_id="maintenance_confirm_destroy_baseline",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_CONFIRM_DESTROY_BASELINE, default=False
+                    ): selector.BooleanSelector()
+                }
+            ),
+            errors=errors,
+            description_placeholders={
+                "asset": _asset_label(asset),
+                "schedule": _short_name(schedule["name"]),
+                "lost": lost,
+            },
+        )
+
+    # Recording maintenance
+
+    def _new_event_draft(
+        self,
+        asset: AssetData,
+        *,
+        preselected: list[str],
+        title: str | None,
+        origin: str,
+    ) -> None:
+        """Start one Event draft with one Event UUID for all its retries."""
+        self._event_draft = {
+            "mode": "record",
+            "event_uuid": str(uuid4()),
+            "asset_uuid": asset["asset_uuid"],
+            "schedule_uuids": list(preselected),
+            "title": title or "",
+            "notes": None,
+            "performed_date": None,
+            "runtime_seconds": None,
+            "captured": False,
+            "origin": origin,
+            "form": None,
+            "confirmed_locks": frozenset(),
+            "ambiguity_acknowledged": False,
+        }
+
+    def _show_record_form(
+        self,
+        asset: AssetData,
+        *,
+        user_input: dict[str, Any] | None = None,
+        errors: dict[str, str] | None = None,
+    ) -> ConfigFlowResult:
+        draft = self._event_draft or {}
+        schema = vol.Schema(
+            {
+                vol.Optional(
+                    CONF_SCHEDULE_UUIDS, default=list(draft.get("schedule_uuids") or [])
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=self._schedule_choices(asset),
+                        multiple=True,
+                        mode=selector.SelectSelectorMode.LIST,
+                    )
+                ),
+                vol.Required(CONF_EVENT_TITLE): _text_selector(),
+                vol.Optional(CONF_NOTES): _text_selector(multiline=True),
+            }
+        )
+        suggested: dict[str, Any] = {}
+        if draft.get("title"):
+            suggested[CONF_EVENT_TITLE] = draft["title"]
+        if draft.get("notes"):
+            suggested[CONF_NOTES] = draft["notes"]
+        suggested.update(user_input or {})
+        return self.async_show_form(
+            step_id="maintenance_record",
+            data_schema=self.add_suggested_values_to_schema(schema, suggested),
+            errors=errors or {},
+            description_placeholders={"asset": _asset_label(asset)},
+        )
+
+    async def async_step_maintenance_record(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Record maintenance for any of this Asset's Schedules, or none.
+
+        Nothing is preselected here: no Schedule counts as done unless the
+        person chooses it. Choosing none records ad-hoc maintenance.
+        """
+        asset, redirect = await self._maintenance_active_guard()
+        if redirect is not None or asset is None:
+            return redirect  # type: ignore[return-value]
+        if user_input is None:
+            self._new_event_draft(asset, preselected=[], title=None, origin="menu")
+            return self._show_record_form(asset)
+        return await self._async_read_record_form(asset, user_input)
+
+    async def async_step_maintenance_mark_done(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Record maintenance for this Schedule; only it is preselected."""
+        asset, schedule, redirect = await self._maintenance_schedule_guard()
+        if redirect is not None or asset is None or schedule is None:
+            return redirect  # type: ignore[return-value]
+        self._new_event_draft(
+            asset,
+            preselected=[schedule["schedule_uuid"]],
+            title=schedule["name"],
+            origin="schedule",
+        )
+        return self._show_record_form(asset)
+
+    async def async_step_maintenance_event_details(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Return to the details of the Event being recorded."""
+        asset, redirect = await self._maintenance_active_guard()
+        if redirect is not None or asset is None:
+            return redirect  # type: ignore[return-value]
+        if getattr(self, "_event_draft", None) is None:
+            return await self.async_step_maintenance_menu()
+        return self._show_record_form(asset)
+
+    async def _async_read_record_form(
+        self, asset: AssetData, user_input: dict[str, Any]
+    ) -> ConfigFlowResult:
+        draft = getattr(self, "_event_draft", None)
+        if draft is None:
+            self._new_event_draft(asset, preselected=[], title=None, origin="menu")
+            draft = self._event_draft
+        assert draft is not None
+        valid = {choice["value"] for choice in self._schedule_choices(asset)}
+        chosen = [str(item) for item in user_input.get(CONF_SCHEDULE_UUIDS) or []]
+        if any(item not in valid for item in chosen):
+            return self._show_record_form(
+                asset,
+                user_input=user_input,
+                errors={"base": "maintenance_schedule_not_found"},
+            )
+        draft["schedule_uuids"] = sorted(set(chosen))
+        draft["title"] = str(user_input.get(CONF_EVENT_TITLE) or "")
+        draft["notes"] = user_input.get(CONF_NOTES) or None
+        return await self.async_step_maintenance_event_timing()
+
+    async def async_step_maintenance_event_timing(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Ask when the maintenance was done: just now or earlier."""
+        asset, redirect = await self._maintenance_active_guard()
+        if redirect is not None or asset is None:
+            return redirect  # type: ignore[return-value]
+        draft = getattr(self, "_event_draft", None)
+        if draft is None:
+            return await self.async_step_maintenance_menu()
+        return self.async_show_menu(
+            step_id="maintenance_event_timing",
+            menu_options=[
+                "maintenance_event_just_now",
+                "maintenance_event_earlier",
+                "maintenance_event_details",
+            ],
+            description_placeholders={
+                "asset": _view_asset_label(asset),
+                "title": _short_name(draft["title"]),
+            },
+        )
+
+    def _show_just_now_form(
+        self, asset: AssetData, *, errors: dict[str, str] | None = None
+    ) -> ConfigFlowResult:
+        draft = self._event_draft or {}
+        captured = bool(draft.get("captured"))
+        runtime = draft.get("runtime_seconds")
+        return self.async_show_form(
+            step_id="maintenance_event_just_now",
+            data_schema=vol.Schema({}),
+            errors=errors or {},
+            description_placeholders={
+                "asset": _asset_label(asset),
+                "title": _short_name(str(draft.get("title") or "")),
+                "date": self._localized_date(draft.get("performed_date"))
+                if captured
+                else "—",
+                "runtime": (
+                    f"{_hours_text(runtime)} h"
+                    if captured and runtime is not None
+                    else self._localized_label("not known", "ei tiedossa")
+                ),
+            },
+        )
+
+    async def async_step_maintenance_event_just_now(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Capture today and the durable Runtime once, show them, then save.
+
+        The Runtime checkpoint is awaited before any Maintenance mutation
+        and never inside one. Once captured, the values belong to this
+        draft: a retry sends the same Event with the same fields.
+        """
+        asset, redirect = await self._maintenance_active_guard()
+        if redirect is not None or asset is None:
+            return redirect  # type: ignore[return-value]
+        draft = getattr(self, "_event_draft", None)
+        if draft is None:
+            return await self.async_step_maintenance_menu()
+        draft["form"] = "just_now"
+        if not draft["captured"]:
+            try:
+                runtime = await self._manager.async_checkpoint_runtime(
+                    asset["asset_uuid"]
+                )
+            except (AssetStoreError, OSError) as err:
+                key = self._storage_error_key(err)
+                if not key.startswith("runtime_checkpoint"):
+                    key = "runtime_checkpoint_failed"
+                return self._show_just_now_form(asset, errors={"base": key})
+            draft["performed_date"] = dt_util.now().date().isoformat()
+            draft["runtime_seconds"] = (
+                None if runtime is None else format_decimal(runtime)
+            )
+            draft["captured"] = True
+            return self._show_just_now_form(asset)
+        if user_input is None:
+            return self._show_just_now_form(asset)
+        return await self._async_submit_event(asset)
+
+    def _show_earlier_form(
+        self,
+        asset: AssetData,
+        *,
+        user_input: dict[str, Any] | None = None,
+        errors: dict[str, str] | None = None,
+    ) -> ConfigFlowResult:
+        draft = self._event_draft or {}
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_PERFORMED_DATE): selector.DateSelector(),
+                vol.Optional(CONF_EVENT_RUNTIME_HOURS): _hours_selector(),
+            }
+        )
+        suggested: dict[str, Any] = {}
+        if draft.get("performed_date") and not draft.get("captured"):
+            suggested[CONF_PERFORMED_DATE] = draft["performed_date"]
+        suggested.update(user_input or {})
+        return self.async_show_form(
+            step_id="maintenance_event_earlier",
+            data_schema=self.add_suggested_values_to_schema(schema, suggested),
+            errors=errors or {},
+            description_placeholders={
+                "asset": _asset_label(asset),
+                "title": _short_name(str(draft.get("title") or "")),
+            },
+        )
+
+    async def async_step_maintenance_event_earlier(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Record maintenance done earlier; its Runtime is entered or unknown.
+
+        The current Runtime is never copied into an earlier Event.
+        """
+        asset, redirect = await self._maintenance_active_guard()
+        if redirect is not None or asset is None:
+            return redirect  # type: ignore[return-value]
+        draft = getattr(self, "_event_draft", None)
+        if draft is None:
+            return await self.async_step_maintenance_menu()
+        if draft["captured"]:
+            # Values captured for "just now" belong to that choice; this
+            # draft keeps them, so an earlier date starts a new draft.
+            self._new_event_draft(
+                asset,
+                preselected=draft["schedule_uuids"],
+                title=draft["title"],
+                origin=draft["origin"],
+            )
+            self._event_draft["notes"] = draft["notes"]  # type: ignore[index]
+            draft = self._event_draft
+            assert draft is not None
+        draft["form"] = "earlier"
+        if user_input is None:
+            return self._show_earlier_form(asset)
+        runtime: Decimal | None = None
+        if user_input.get(CONF_EVENT_RUNTIME_HOURS) not in (None, ""):
+            runtime = _hours_to_seconds(user_input.get(CONF_EVENT_RUNTIME_HOURS))
+            if runtime is None:
+                return self._show_earlier_form(
+                    asset,
+                    user_input=user_input,
+                    errors={"base": "maintenance_invalid_number"},
+                )
+        draft["performed_date"] = str(user_input.get(CONF_PERFORMED_DATE) or "")
+        draft["runtime_seconds"] = None if runtime is None else format_decimal(runtime)
+        self._event_form_input = user_input
+        return await self._async_submit_event(asset)
+
+    # Guards and submission shared by Record and Correct
+
+    def _schedule_names(self, schedule_uuids: tuple[str, ...] | list[str]) -> str:
+        names = []
+        for schedule_uuid in schedule_uuids:
+            schedule = self._manager.maintenance_schedule(schedule_uuid)
+            if schedule is not None:
+                names.append(_short_name(schedule["name"]))
+        return ", ".join(sorted(names, key=str.casefold))
+
+    def _show_event_form_again(
+        self, asset: AssetData, errors: dict[str, str]
+    ) -> ConfigFlowResult:
+        """Show the form the Event's fields came from, with the error."""
+        draft = self._event_draft or {}
+        form = draft.get("form")
+        if form == "just_now":
+            return self._show_just_now_form(asset, errors=errors)
+        if form == "correct":
+            return self._show_correct_form(asset, errors=errors)
+        return self._show_earlier_form(
+            asset, user_input=getattr(self, "_event_form_input", None), errors=errors
+        )
+
+    async def _async_submit_event(self, asset: AssetData) -> ConfigFlowResult:
+        """Show each guard that applies, then send the Event.
+
+        The guards come from the pure preflight on the current data; they
+        are advice, and the mutation checks them again.
+        """
+        draft = self._event_draft
+        assert draft is not None
+        try:
+            guards = self._manager.maintenance_event_guards(
+                draft["schedule_uuids"],
+                draft["performed_date"],
+                replacing_event_uuid=draft.get("target_event_uuid"),
+                own_event_uuid=draft["event_uuid"],
+            )
+        except (AssetStoreError, OSError) as err:
+            return self._show_event_form_again(
+                asset, {"base": self._storage_error_key(err)}
+            )
+        missing_locks = tuple(
+            uuid
+            for uuid in guards.newly_locked_baselines
+            if uuid not in draft["confirmed_locks"]
+        )
+        if missing_locks:
+            self._pending_locks = missing_locks
+            return self._show_lock_form(asset)
+        # The warning is about the Runtime to count from, so only Schedules
+        # with a Runtime interval are named.
+        ambiguous = tuple(
+            uuid
+            for uuid in guards.same_day_runtime_ambiguity
+            if (schedule := self._manager.maintenance_schedule(uuid)) is not None
+            and schedule["runtime_interval_seconds"] is not None
+        )
+        if ambiguous and not draft["ambiguity_acknowledged"]:
+            self._pending_ambiguity = ambiguous
+            return self._show_ambiguity_form(asset)
+        return await self._async_send_event(asset)
+
+    async def _async_send_event(self, asset: AssetData) -> ConfigFlowResult:
+        draft = self._event_draft
+        assert draft is not None
+        request: Any
+        if draft["mode"] == "record":
+            request = RecordEventRequest(
+                event_uuid=draft["event_uuid"],
+                asset_uuid=draft["asset_uuid"],
+                schedule_uuids=list(draft["schedule_uuids"]),
+                title=draft["title"],
+                performed_date=draft["performed_date"],
+                runtime_seconds=draft["runtime_seconds"],
+                notes=draft["notes"],
+                confirmed_baseline_locks=frozenset(draft["confirmed_locks"]),
+            )
+            result_key = "maintenance_event_recorded"
+        else:
+            request = CorrectEventRequest(
+                new_event_uuid=draft["event_uuid"],
+                target_event_uuid=draft["target_event_uuid"],
+                schedule_uuids=list(draft["schedule_uuids"]),
+                title=draft["title"],
+                performed_date=draft["performed_date"],
+                runtime_seconds=draft["runtime_seconds"],
+                notes=draft["notes"],
+                void_reason=draft["void_reason"],
+                confirmed_baseline_locks=frozenset(draft["confirmed_locks"]),
+            )
+            result_key = "maintenance_event_corrected"
+        outcome, error, redirect = await self._maintenance_mutate(request)
+        if redirect is not None:
+            return redirect
+        if error == "maintenance_confirm_baseline_lock":
+            # The data changed since the notice: show the current guards.
+            return await self._async_submit_event(asset)
+        if error is not None or outcome is None:
+            return self._show_event_form_again(asset, {"base": error or "asset_store_error"})
+        self._event_draft = None
+        destination = {
+            "menu": self.async_step_maintenance_menu,
+            "schedule": self.async_step_maintenance_schedule,
+        }.get(draft["origin"], self.async_step_maintenance_history)
+        return await self._finish_maintenance(asset, outcome, result_key, destination)
+
+    def _show_lock_form(
+        self, asset: AssetData, *, errors: dict[str, str] | None = None
+    ) -> ConfigFlowResult:
+        return self.async_show_form(
+            step_id="maintenance_event_lock",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_CONFIRM_BASELINE_LOCK, default=False
+                    ): selector.BooleanSelector()
+                }
+            ),
+            errors=errors or {},
+            description_placeholders={
+                "asset": _asset_label(asset),
+                "schedules": self._schedule_names(
+                    getattr(self, "_pending_locks", ())
+                ),
+            },
+        )
+
+    async def async_step_maintenance_event_lock(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Say before saving that this Event locks these starting points."""
+        asset = self._maintenance_asset()
+        draft = getattr(self, "_event_draft", None)
+        if asset is None or draft is None:
+            return await self.async_step_maintenance_menu()
+        if user_input is None:
+            return self._show_lock_form(asset)
+        if not user_input.get(CONF_CONFIRM_BASELINE_LOCK):
+            return self._show_lock_form(
+                asset,
+                errors={CONF_CONFIRM_BASELINE_LOCK: "maintenance_confirmation_required"},
+            )
+        # Exactly the Schedules the notice named.
+        draft["confirmed_locks"] = frozenset(draft["confirmed_locks"]) | frozenset(
+            getattr(self, "_pending_locks", ())
+        )
+        return await self._async_submit_event(asset)
+
+    def _show_ambiguity_form(self, asset: AssetData) -> ConfigFlowResult:
+        return self.async_show_form(
+            step_id="maintenance_event_ambiguity",
+            data_schema=vol.Schema({}),
+            description_placeholders={
+                "asset": _asset_label(asset),
+                "schedules": self._schedule_names(
+                    getattr(self, "_pending_ambiguity", ())
+                ),
+            },
+        )
+
+    async def async_step_maintenance_event_ambiguity(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Warn about several Events on the latest date; never block."""
+        asset = self._maintenance_asset()
+        draft = getattr(self, "_event_draft", None)
+        if asset is None or draft is None:
+            return await self.async_step_maintenance_menu()
+        if user_input is None:
+            return self._show_ambiguity_form(asset)
+        draft["ambiguity_acknowledged"] = True
+        return await self._async_submit_event(asset)
+
+    # History
+
+    def _event_state(
+        self, event: MaintenanceEventData, events: list[MaintenanceEventData]
+    ) -> str:
+        """Active, voided, or corrected (voided and replaced by a correction)."""
+        if event["voided_at"] is None:
+            return _EVENT_ACTIVE
+        if any(item["corrects_event_uuid"] == event["event_uuid"] for item in events):
+            return _EVENT_CORRECTED
+        return _EVENT_VOIDED
+
+    def _event_state_label(self, state: str) -> str:
+        if state == _EVENT_ACTIVE:
+            return self._localized_label("Active", "Voimassa")
+        if state == _EVENT_CORRECTED:
+            return self._localized_label("Corrected", "Korjattu")
+        return self._localized_label("Voided", "Mitätöity")
+
+    def _events_newest_first(
+        self,
+        asset: AssetData,
+        *,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> list[MaintenanceEventData]:
+        """Every Event of the Asset in range, newest performed date first.
+
+        The same date is ordered by title, then by the Event's identity:
+        stable, and never by when it was recorded.
+        """
+        events = self._manager.maintenance_events_for_asset(asset["asset_uuid"])
+        selected = [
+            event
+            for event in events
+            if (date_from is None or event["performed_date"] >= date_from)
+            and (date_to is None or event["performed_date"] <= date_to)
+        ]
+        selected.sort(key=lambda item: (item["title"].casefold(), item["event_uuid"]))
+        selected.sort(key=lambda item: item["performed_date"], reverse=True)
+        return selected
+
+    def _event_label(
+        self, event: MaintenanceEventData, events: list[MaintenanceEventData]
+    ) -> str:
+        return " · ".join(
+            (
+                self._localized_date(event["performed_date"]),
+                _short_name(event["title"]),
+                self._event_state_label(self._event_state(event, events)),
+            )
+        )
+
+    def _history_back(self, asset: AssetData) -> str:
+        return (
+            "archived_asset"
+            if self._manager.asset_archived(asset["asset_uuid"])
+            else "maintenance_menu"
+        )
+
+    async def async_step_maintenance_history(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Summarize the latest Events; Correct and Void reach all of them.
+
+        Also offered for an archived Asset: correcting history is allowed
+        after Archive, current management is not.
+        """
+        asset = self._maintenance_asset()
+        if asset is None:
+            return self._show_asset_selection(errors={"base": "asset_missing"})
+        events = self._manager.maintenance_events_for_asset(asset["asset_uuid"])
+        latest = self._events_newest_first(asset)[:MAINTENANCE_HISTORY_SUMMARY_LIMIT]
+        lines = ["• " + self._event_label(event, events) for event in latest]
+        menu_options = []
+        if events:
+            menu_options.extend(["maintenance_correct_event", "maintenance_void_event"])
+        menu_options.append(self._history_back(asset))
+        return self.async_show_menu(
+            step_id="maintenance_history",
+            menu_options=menu_options,
+            description_placeholders={
+                "asset": _view_asset_label(asset),
+                "result": await self._result_message(asset),
+                "count": str(len(events)),
+                "events": "\n".join(lines)
+                or self._localized_label(
+                    "No maintenance recorded yet.", "Huoltoja ei ole vielä kirjattu."
+                ),
+            },
+        )
+
+    async def async_step_maintenance_correct_event(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Choose an Event to correct, first narrowing by date if wanted."""
+        self._history_action = "correct"
+        return await self.async_step_maintenance_history_filter()
+
+    async def async_step_maintenance_void_event(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Choose an Event to void, first narrowing by date if wanted."""
+        self._history_action = "void"
+        return await self.async_step_maintenance_history_filter()
+
+    def _show_history_filter(
+        self,
+        asset: AssetData,
+        *,
+        user_input: dict[str, Any] | None = None,
+        errors: dict[str, str] | None = None,
+    ) -> ConfigFlowResult:
+        schema = vol.Schema(
+            {
+                vol.Optional(CONF_DATE_FROM): selector.DateSelector(),
+                vol.Optional(CONF_DATE_TO): selector.DateSelector(),
+            }
+        )
+        return self.async_show_form(
+            step_id="maintenance_history_filter",
+            data_schema=self.add_suggested_values_to_schema(schema, user_input or {}),
+            errors=errors or {},
+            description_placeholders={"asset": _asset_label(asset)},
+        )
+
+    async def async_step_maintenance_history_filter(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Optionally limit the Events by performed date; default is all."""
+        asset = self._maintenance_asset()
+        if asset is None:
+            return self._show_asset_selection(errors={"base": "asset_missing"})
+        if user_input is None:
+            return self._show_history_filter(asset)
+        date_from = str(user_input.get(CONF_DATE_FROM) or "") or None
+        date_to = str(user_input.get(CONF_DATE_TO) or "") or None
+        if date_from and date_to and date_from > date_to:
+            return self._show_history_filter(
+                asset,
+                user_input=user_input,
+                errors={"base": "maintenance_filter_range"},
+            )
+        self._history_filter = (date_from, date_to)
+        return self._show_event_selection(asset)
+
+    def _show_event_selection(
+        self, asset: AssetData, *, errors: dict[str, str] | None = None
+    ) -> ConfigFlowResult:
+        date_from, date_to = getattr(self, "_history_filter", (None, None))
+        events = self._manager.maintenance_events_for_asset(asset["asset_uuid"])
+        matching = self._events_newest_first(asset, date_from=date_from, date_to=date_to)
+        # Records alike in date, title, and state get their identity.
+        labels = _unique_labels(
+            {event["event_uuid"]: self._event_label(event, events) for event in matching}
+        )
+        options = [
+            self._not_selected_option(),
+            *(
+                selector.SelectOptionDict(
+                    value=event["event_uuid"], label=labels[event["event_uuid"]]
+                )
+                for event in matching
+            ),
+        ]
+        if not matching and not errors:
+            errors = {"base": "maintenance_no_matching_events"}
+        return self.async_show_form(
+            step_id="maintenance_select_event",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_EVENT_UUID, default=NOT_SELECTED
+                    ): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=options,
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    )
+                }
+            ),
+            errors=errors or {},
+            description_placeholders={
+                "asset": _asset_label(asset),
+                "count": str(len(matching)),
+            },
+        )
+
+    async def async_step_maintenance_select_event(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Choose one Event; only an active one can be corrected or voided."""
+        asset = self._maintenance_asset()
+        if asset is None:
+            return self._show_asset_selection(errors={"base": "asset_missing"})
+        if user_input is None:
+            return self._show_event_selection(asset)
+        event_uuid = str(user_input.get(CONF_EVENT_UUID) or "")
+        if event_uuid in ("", NOT_SELECTED):
+            return self._show_event_selection(
+                asset, errors={CONF_EVENT_UUID: "maintenance_event_required"}
+            )
+        event = self._manager.maintenance_event(event_uuid)
+        if event is None or event["asset_uuid"] != asset["asset_uuid"]:
+            return self._show_event_selection(
+                asset, errors={"base": "maintenance_event_not_found"}
+            )
+        if event["voided_at"] is not None:
+            return self._show_event_selection(
+                asset, errors={"base": "maintenance_event_not_active"}
+            )
+        self._history_event_uuid = event_uuid
+        if getattr(self, "_history_action", "void") == "correct":
+            self._event_draft = {
+                "mode": "correct",
+                "event_uuid": str(uuid4()),
+                "target_event_uuid": event_uuid,
+                "asset_uuid": asset["asset_uuid"],
+                "schedule_uuids": list(event["schedule_uuids"]),
+                "title": event["title"],
+                "notes": event["notes"],
+                "performed_date": event["performed_date"],
+                "runtime_seconds": event["runtime_seconds"],
+                "void_reason": None,
+                "captured": False,
+                "origin": "history",
+                "form": "correct",
+                "confirmed_locks": frozenset(),
+                "ambiguity_acknowledged": False,
+            }
+            return self._show_correct_form(asset)
+        return self._show_void_form(asset, event)
+
+    def _show_void_form(
+        self,
+        asset: AssetData,
+        event: MaintenanceEventData,
+        *,
+        errors: dict[str, str] | None = None,
+    ) -> ConfigFlowResult:
+        return self.async_show_form(
+            step_id="maintenance_void_event_confirm",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_CONFIRM_VOID, default=False): (
+                        selector.BooleanSelector()
+                    ),
+                    vol.Optional(CONF_VOID_REASON): _text_selector(),
+                }
+            ),
+            errors=errors or {},
+            description_placeholders={
+                "asset": _asset_label(asset),
+                "event": " · ".join(
+                    (
+                        self._localized_date(event["performed_date"]),
+                        _short_name(event["title"]),
+                    )
+                ),
+            },
+        )
+
+    async def async_step_maintenance_void_event_confirm(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Void one Event: final, kept in history, never deleted or edited."""
+        asset = self._maintenance_asset()
+        if asset is None:
+            return self._show_asset_selection(errors={"base": "asset_missing"})
+        event = self._manager.maintenance_event(
+            getattr(self, "_history_event_uuid", None)
+        )
+        if event is None or event["asset_uuid"] != asset["asset_uuid"]:
+            return self._show_event_selection(
+                asset, errors={"base": "maintenance_event_not_found"}
+            )
+        if user_input is None:
+            return self._show_void_form(asset, event)
+        if not user_input.get(CONF_CONFIRM_VOID):
+            return self._show_void_form(
+                asset,
+                event,
+                errors={CONF_CONFIRM_VOID: "maintenance_confirmation_required"},
+            )
+        outcome, error, redirect = await self._maintenance_mutate(
+            VoidEventRequest(
+                event["event_uuid"], user_input.get(CONF_VOID_REASON) or None
+            )
+        )
+        if redirect is not None:
+            return redirect
+        if error is not None or outcome is None:
+            return self._show_void_form(asset, event, errors={"base": error or "asset_store_error"})
+        return await self._finish_maintenance(
+            asset,
+            outcome,
+            "maintenance_event_voided",
+            self.async_step_maintenance_history,
+        )
+
+    def _show_correct_form(
+        self,
+        asset: AssetData,
+        *,
+        user_input: dict[str, Any] | None = None,
+        errors: dict[str, str] | None = None,
+    ) -> ConfigFlowResult:
+        draft = self._event_draft or {}
+        schema = vol.Schema(
+            {
+                vol.Optional(
+                    CONF_SCHEDULE_UUIDS, default=list(draft.get("schedule_uuids") or [])
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=self._schedule_choices(asset),
+                        multiple=True,
+                        mode=selector.SelectSelectorMode.LIST,
+                    )
+                ),
+                vol.Required(CONF_EVENT_TITLE): _text_selector(),
+                vol.Required(CONF_PERFORMED_DATE): selector.DateSelector(),
+                vol.Optional(CONF_EVENT_RUNTIME_HOURS): _hours_selector(),
+                vol.Optional(CONF_NOTES): _text_selector(multiline=True),
+                vol.Optional(CONF_VOID_REASON): _text_selector(),
+            }
+        )
+        suggested: dict[str, Any] = {
+            CONF_EVENT_TITLE: draft.get("title") or "",
+            CONF_PERFORMED_DATE: draft.get("performed_date"),
+        }
+        if draft.get("runtime_seconds") is not None:
+            suggested[CONF_EVENT_RUNTIME_HOURS] = float(
+                _hours_value(draft["runtime_seconds"])
+            )
+        if draft.get("notes"):
+            suggested[CONF_NOTES] = draft["notes"]
+        if draft.get("void_reason"):
+            suggested[CONF_VOID_REASON] = draft["void_reason"]
+        suggested.update(user_input or {})
+        return self.async_show_form(
+            step_id="maintenance_correct_event_form",
+            data_schema=self.add_suggested_values_to_schema(schema, suggested),
+            errors=errors or {},
+            description_placeholders={"asset": _asset_label(asset)},
+        )
+
+    async def async_step_maintenance_correct_event_form(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Give the complete corrected Event; the old one is voided with it."""
+        asset = self._maintenance_asset()
+        draft = getattr(self, "_event_draft", None)
+        if asset is None or draft is None or draft.get("mode") != "correct":
+            return await self.async_step_maintenance_history()
+        if user_input is None:
+            return self._show_correct_form(asset)
+        target = self._manager.maintenance_event(draft["target_event_uuid"])
+        if target is None:
+            return self._show_event_selection(
+                asset, errors={"base": "maintenance_event_not_found"}
+            )
+        valid = {choice["value"] for choice in self._schedule_choices(asset)}
+        chosen = [str(item) for item in user_input.get(CONF_SCHEDULE_UUIDS) or []]
+        if any(item not in valid for item in chosen):
+            return self._show_correct_form(
+                asset,
+                user_input=user_input,
+                errors={"base": "maintenance_schedule_not_found"},
+            )
+        runtime = target["runtime_seconds"]
+        submitted = user_input.get(CONF_EVENT_RUNTIME_HOURS)
+        if submitted in (None, ""):
+            runtime = None
+        elif runtime is None or not _same_hours(submitted, runtime):
+            # A changed value; an unchanged one is sent as it is stored, and
+            # the mutation compares it with the stored value itself.
+            seconds = _hours_to_seconds(submitted)
+            if seconds is None:
+                return self._show_correct_form(
+                    asset,
+                    user_input=user_input,
+                    errors={"base": "maintenance_invalid_number"},
+                )
+            runtime = format_decimal(seconds)
+        draft.update(
+            {
+                "schedule_uuids": sorted(set(chosen)),
+                "title": str(user_input.get(CONF_EVENT_TITLE) or ""),
+                "performed_date": str(user_input.get(CONF_PERFORMED_DATE) or ""),
+                "runtime_seconds": runtime,
+                "notes": user_input.get(CONF_NOTES) or None,
+                "void_reason": user_input.get(CONF_VOID_REASON) or None,
+                "form": "correct",
+            }
+        )
+        return await self._async_submit_event(asset)
+
 class PurchaseSubentryFlow(ConfigSubentryFlow):
     """Add and edit purchases under the single parent integration."""
 
@@ -4533,7 +7192,40 @@ class PurchaseSubentryFlow(ConfigSubentryFlow):
 
 
 class RuntimeSubentryFlow(ConfigSubentryFlow):
-    """Add and edit per-device runtime tracking."""
+    """Add and edit per-device runtime tracking.
+
+    Runtime tracking is never configured for an archived Asset. The selected
+    device is resolved to its canonical Asset over every Asset, and an
+    archived target is refused early for the person's sake. The binding is
+    then reserved in the Store manager, under the same lock as Archive,
+    immediately before the create result is returned, and released in
+    ``async_remove`` after Home Assistant has added the subentry (or when
+    the flow ends without one). Setup quarantine stays the backstop.
+    """
+
+    _runtime_binding_release: Callable[[], None] | None = None
+
+    def _loaded_manager(self, entry: ConfigEntry) -> AssetStoreManager | None:
+        """Return the parent's loaded Store manager, if it is loaded."""
+        manager = getattr(entry, "runtime_data", None)
+        if (
+            getattr(entry, "state", None) is not ConfigEntryState.LOADED
+            or not isinstance(manager, AssetStoreManager)
+        ):
+            return None
+        return manager
+
+    def _release_runtime_binding(self) -> None:
+        release = self._runtime_binding_release
+        self._runtime_binding_release = None
+        if release is not None:
+            release()
+
+    @callback
+    def async_remove(self) -> None:
+        """Release a held Runtime binding reservation when the flow ends."""
+        self._release_runtime_binding()
+        super().async_remove()
 
     def _set_runtime_context(
         self,
@@ -4552,6 +7244,24 @@ class RuntimeSubentryFlow(ConfigSubentryFlow):
     def _get_runtime_context(self) -> dict[str, Any]:
         """Return selections stored between runtime form steps."""
         return getattr(self, "_runtime_context", {})
+
+    def _reconfigure_target_abort(
+        self,
+        subentry_data: Mapping[str, Any],
+    ) -> SubentryFlowResult | None:
+        """Refuse to reconfigure tracking whose Asset is archived.
+
+        Reconfiguring cannot change the device, so a subentry that resolves
+        to an archived Asset (quarantined at setup) would stay a binding to
+        an archived Asset; it can only be removed, or the Asset restored.
+        """
+        manager = self._loaded_manager(self._get_entry())
+        if manager is None:
+            return self.async_abort(reason="entry_not_loaded")
+        target = manager.runtime_binding_target(subentry_data)
+        if target is not None and target[1]:
+            return self.async_abort(reason="runtime_asset_archived")
+        return None
 
     async def async_step_user(
         self,
@@ -4576,6 +7286,12 @@ class RuntimeSubentryFlow(ConfigSubentryFlow):
                 errors["base"] = "runtime_already_tracked"
             elif runtime_mode not in RUNTIME_MODES:
                 errors["base"] = "invalid_runtime_mode"
+            elif (manager := self._loaded_manager(entry)) is None:
+                return self.async_abort(reason="entry_not_loaded")
+            elif (
+                target := manager.runtime_binding_target({CONF_DEVICE_ID: device_id})
+            ) is not None and target[1]:
+                errors["base"] = "runtime_asset_archived"
             else:
                 self._set_runtime_context(
                     device_id=device_id,
@@ -4629,11 +7345,35 @@ class RuntimeSubentryFlow(ConfigSubentryFlow):
                 else:
                     clean = cast(dict[str, Any], clean)
                     clean[CONF_RUNTIME_DATA_VERSION] = RUNTIME_DATA_VERSION
-                    registry = dr.async_get(self.hass)
-                    return self.async_create_entry(
-                        title=_runtime_title(registry, device_id),
-                        data=clean,
-                    )
+                    entry = self._get_entry()
+                    manager = self._loaded_manager(entry)
+                    if manager is None:
+                        return self.async_abort(reason="entry_not_loaded")
+                    release: Callable[[], None] | None = None
+                    if (target := manager.runtime_binding_target(clean)) is not None:
+                        self._release_runtime_binding()
+                        try:
+                            release = await manager.async_reserve_runtime_binding(
+                                entry, target[0]
+                            )
+                        except AssetStoreError as err:
+                            if err.code == "entry_not_loaded":
+                                return self.async_abort(reason="entry_not_loaded")
+                            errors["base"] = (
+                                "runtime_asset_archived"
+                                if err.code == "runtime_asset_archived"
+                                else "device_missing"
+                            )
+                    if not errors:
+                        # No await from the reservation until the create result
+                        # is returned: Home Assistant adds the subentry before it
+                        # removes this flow, which releases the reservation.
+                        self._runtime_binding_release = release
+                        registry = dr.async_get(self.hass)
+                        return self.async_create_entry(
+                            title=_runtime_title(registry, device_id),
+                            data=clean,
+                        )
 
         return self.async_show_form(
             step_id="runtime_source",
@@ -4651,6 +7391,8 @@ class RuntimeSubentryFlow(ConfigSubentryFlow):
     ) -> SubentryFlowResult:
         """Choose the runtime detection method for an existing tracker."""
         subentry = self._get_reconfigure_subentry()
+        if (abort := self._reconfigure_target_abort(subentry.data)) is not None:
+            return abort
         device_id = str(subentry.data.get(CONF_DEVICE_ID) or "")
         errors: dict[str, str] = {}
 
@@ -4695,6 +7437,8 @@ class RuntimeSubentryFlow(ConfigSubentryFlow):
 
         entry = self._get_entry()
         subentry = self._get_reconfigure_subentry()
+        if (abort := self._reconfigure_target_abort(subentry.data)) is not None:
+            return abort
         device_id = str(context[CONF_DEVICE_ID])
         runtime_mode = str(context[CONF_RUNTIME_MODE])
         saved_defaults = dict(context.get("defaults", {}))

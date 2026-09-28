@@ -32,8 +32,12 @@ CONTINUE = ("Continue", "Jatka")
 SAVE_AND_RETURN = ("Save and return", "Tallenna ja palaa")
 # Form step -> (English, Finnish) button text, by what the step does.
 SUBMIT = {
-    # Opens the chosen Asset's hub.
+    # Opens the chosen Asset's hub, or an archived device's view.
     "manage_asset": ("Open", "Avaa"),
+    "archived_assets": ("Open", "Avaa"),
+    # Archive and Restore say what they do (WP15).
+    "confirm_archive_asset": ("Archive device", "Arkistoi laite"),
+    "confirm_restore_asset": ("Restore device", "Palauta laite"),
     # Change one thing, then return.
     "edit_asset_metadata": SAVE_AND_RETURN,
     "change_asset_purchase": SAVE_AND_RETURN,
@@ -49,11 +53,32 @@ SUBMIT = {
     "confirm_void_replacement": ("Void and return", "Mitätöi ja palaa"),
     # Only choose where to go next.
     "manage_asset_replacement": CONTINUE,
+    "archived_void_replacement": CONTINUE,
     "quick_add_from_ha": CONTINUE,
     "quick_add_details": CONTINUE,
     "quick_add_replacement": CONTINUE,
     # Creates the Asset and ends the flow.
     "quick_add_confirm": ("Add device", "Lisää laite"),
+    # WP17 Maintenance: pickers open, steps continue, savers say what they do.
+    "maintenance_open_schedule": ("Open", "Avaa"),
+    "maintenance_add_schedule": ("Continue", "Jatka"),
+    "maintenance_schedule_reminder": ("Continue", "Jatka"),
+    "maintenance_start_known": ("Save and return", "Tallenna ja palaa"),
+    "maintenance_edit_schedule": ("Continue", "Jatka"),
+    "maintenance_delete_schedule": ("Delete and return", "Poista ja palaa"),
+    "maintenance_add_calendar": ("Continue", "Jatka"),
+    "maintenance_add_runtime": ("Continue", "Jatka"),
+    "maintenance_remove_interval": ("Remove and return", "Poista ja palaa"),
+    "maintenance_confirm_destroy_baseline": ("Remove permanently", "Poista pysyvästi"),
+    "maintenance_record": ("Continue", "Jatka"),
+    "maintenance_event_just_now": ("Save and return", "Tallenna ja palaa"),
+    "maintenance_event_earlier": ("Save and return", "Tallenna ja palaa"),
+    "maintenance_event_lock": ("Continue", "Jatka"),
+    "maintenance_event_ambiguity": ("Save anyway", "Tallenna silti"),
+    "maintenance_history_filter": ("Continue", "Jatka"),
+    "maintenance_select_event": ("Continue", "Jatka"),
+    "maintenance_void_event_confirm": ("Void and return", "Mitätöi ja palaa"),
+    "maintenance_correct_event_form": ("Save correction", "Tallenna korjaus"),
 }
 GENERIC = {"submit", "lähetä", "ok", "save", "tallenna"}
 

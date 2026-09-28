@@ -157,10 +157,13 @@
         "invalid_power_hysteresis": "Hystereesin pitää olla vähintään nolla.",
         "power_hysteresis_too_large": "Hystereesi ei voi olla tehorajaa suurempi.",
         "invalid_runtime_mode": "Käyttötuntiseurannan tapa ei ole kelvollinen.",
-        "service_device_not_allowed": "Valittu kohde on Home Assistant -palvelu eikä seurattava fyysinen laite."
+        "service_device_not_allowed": "Valittu kohde on Home Assistant -palvelu eikä seurattava fyysinen laite.",
+        "runtime_asset_archived": "Laite on arkistoitu, joten sille ei voi määrittää käyttötuntiseurantaa."
       },
       "abort": {
-        "reconfigure_successful": "Käyttötuntiseuranta päivitettiin."
+        "reconfigure_successful": "Käyttötuntiseuranta päivitettiin.",
+        "runtime_asset_archived": "Laite on arkistoitu, joten sille ei voi määrittää käyttötuntiseurantaa.",
+        "entry_not_loaded": "Device Lifecycle ei ole tällä hetkellä ladattu. Lataa integraatio uudelleen ja yritä uudelleen."
       }
     }
   },
@@ -179,9 +182,31 @@
       "asset_related_device_removed": "Liittyvä Home Assistant -laite poistettiin.",
       "asset_replacement_updated": "Korvaaminen päivitettiin.",
       "asset_updated": "Perustiedot päivitettiin.",
-      "quick_asset_created": "{asset_name} lisättiin Device Lifecycleen."
+      "quick_asset_created": "{asset_name} lisättiin Device Lifecycleen.",
+      "archive_completed": "Laite arkistoitiin. Se ei ole enää osa aktiivihallintaa.",
+      "archive_unchanged": "Laite oli jo arkistoitu.",
+      "restore_completed": "Laite palautettiin aktiivihallintaan.",
+      "restore_unchanged": "Laite oli jo aktiivihallinnassa.",
+      "maintenance_schedule_created": "Huoltoaikataulu lisätty.",
+      "maintenance_schedule_updated": "Huoltoaikataulu tallennettu.",
+      "maintenance_unchanged": "Mikään ei muuttunut; asia oli jo näin.",
+      "maintenance_schedule_enabled": "Huoltoaikataulu otettu käyttöön.",
+      "maintenance_schedule_disabled": "Huoltoaikataulu otettu pois käytöstä. Sen historia säilyy.",
+      "maintenance_schedule_deleted": "Huoltoaikataulu poistettu.",
+      "maintenance_interval_added": "Huoltoväli lisätty.",
+      "maintenance_interval_removed": "Huoltoväli poistettu.",
+      "maintenance_starting_point_updated": "Lähtötilanne tallennettu.",
+      "maintenance_starting_point_locked": "Lähtötilanne on lukittu, koska huoltoja on kirjattu.",
+      "maintenance_event_recorded": "Huolto kirjattu.",
+      "maintenance_event_voided": "Kirjaus mitätöity. Se säilyy historiassa.",
+      "maintenance_event_corrected": "Kirjaus korjattu. Alkuperäinen säilyy historiassa.",
+      "maintenance_archived_meanwhile": "Laite arkistoitiin välillä. Nyt voi korjata vain sen huoltohistoriaa; mitään ei tallennettu.",
+      "maintenance_schedule_missing": "Huoltoaikataulua ei enää ole.",
+      "maintenance_action_failed": "Muutosta ei voitu tallentaa. Yritä uudelleen.",
+      "maintenance_last_interval": "Viimeistä huoltoväliä ei voi poistaa."
     },
     "error": {
+      "asset_archived": "Valittu laite on arkistoitu, eikä sitä voi muuttaa. Mitään ei muutettu.",
       "asset_missing": "Valittua laitetta ei enää ole.",
       "asset_store_error": "Muutosta ei voitu tallentaa. Mitään ei muutettu.",
       "confirmation_required": "Vahvista toiminto jatkaaksesi.",
@@ -235,7 +260,46 @@
       "correction_reason_required": "Anna vanhan suhteen korjaamisen syy.",
       "void_confirmation_required": "Vahvista suhteen mitätöinti.",
       "primary_device_required": "Valitse ensisijainen Home Assistant -laite.",
-      "related_device_to_add_required": "Valitse lisättävä Home Assistant -laite."
+      "related_device_to_add_required": "Valitse lisättävä Home Assistant -laite.",
+      "archive_asset_deployed": "Laite on asennettuna. Muuta sen asennustilaksi ei asennettu ennen arkistointia.",
+      "archive_runtime_configured": "Laitteelle on yhä määritetty käyttötuntiseuranta. Poista seurannan määritys ennen arkistointia; laite säilyttää kertyneet käyttötuntinsa.",
+      "archive_runtime_binding_in_progress": "Laitteelle ollaan juuri määrittämässä käyttötuntiseurantaa. Viimeistele tai peruuta määritys ja yritä sitten uudelleen.",
+      "archive_runtime_writer_active": "Laitteen käyttötuntiseuranta on yhä käynnissä. Poista seurannan määritys ja yritä uudelleen.",
+      "archive_runtime_undurable": "Laitteen viimeisimpiä käyttötunteja ei ole vielä tallennettu. Mitään ei muutettu; yritä hetken kuluttua uudelleen.",
+      "archive_runtime_unresolved": "Osaa laitteen käyttötunneista ei voitu tallentaa, kun sen seuranta poistettiin. Lataa Device Lifecycle uudelleen ja yritä sitten uudelleen.",
+      "runtime_asset_archived": "Laite on arkistoitu, joten sille ei voi määrittää käyttötuntiseurantaa.",
+      "archive_confirmation_required": "Vahvista arkistointi jatkaaksesi.",
+      "restore_confirmation_required": "Vahvista palautus jatkaaksesi.",
+      "archived_asset_required": "Valitse arkistoitu laite.",
+      "no_archived_assets": "Arkistoituja laitteita ei ole.",
+      "runtime_checkpoint_failed": "Laitteen viimeisimpiä käyttötunteja ei voitu tallentaa. Mitään ei muutettu ja käyttötunnit säilyvät; yritä uudelleen.",
+      "runtime_checkpoint_unresolved": "Osaa laitteen käyttötunneista ei voitu tallentaa, kun sen seuranta poistettiin. Lataa Device Lifecycle uudelleen ja yritä sitten uudelleen.",
+      "maintenance_anchor_requires_interval": "Lähtötilanne vaatii vastaavan huoltovälin.",
+      "maintenance_asset_not_found": "Laitetta ei enää ole.",
+      "maintenance_baseline_locked": "Lähtötilanne on lukittu, koska huoltoja on kirjattu.",
+      "maintenance_confirm_baseline_lock": "Tallennus lukitsee lähtötilanteen; vahvista se ensin.",
+      "maintenance_confirm_destroy_baseline": "Tämä poistaa lukitun lähtötilanteen; vahvista se ensin.",
+      "maintenance_date_in_future": "Päivä ei voi olla tämän päivän jälkeen.",
+      "maintenance_event_not_active": "Kirjaus ei ole enää voimassa, joten sitä ei voi korjata tai mitätöidä.",
+      "maintenance_event_not_found": "Kirjausta ei enää ole.",
+      "maintenance_event_required": "Valitse kirjaus.",
+      "maintenance_interval_exists": "Huoltoväli on jo olemassa; muokkaa sen arvoa.",
+      "maintenance_interval_required": "Anna aikaväli, käyttötuntiväli tai molemmat.",
+      "maintenance_interval_type_change": "Lisää tai poista huoltoväli kohdassa Huoltovälit.",
+      "maintenance_invalid_request": "Tarkista arvot; jokin niistä ei kelpaa.",
+      "maintenance_invalid_number": "Anna kelvollinen positiivinen luku.",
+      "maintenance_last_interval": "Viimeistä huoltoväliä ei voi poistaa.",
+      "maintenance_reminder_requires_calendar": "Valmistautumismuistutus vaatii aikavälin.",
+      "maintenance_replay_conflict": "Tämä on jo tallennettu toisin arvoin. Sulje ikkuna ja aloita alusta.",
+      "maintenance_runtime_above_current": "Käyttötunnit eivät voi ylittää laitteen nykyisiä käyttötunteja.",
+      "maintenance_schedule_not_found": "Huoltoaikataulua ei enää ole.",
+      "maintenance_schedule_other_asset": "Valitse vain tämän laitteen aikatauluja.",
+      "maintenance_schedule_referenced": "Aikataululle on kirjattu huoltoja, joten sitä ei voi poistaa.",
+      "maintenance_schedule_required": "Valitse huoltoaikataulu.",
+      "maintenance_starting_point_required": "Anna vähintään yksi arvo tai valitse sen sijaan Ei tiedossa.",
+      "maintenance_confirmation_required": "Vahvista jatkaaksesi.",
+      "maintenance_filter_range": "Alkupäivä ei voi olla loppupäivän jälkeen.",
+      "maintenance_no_matching_events": "Näille päiville ei ole kirjauksia."
     },
     "step": {
       "asset_deployment": {
@@ -477,7 +541,8 @@
       "init": {
         "menu_options": {
           "quick_add": "Lisää laite",
-          "manage_asset": "Hallitse laitteita"
+          "manage_asset": "Hallitse laitteita",
+          "archived_assets": "Arkistoidut laitteet"
         },
         "title": "Laitteiden hallinta"
       },
@@ -495,13 +560,16 @@
           "asset_details_warranty_menu": "{details_warranty}",
           "asset_installation_menu": "{deployment}",
           "asset_lifecycle_replacement_menu": "{lifecycle_replacement}",
-          "ha_relationship": "{ha_devices}"
+          "ha_relationship": "{ha_devices}",
+          "maintenance_menu": "{maintenance}"
         },
         "menu_options": {
           "asset_details_warranty_menu": "Tiedot ja takuu",
           "asset_installation_menu": "Asennus ja sijainti",
           "asset_lifecycle_replacement_menu": "Elinkaari ja korvaaminen",
           "ha_relationship": "Home Assistant -laitteet",
+          "maintenance_menu": "Huolto",
+          "confirm_archive_asset": "Arkistoi tämä laite",
           "manage_asset": "Valitse toinen laite"
         },
         "title": "Hallitse laitetta"
@@ -551,6 +619,295 @@
         "description": "{asset}\n\nValitse vanha laite, jonka tämä laite korvaa.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
         "submit": "Tallenna ja palaa",
         "title": "Tämä laite korvaa…"
+      },
+      "confirm_archive_asset": {
+        "title": "Arkistoi laite",
+        "description": "{asset}\n\nArkistointi poistaa laitteen aktiivihallinnasta. Se ei ole elinkaaren tila eikä poisto: laite säilyttää laitetunnuksensa, historiansa, huoltohistoriansa ja Home Assistant -entiteettinsä, ja sen voi palauttaa myöhemmin.\n\nAsennustilaa ei muuteta eikä käyttötuntiseurantaa poisteta puolestasi.\n\n**Ennen arkistointia**\n{blockers}\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
+        "data": {
+          "confirm_archive": "Vahvista arkistointi"
+        },
+        "submit": "Arkistoi laite"
+      },
+      "archived_assets": {
+        "title": "Arkistoidut laitteet",
+        "description": "Valitse arkistoitu laite sen nimen ja laitetunnuksen perusteella. Arkistoidut laitteet säilyvät historioineen; ne eivät ole osa aktiivihallintaa.",
+        "data": {
+          "asset_uuid": "Arkistoitu laite"
+        },
+        "submit": "Avaa"
+      },
+      "archived_asset": {
+        "title": "Arkistoitu laite",
+        "description": "{asset}\n\n{result}\n\n{facts}",
+        "menu_options": {
+          "confirm_restore_asset": "Palauta aktiivihallintaan",
+          "archived_void_replacement": "Mitätöi korvaussuhde",
+          "maintenance_history": "Huoltohistoria",
+          "archived_assets": "← Takaisin arkistoituihin laitteisiin"
+        }
+      },
+      "archived_void_replacement": {
+        "title": "Mitätöi korvaussuhde",
+        "description": "{asset}\n\nValitse mitätöitävä korvaussuhde. Mitätöinti korjaa historiaa; laite pysyy arkistoituna.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
+        "data": {
+          "replacement_uuid": "Aktiivinen suhde"
+        },
+        "submit": "Jatka"
+      },
+      "confirm_restore_asset": {
+        "title": "Palauta laite",
+        "description": "{asset}\n\nPalauttaminen tuo laitteen takaisin aktiivihallintaan samalla laitetunnuksella, historialla ja Home Assistant -entiteeteillä.\n\nKäyttötuntiseurantaa ei luoda uudelleen; määritä se tarvittaessa uudelleen. Arkistoinnin ajalta ei arvioida käyttötunteja. Laitteen yhä nimeämät Home Assistant -laitteet, joita ei enää ole, voivat näkyä uudelleen korjausehdotuksissa, eikä mitään korjata puolestasi. Huolto voi olla heti erääntynyt.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
+        "data": {
+          "confirm_restore": "Vahvista palautus"
+        },
+        "submit": "Palauta laite"
+      },
+      "maintenance_menu": {
+        "title": "Huolto",
+        "description": "{asset}\n\n{result}\n\n**Huoltoaikataulut**\n{schedules}",
+        "menu_options": {
+          "maintenance_add_schedule": "Lisää huoltoaikataulu",
+          "maintenance_open_schedule": "Avaa huoltoaikataulu",
+          "maintenance_record": "Kirjaa huolto",
+          "maintenance_history": "Historia",
+          "manage_asset_menu": "← Takaisin laitteen hallintaan"
+        }
+      },
+      "maintenance_open_schedule": {
+        "title": "Avaa huoltoaikataulu",
+        "description": "{asset}",
+        "submit": "Avaa",
+        "data": {
+          "schedule_uuid": "Huoltoaikataulu"
+        }
+      },
+      "maintenance_schedule": {
+        "title": "Huoltoaikataulu",
+        "description": "{asset}\n\n{result}\n\n**{schedule}**\n{facts}",
+        "menu_options": {
+          "maintenance_mark_done": "Merkitse tehdyksi",
+          "maintenance_edit_schedule": "Muokkaa",
+          "maintenance_intervals": "Huoltovälit",
+          "maintenance_starting_point": "Lähtötilanne",
+          "maintenance_disable_schedule": "Poista käytöstä",
+          "maintenance_enable_schedule": "Ota käyttöön",
+          "maintenance_delete_schedule": "Poista huoltoaikataulu",
+          "maintenance_menu": "← Takaisin huoltoon"
+        }
+      },
+      "maintenance_add_schedule": {
+        "title": "Lisää huoltoaikataulu",
+        "description": "{asset}\n\nAnna aikaväli, käyttötuntiväli tai molemmat. Huolto on ajankohtainen, kun ensimmäinen niistä täyttyy.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
+        "submit": "Jatka",
+        "data": {
+          "schedule_name": "Nimi",
+          "calendar_value": "Aikaväli",
+          "calendar_unit": "Aikayksikkö",
+          "runtime_hours": "Käyttötuntiväli (tuntia)"
+        },
+        "data_description": {
+          "runtime_hours": "Käyttötunteja; desimaalit sallitaan."
+        }
+      },
+      "maintenance_schedule_reminder": {
+        "title": "Valmistautumismuistutus",
+        "description": "{asset}\n\nValinnainen aikataululle {schedule}: muistutus näin monta päivää ennen eräpäivää. Jätä tyhjäksi, jos muistutusta ei tarvita.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
+        "submit": "Jatka",
+        "data": {
+          "lead_days": "Päivää ennen",
+          "reminder_message": "Muistutusviesti"
+        }
+      },
+      "maintenance_start_choice": {
+        "title": "Lähtötilanne",
+        "description": "{asset}\n\nTiedätkö, milloin tämä huolto on viimeksi tehty? Mitään ei päätellä ostosta, asennuksesta eikä tästä päivästä.",
+        "menu_options": {
+          "maintenance_start_unknown": "Ei tiedossa",
+          "maintenance_start_known": "Tiedän sen",
+          "maintenance_start_back": "← Takaisin"
+        }
+      },
+      "maintenance_start_known": {
+        "title": "Lähtötilanne",
+        "description": "{asset}\n\nAnna se, minkä tiedät. Tyhjäksi jätetty arvo pysyy tuntemattomana. Kun aikataululle kirjataan huolto, lähtötilanne lukittuu.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
+        "submit": "Tallenna ja palaa",
+        "data": {
+          "starting_date": "Viimeksi tehty",
+          "starting_runtime_hours": "Käyttötunnit viimeksi tehtäessä"
+        },
+        "data_description": {
+          "starting_runtime_hours": "Käyttötunteja; desimaalit sallitaan."
+        }
+      },
+      "maintenance_edit_schedule": {
+        "title": "Muokkaa huoltoaikataulua",
+        "description": "{asset}\n\n**{schedule}**\n\nHuoltovälin lisääminen tai poistaminen tehdään kohdassa Huoltovälit.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
+        "submit": "Jatka",
+        "data": {
+          "schedule_name": "Nimi",
+          "calendar_value": "Aikaväli",
+          "calendar_unit": "Aikayksikkö",
+          "runtime_hours": "Käyttötuntiväli (tuntia)"
+        },
+        "data_description": {
+          "runtime_hours": "Käyttötunteja; desimaalit sallitaan."
+        }
+      },
+      "maintenance_delete_schedule": {
+        "title": "Poista huoltoaikataulu",
+        "description": "{asset}\n\n**{schedule}**\n\nTälle aikataululle ei ole kirjattu huoltoja, joten sen voi poistaa pysyvästi.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
+        "submit": "Poista ja palaa",
+        "data": {
+          "confirm_delete_schedule": "Vahvista poisto"
+        }
+      },
+      "maintenance_intervals": {
+        "title": "Huoltovälit",
+        "description": "{asset}\n\n{result}\n\n**{schedule}**\n{intervals}\n{starting_point}",
+        "menu_options": {
+          "maintenance_add_calendar": "Lisää aikaväli",
+          "maintenance_add_runtime": "Lisää käyttötuntiväli",
+          "maintenance_remove_calendar": "Poista aikaväli",
+          "maintenance_remove_runtime": "Poista käyttötuntiväli",
+          "maintenance_schedule": "← Takaisin huoltoaikatauluun"
+        }
+      },
+      "maintenance_add_calendar": {
+        "title": "Lisää aikaväli",
+        "description": "{asset}\n\n**{schedule}**\n{starting_point}\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
+        "submit": "Jatka",
+        "data": {
+          "calendar_value": "Aikaväli",
+          "calendar_unit": "Aikayksikkö"
+        }
+      },
+      "maintenance_add_runtime": {
+        "title": "Lisää käyttötuntiväli",
+        "description": "{asset}\n\n**{schedule}**\n{starting_point}\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
+        "submit": "Jatka",
+        "data": {
+          "runtime_hours": "Käyttötuntiväli (tuntia)"
+        },
+        "data_description": {
+          "runtime_hours": "Käyttötunteja; desimaalit sallitaan."
+        }
+      },
+      "maintenance_remove_interval": {
+        "title": "Poista huoltoväli",
+        "description": "{asset}\n\n**{schedule}**\n\n{effects}\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
+        "submit": "Poista ja palaa",
+        "data": {
+          "confirm_remove_interval": "Vahvista poisto"
+        }
+      },
+      "maintenance_confirm_destroy_baseline": {
+        "title": "Poista lukittu lähtötilanne",
+        "description": "{asset}\n\n**{schedule}**\n\nTälle aikataululle on kirjattu huoltoja, joten sen lähtötilanne on lukittu. Huoltovälin poistaminen poistaa pysyvästi: {lost}. Välin lisääminen myöhemmin uudelleen ei palauta sitä.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
+        "submit": "Poista pysyvästi",
+        "data": {
+          "confirm_destroy_baseline": "Ymmärrän, ettei tätä voi perua"
+        }
+      },
+      "maintenance_record": {
+        "title": "Kirjaa huolto",
+        "description": "{asset}\n\nValitse aikataulut, jotka tämä huolto täyttää, tai ei yhtään aikataulujen ulkopuoliselle huollolle.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
+        "submit": "Jatka",
+        "data": {
+          "schedule_uuids": "Tehdyt aikataulut",
+          "event_title": "Otsikko",
+          "notes": "Muistiinpanot"
+        }
+      },
+      "maintenance_event_timing": {
+        "title": "Milloin huolto tehtiin?",
+        "description": "{asset}\n\n**{title}**",
+        "menu_options": {
+          "maintenance_event_just_now": "Juuri nyt",
+          "maintenance_event_earlier": "Aiemmin",
+          "maintenance_event_details": "← Takaisin tietoihin"
+        }
+      },
+      "maintenance_event_just_now": {
+        "title": "Juuri nyt",
+        "description": "{asset}\n\n**{title}**\n\nPäivä: {date}\nKäyttötunnit: {runtime}\n\nArvot luettiin, kun tämä vaihe avattiin, ja ne tallennetaan sellaisinaan.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
+        "submit": "Tallenna ja palaa"
+      },
+      "maintenance_event_earlier": {
+        "title": "Aiemmin tehty huolto",
+        "description": "{asset}\n\n**{title}**\n\nSilloisia käyttötunteja ei täytetä puolestasi; jätä kenttä tyhjäksi, jos et tiedä niitä.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
+        "submit": "Tallenna ja palaa",
+        "data": {
+          "performed_date": "Tekopäivä",
+          "event_runtime_hours": "Silloiset käyttötunnit"
+        },
+        "data_description": {
+          "event_runtime_hours": "Käyttötunteja; desimaalit sallitaan."
+        }
+      },
+      "maintenance_event_lock": {
+        "title": "Lähtötilanne lukittuu",
+        "description": "{asset}\n\nTämä on ensimmäinen kirjattu huolto aikatauluille: {schedules}. Tallennus lukitsee niiden lähtötilanteen pysyvästi; sitä ei voi enää muuttaa, vaikka kirjaus myöhemmin mitätöitäisiin.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
+        "submit": "Jatka",
+        "data": {
+          "confirm_baseline_lock": "Lukitse lähtötilanne"
+        }
+      },
+      "maintenance_event_ambiguity": {
+        "title": "Useita kirjauksia samalle päivälle",
+        "description": "{asset}\n\nSamalle päivälle on jo kirjaus aikatauluille: {schedules}. Päivä pysyy tiedossa, mutta laskennan lähtökäyttötunnit muuttuvat tuntemattomiksi sille päivälle. Virheellisen kaksoiskirjauksen voi myöhemmin korjata tai mitätöidä.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
+        "submit": "Tallenna silti"
+      },
+      "maintenance_history": {
+        "title": "Huoltohistoria",
+        "description": "{asset}\n\n{result}\n\n**Viimeisimmät kirjaukset** ({count} yhteensä)\n{events}",
+        "menu_options": {
+          "maintenance_correct_event": "Korjaa kirjaus",
+          "maintenance_void_event": "Mitätöi kirjaus",
+          "maintenance_menu": "← Takaisin huoltoon",
+          "archived_asset": "← Takaisin arkistoituun laitteeseen"
+        }
+      },
+      "maintenance_history_filter": {
+        "title": "Hae kirjauksia",
+        "description": "{asset}\n\nVoit rajata kirjauksia päivämäärällä. Jätä molemmat tyhjiksi, niin koko historia listataan.",
+        "submit": "Jatka",
+        "data": {
+          "date_from": "Alkaen",
+          "date_to": "Asti"
+        }
+      },
+      "maintenance_select_event": {
+        "title": "Valitse kirjaus",
+        "description": "{asset}\n\nOsumia: {count}, uusin ensin. Vain voimassa olevan kirjauksen voi korjata tai mitätöidä.",
+        "submit": "Jatka",
+        "data": {
+          "event_uuid": "Huoltokirjaus"
+        }
+      },
+      "maintenance_void_event_confirm": {
+        "title": "Mitätöi kirjaus",
+        "description": "{asset}\n\nMitätöitävä kirjaus: {event}\n\nMitätöity kirjaus säilyy historiassa, mutta sitä ei enää huomioida. Mitätöintiä ei voi perua.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
+        "submit": "Mitätöi ja palaa",
+        "data": {
+          "confirm_void": "Vahvista mitätöinti",
+          "void_reason": "Syy"
+        }
+      },
+      "maintenance_correct_event_form": {
+        "title": "Korjaa kirjaus",
+        "description": "{asset}\n\nAnna koko korjattu kirjaus. Alkuperäinen mitätöidään ja se säilyy historiassa.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
+        "submit": "Tallenna korjaus",
+        "data": {
+          "schedule_uuids": "Tehdyt aikataulut",
+          "event_title": "Otsikko",
+          "performed_date": "Tekopäivä",
+          "event_runtime_hours": "Silloiset käyttötunnit",
+          "notes": "Muistiinpanot",
+          "void_reason": "Korjauksen syy"
+        },
+        "data_description": {
+          "event_runtime_hours": "Käyttötunteja; desimaalit sallitaan."
+        }
       }
     }
   },
@@ -606,6 +963,13 @@
         "2_years": "2 vuotta",
         "manual": "Manuaalinen"
       }
+    },
+    "maintenance_interval_unit": {
+      "options": {
+        "days": "päivää",
+        "months": "kuukautta",
+        "years": "vuotta"
+      }
     }
   },
   "entity": {
@@ -656,6 +1020,24 @@
           "replaced_by": "Korvattu laitteella",
           "replaces": "Korvaa laitteen"
         }
+      },
+      "maintenance_status": {
+        "name": "Huolto {schedule}",
+        "state": {
+          "ok": "Kunnossa",
+          "unknown": "Tuntematon",
+          "due": "Ajankohtainen",
+          "overdue": "Myöhässä",
+          "disabled": "Pois käytöstä"
+        }
+      },
+      "maintenance_due_date": {
+        "name": "Seuraava huolto {schedule}"
+      }
+    },
+    "binary_sensor": {
+      "maintenance_preparation": {
+        "name": "Huoltoon valmistautuminen {schedule}"
       }
     }
   },
@@ -667,6 +1049,10 @@
     "stale_related_device": {
       "title": "Liittyvä Home Assistant -laite ei saatavilla: {asset_name} ({asset_id})",
       "description": "Laitteen {asset_name} ({asset_id}) liittyvä Home Assistant -laite ei ole enää Home Assistantissa.\n\nDevice Lifecycle säilytti tämän linkityksen tarkoituksella. Mitään ei ole poistettu automaattisesti, eikä laite tai sen entiteetit ole muuttuneet.\n\nPoista linkitys avaamalla [Device Lifecycle](/config/integrations/integration/device_lifecycle) ja valitsemalla **Määrittele** → **Hallitse laitteita** → {asset_id} → **Home Assistant -laitteet** → **Poista liittyvä Home Assistant -laite**. Laite näkyy siellä nimellä Home Assistant -laite ei saatavilla.\n\nJos sama Home Assistant -laite palaa Home Assistantiin, tämä ilmoitus poistuu itsestään."
+    },
+    "runtime_archived_asset": {
+      "title": "Käyttötuntiseuranta on ristiriidassa arkistoidun laitteen kanssa: {asset_name} ({asset_id})",
+      "description": "Laitteelle {asset_name} ({asset_id}) on yhä määritetty käyttötuntiseuranta, mutta laite on arkistoitu. Näin käy yleensä varmuuskopion palauttamisen jälkeen.\n\nLaitteen käyttötuntiseuranta on keskeytetty. Mitään ei ole poistettu: laite säilyttää kertyneet käyttötuntinsa, käyttötuntientiteettinsä ja historiansa, ja seurannan määritys säilyy muuttumattomana.\n\nRatkaise ristiriita avaamalla [Device Lifecycle](/config/integrations/integration/device_lifecycle) ja joko palauta laite tai poista tämä käyttötuntiseurannan määritys.\n\nIlmoituksen ohittaminen ei ratkaise ristiriitaa."
     }
   }
 }

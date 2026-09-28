@@ -962,8 +962,18 @@ async def test_store_1_1_and_1_2_migrate_to_detached_v2_1(
     before_1_1 = deepcopy(source_1_1)
     migrated_1_1 = await store._async_migrate_func(1, 1, source_1_1)
 
+    # A Store 1.2 source has none of the fields that later schemas added.
     source_1_2 = deepcopy(migrated_1_1)
     del source_1_2["assets"][ASSET_UUID]["runtime"]
+    del source_1_2["assets"][ASSET_UUID]["lifecycle"]
+    del source_1_2["assets"][ASSET_UUID]["archived_at"]
+    for key in (
+        "lifecycle_events",
+        "replacement_records",
+        "maintenance_schedules",
+        "maintenance_events",
+    ):
+        del source_1_2[key]
     before_1_2 = deepcopy(source_1_2)
     migrated_1_2 = await store._async_migrate_func(1, 2, source_1_2)
 
@@ -983,6 +993,7 @@ async def test_store_1_1_and_1_2_migrate_to_detached_v2_1(
         assert migrated["assets"][ASSET_UUID]["runtime"] == {
             "total_seconds": None
         }
+        assert migrated["assets"][ASSET_UUID]["archived_at"] is None
 
 
 async def test_real_store_writeerror_is_detected_and_not_published(
@@ -1056,7 +1067,7 @@ async def test_v2_downgrade_is_rejected_without_rewrite(
     assert returning.runtime_total_seconds(asset["asset_uuid"]) == Decimal(
         "1234.567"
     )
-    assert STORAGE_VERSION == 3
+    assert STORAGE_VERSION == 4
     assert STORAGE_MINOR_VERSION == 1
 
 

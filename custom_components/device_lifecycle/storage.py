@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from enum import StrEnum
 from types import MappingProxyType
 from typing import Any, Mapping, TypeVar, cast
 from uuid import UUID, uuid4
@@ -23,7 +25,22 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.storage import Store
 from homeassistant.util import json as json_util
 from homeassistant.util import dt as dt_util
+from homeassistant.util.hass_dict import HassKey
 
+from .archive import (
+    ArchiveAssetRequest,
+    ArchiveCompositionError,
+    ArchiveMutationError,
+    ArchiveOutcome,
+    ArchiveValidationError,
+    RestoreAssetRequest,
+    add_asset_archive_state,
+    apply_archive_request,
+    archive_state_matches,
+    asset_is_archived,
+    validate_asset_archive_state,
+)
+from .canonical import utc_now_iso
 from .const import (
     CONF_ASSET_UUID,
     CONF_CURRENCY,
@@ -60,20 +77,64 @@ from .const import (
     WARRANTY_TWO_YEARS,
     WARRANTY_TYPES,
 )
+from .maintenance import (
+    MAINTENANCE_COLLECTION_KEYS,
+    MaintenanceCompositionError,
+    MaintenanceValidationError,
+    add_maintenance_collections,
+    can_hard_delete_schedule,
+    is_baseline_locked,
+    validate_maintenance_collections,
+)
+from .maintenance_mutations import (
+    EventGuards,
+    MaintenanceArchivedAssetError,
+    MaintenanceMutationContext,
+    MaintenanceMutationError,
+    MaintenanceMutationResult,
+    MaintenanceSnapshot,
+    mutate_maintenance,
+    preflight_event_guards,
+)
+from .maintenance_projection import MaintenanceProjection, project_schedule
 from .models import (
     AssetData,
     AssetStoreData,
     HADeviceReference,
     LifecycleEventData,
     LifecycleStatus,
+    MaintenanceEventData,
+    MaintenanceScheduleData,
     PurchaseData,
     ReplacementReason,
     ReplacementRecordData,
 )
+from .runtime_identity import primary_device_id as _primary_device_id
+from .runtime_identity import (
+    resolve_runtime_subentry_asset,
+    runtime_subentries_resolving_to,
+)
+from .store_shape import (
+    ASSET_KEYS_4_1,
+    PURCHASE_KEYS,
+    STORE_3_1_TOP_LEVEL_KEYS,
+    STORE_4_1_TOP_LEVEL_KEYS,
+    StoreShapeError,
+    preflight_store_3_1_record_shapes,
+    require_exact_record_keys,
+)
 
-STORAGE_VERSION = 3
+# Store 4.1 is the production schema (docs/asset-archive-store-v4.md). Once
+# an installation has written it, releases that read Store 3.1 refuse the
+# file; returning to them requires restoring the pre-upgrade backup.
+STORAGE_VERSION = 4
 STORAGE_MINOR_VERSION = 1
 STORAGE_KEY = f"{DOMAIN}.assets"
+
+# The exact top-level shape of the production Store payload. The Store version
+# names one exact schema, so a key outside this set is not a forward-compatible
+# extension: it belongs to a different schema and fails closed.
+STORE_TOP_LEVEL_KEYS = STORE_4_1_TOP_LEVEL_KEYS
 
 ASSET_ID_PATTERN = re.compile(r"^DL([0-9]{4})$")
 MAX_ASSET_NUMBER = 9999
@@ -90,6 +151,27 @@ FIELD_SOURCES = frozenset(
 )
 
 _MutationResultT = TypeVar("_MutationResultT")
+# A Runtime writer operation for one Asset. It returns only after every
+# observable Runtime delta is durably committed, or raises.
+RuntimeCheckpointCallback = Callable[[], Awaitable[Any]]
+
+_LOGGER = logging.getLogger(__name__)
+
+# Runtime binding reservations, per ConfigEntry ID and Asset UUID: one token
+# per Runtime subentry flow that is about to create a subentry for the Asset.
+# In memory only and kept in hass.data, not on a manager, so a reload between
+# the reservation and the subentry's creation cannot hide it from Archive.
+RUNTIME_BINDING_RESERVATIONS: HassKey[dict[tuple[str, str], set[object]]] = HassKey(
+    f"{DOMAIN}_runtime_binding_reservations"
+)
+
+# Archive blockers, in the order a preview lists them.
+ARCHIVE_ASSET_DEPLOYED = "archive_asset_deployed"
+ARCHIVE_RUNTIME_CONFIGURED = "archive_runtime_configured"
+ARCHIVE_RUNTIME_BINDING_IN_PROGRESS = "archive_runtime_binding_in_progress"
+ARCHIVE_RUNTIME_WRITER_ACTIVE = "archive_runtime_writer_active"
+ARCHIVE_RUNTIME_UNDURABLE = "archive_runtime_undurable"
+ARCHIVE_RUNTIME_UNRESOLVED = "archive_runtime_unresolved"
 _UNSET = object()
 _USER_EDITABLE_ASSET_FIELDS = (
     "name",
@@ -209,7 +291,15 @@ class DeviceLifecycleStore(Store[AssetStoreData]):
         old_minor_version: int,
         old_data: AssetStoreData,
     ) -> AssetStoreData:
-        """Migrate Asset Core storage without changing persistent identity."""
+        """Migrate Asset Core storage without changing persistent identity.
+
+        Supported sources are 1.1, 1.2, 2.1, 3.1, and 4.1. Older sources
+        reach exact Store 3.1 through the existing steps, and 3.1 reaches
+        4.1 only through ``_migrate_v3_1_to_v4_1``. Home Assistant saves the
+        result through ``async_save``, which verifies it by direct readback
+        before ``async_load`` returns, so nothing unverified is published.
+        A newer major version is refused by Home Assistant itself.
+        """
         data = deepcopy(old_data)
 
         if old_major_version == STORAGE_VERSION:
@@ -222,6 +312,9 @@ class DeviceLifecycleStore(Store[AssetStoreData]):
             _validate_store_data(data)
             return data
 
+        if old_major_version == 3 and old_minor_version == 1:
+            return _migrate_v3_1_to_v4_1(data)
+
         if old_major_version == 1 and old_minor_version in (1, 2):
             data = _migrate_v1_to_v2_1(data, old_minor_version)
         elif old_major_version == 2 and old_minor_version == 1:
@@ -230,12 +323,10 @@ class DeviceLifecycleStore(Store[AssetStoreData]):
             raise AssetStoreError(
                 "Unsupported Asset Core Store version "
                 f"{old_major_version}.{old_minor_version}; expected one of "
-                "1.1, 1.2, 2.1, or 3.1"
+                "1.1, 1.2, 2.1, 3.1, or 4.1"
             )
 
-        data = _migrate_v2_1_to_v3_1(data)
-        _validate_store_data(data)
-        return data
+        return _migrate_v3_1_to_v4_1(_migrate_v2_1_to_v3_1(data))
 
     async def async_save(self, data: AssetStoreData) -> None:
         """Save and verify the exact Store envelope from the persisted file."""
@@ -272,7 +363,7 @@ class DeviceLifecycleStore(Store[AssetStoreData]):
             )
 
     async def async_load_persisted_snapshot(self) -> AssetStoreData | None:
-        """Read the current v3.1 payload directly, bypassing Store caches."""
+        """Read the current Store payload directly, bypassing Store caches."""
         try:
             persisted = await self.hass.async_add_executor_job(
                 json_util.load_json,
@@ -304,14 +395,60 @@ class DeviceLifecycleStore(Store[AssetStoreData]):
         return cast(AssetStoreData, deepcopy(persisted["data"]))
 
 
+def _changed_asset_uuids(
+    old: Mapping[str, Any],
+    new: Mapping[str, Any],
+) -> frozenset[str]:
+    """Return the Assets whose published data differs between two snapshots.
+
+    An Asset counts when its own record changed, or a record it owns or takes
+    part in changed: a Maintenance Schedule or Event, a Lifecycle Event, a
+    Replacement, or Purchase membership. Ownership of a record is read from
+    both sides, so an added, removed, or reassigned record names every Asset
+    involved. Derived from the snapshots only, never from a request.
+    """
+    changed: set[str] = set()
+
+    def _differing(key: str) -> list[tuple[Any, Any]]:
+        before = old.get(key) or {}
+        after = new.get(key) or {}
+        return [
+            (before.get(record_id), after.get(record_id))
+            for record_id in set(before) | set(after)
+            if before.get(record_id) != after.get(record_id)
+        ]
+
+    changed.update(
+        asset_uuid
+        for asset_uuid in set(old.get("assets") or {}) | set(new.get("assets") or {})
+        if (old.get("assets") or {}).get(asset_uuid)
+        != (new.get("assets") or {}).get(asset_uuid)
+    )
+    for key in ("maintenance_schedules", "maintenance_events", "lifecycle_events"):
+        for pair in _differing(key):
+            changed.update(record["asset_uuid"] for record in pair if record)
+    for pair in _differing("replacement_records"):
+        for record in pair:
+            if record:
+                changed.add(record["predecessor_asset_uuid"])
+                changed.add(record["successor_asset_uuid"])
+    for pair in _differing("purchases"):
+        for record in pair:
+            if record:
+                changed.update(record.get("asset_uuids") or ())
+    return frozenset(changed)
+
+
 def _empty_store_data() -> AssetStoreData:
-    """Return an empty Store 3.1 Asset Core payload."""
+    """Return an empty Store 4.1 Asset Core payload."""
     return {
         "next_asset_number": 1,
         "purchases": {},
         "assets": {},
         "lifecycle_events": {},
         "replacement_records": {},
+        "maintenance_schedules": {},
+        "maintenance_events": {},
     }
 
 
@@ -440,14 +577,6 @@ def _warranty_type(data: dict[str, Any]) -> str:
     if data.get(CONF_WARRANTY_UNTIL):
         return WARRANTY_MANUAL
     return WARRANTY_NONE
-
-
-def _primary_device_id(asset: AssetData) -> str | None:
-    """Return an Asset's primary Home Assistant device reference."""
-    for reference in asset.get("ha_device_refs", []):
-        if reference.get("role") == DEVICE_ROLE_PRIMARY:
-            return str(reference.get("device_id") or "") or None
-    return None
 
 
 
@@ -940,8 +1069,35 @@ def _validate_replacement_graph(data: AssetStoreData) -> None:
         visited.update(path)
 
 
-def _validate_store_data(data: AssetStoreData) -> None:
-    """Validate invariants which must remain true across all future releases."""
+def _validate_store_v3_1_data(data: AssetStoreData) -> None:
+    """Validate a Store 3.1 migration source.
+
+    The exact Store 3.1 top-level shape, then the domain invariants shared
+    with Store 4.1. Since Store 4.1 activation it is used only to validate a
+    3.1 source before ``_migrate_v3_1_to_v4_1`` transforms it.
+    """
+    if not isinstance(data, dict):
+        raise AssetStoreError("Asset Core storage payload is not a mapping")
+    keys = set(data)
+    if keys != STORE_3_1_TOP_LEVEL_KEYS:
+        # Name the keys only; the payload itself is never logged.
+        missing = sorted(STORE_3_1_TOP_LEVEL_KEYS - keys)
+        unexpected = sorted(str(key) for key in keys - STORE_3_1_TOP_LEVEL_KEYS)
+        raise AssetStoreError(
+            "Asset Core Store 3.1 has an invalid top-level shape: "
+            f"missing={missing}, unexpected={unexpected}"
+        )
+
+    _validate_store_payload(data)
+
+
+def _validate_store_payload(data: Mapping[str, Any]) -> None:
+    """Validate the domain invariants shared by Store 3.1 and Store 4.1.
+
+    The caller owns the version-specific top-level shape and record shapes.
+    This covers the Asset, Purchase, membership, Lifecycle, and Replacement
+    invariants exactly as Store 3.1 has always validated them.
+    """
     if not all(
         isinstance(data.get(key), dict)
         for key in (
@@ -1159,6 +1315,150 @@ def _validate_store_data(data: AssetStoreData) -> None:
     _validate_replacement_graph(data)
 
 
+def _validate_store_data(data: Mapping[str, Any]) -> None:
+    """Validate a complete production Store 4.1 payload.
+
+    It composes the authorities; see docs/asset-archive-store-v4.md.
+
+    Exact top-level keys, collection types, exact Asset and Purchase record
+    shapes, the shared Store invariants, the Asset Archive state, and the
+    Maintenance collections, in that order. Runtime ConfigSubentry state is
+    outside the Store and is not a load invariant.
+    """
+    if not isinstance(data, Mapping):
+        raise AssetStoreError("Asset Core storage payload is not a mapping")
+    keys = set(data)
+    if keys != STORE_4_1_TOP_LEVEL_KEYS:
+        missing = sorted(STORE_4_1_TOP_LEVEL_KEYS - keys)
+        unexpected = sorted(str(key) for key in keys - STORE_4_1_TOP_LEVEL_KEYS)
+        raise AssetStoreError(
+            "Asset Core Store 4.1 has an invalid top-level shape: "
+            f"missing={missing}, unexpected={unexpected}"
+        )
+    if not all(
+        isinstance(data[key], dict)
+        for key in (
+            "purchases",
+            "assets",
+            "lifecycle_events",
+            "replacement_records",
+            *MAINTENANCE_COLLECTION_KEYS,
+        )
+    ):
+        raise AssetStoreError("Asset Core storage has an invalid top-level structure")
+    try:
+        require_exact_record_keys(data["assets"], ASSET_KEYS_4_1, kind="assets")
+        require_exact_record_keys(data["purchases"], PURCHASE_KEYS, kind="purchases")
+    except StoreShapeError as err:
+        raise AssetStoreError(
+            f"Asset Core Store 4.1 record shape is invalid: {err}",
+            code="store_record_shape_invalid",
+        ) from err
+
+    _validate_store_payload(data)
+
+    try:
+        validate_asset_archive_state(data["assets"])
+    except ArchiveValidationError as err:
+        raise AssetStoreError(
+            f"Asset Core Store 4.1 Archive state is invalid: {err}",
+            code="store_archive_state_invalid",
+        ) from err
+    try:
+        validate_maintenance_collections(
+            data["assets"],
+            data["maintenance_schedules"],
+            data["maintenance_events"],
+        )
+    except MaintenanceValidationError as err:
+        raise AssetStoreError(
+            f"Asset Core Store 4.1 Maintenance data is invalid: {err}",
+            code="store_maintenance_invalid",
+        ) from err
+
+
+def _migrate_v3_1_to_v4_1(old_data: AssetStoreData) -> AssetStoreData:
+    """Return the Store 4.1 payload for an exact, valid Store 3.1 payload.
+
+    Validate Store 3.1, prove the exact Asset and Purchase source shapes,
+    add the Archive state, add the empty Maintenance collections, and only
+    then validate the complete Store 4.1 candidate. Nothing is inferred,
+    persisted, or read from a clock, and the input is never modified.
+    """
+    data = deepcopy(old_data)
+    _validate_store_v3_1_data(data)
+    try:
+        preflight_store_3_1_record_shapes(data)
+    except StoreShapeError as err:
+        raise AssetStoreError(
+            "Asset Core Store 3.1 cannot be migrated to 4.1 because a record "
+            f"has an unexpected shape: {err}",
+            code="store_migration_source_incompatible",
+        ) from err
+    try:
+        candidate = add_maintenance_collections(add_asset_archive_state(data))
+    except (ArchiveCompositionError, MaintenanceCompositionError) as err:
+        raise AssetStoreError(
+            f"Asset Core Store 3.1 cannot be migrated to 4.1: {err}",
+            code="store_migration_composition_failed",
+        ) from err
+    _validate_store_data(candidate)
+    return cast(AssetStoreData, candidate)
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeWriterDurability:
+    """In-memory evidence of one Runtime writer, read synchronously.
+
+    ``observing`` is whether the writer can still create Runtime, ``pending``
+    whether it holds deltas not yet committed, and ``committed_seconds`` the
+    total its last successful commit produced.
+    """
+
+    observing: bool
+    pending: bool
+    committed_seconds: Decimal
+
+
+class RuntimeArchiveEligibility(StrEnum):
+    """Whether a Runtime writer's state allows its Asset to be archived."""
+
+    UNRESOLVED = "unresolved"
+    ABSENT = "absent"
+    ACTIVE = "active"
+    UNDURABLE = "undurable"
+    QUIESCED_DURABLE = "quiesced_durable"
+
+
+_ELIGIBILITY_BLOCKERS = {
+    RuntimeArchiveEligibility.UNRESOLVED: ARCHIVE_RUNTIME_UNRESOLVED,
+    RuntimeArchiveEligibility.ACTIVE: ARCHIVE_RUNTIME_WRITER_ACTIVE,
+    RuntimeArchiveEligibility.UNDURABLE: ARCHIVE_RUNTIME_UNDURABLE,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeWriter:
+    """In-memory capabilities of the active Runtime writer for one Asset.
+
+    ``checkpoint`` strictly persists observable Runtime and keeps tracking.
+    ``prepare_unload`` strictly persists it, stops tracking, and quiesces the
+    writer so no further Runtime can be created before entity removal.
+    ``durability`` reports the writer's in-memory evidence synchronously.
+    ``finalize`` strictly commits already-pending deltas and never seals new
+    time. ``retire`` seals observed time through now, quiesces the writer
+    even if the following strict flush fails, and keeps any pending deltas.
+    A writer registered without ``durability`` gives no evidence, so it can
+    never be treated as durable.
+    """
+
+    checkpoint: RuntimeCheckpointCallback
+    prepare_unload: RuntimeCheckpointCallback
+    durability: Callable[[], RuntimeWriterDurability] | None = None
+    finalize: RuntimeCheckpointCallback | None = None
+    retire: RuntimeCheckpointCallback | None = None
+
+
 class AssetStoreManager:
     """Own the normalized persistent Asset/Purchase model."""
 
@@ -1169,6 +1469,19 @@ class AssetStoreManager:
         self._data: AssetStoreData = _empty_store_data()
         self._mutation_lock = asyncio.Lock()
         self._persistence_uncertain = False
+        # In-memory only, for this manager's lifetime: the active Runtime
+        # writer per Asset, and Assets whose writer was removed while Runtime
+        # was still pending, so an old total is never reported as current.
+        self._runtime_writers: dict[str, RuntimeWriter] = {}
+        self._runtime_unresolved: set[str] = set()
+        # The Runtime subentries quarantined for this loaded setup, and the
+        # archived Asset each resolves to. Derived once at setup by
+        # apply_runtime_quarantine and never persisted.
+        self.runtime_quarantine: frozenset[str] = frozenset()
+        self._runtime_quarantine_assets: dict[str, str] = {}
+        # Synchronous in-memory callbacks told which Assets a newly published
+        # snapshot changed; see async_add_publish_listener.
+        self._publish_listeners: list[Callable[[frozenset[str]], None]] = []
 
     async def async_setup(self) -> None:
         """Load and validate persistent Asset Core data."""
@@ -1192,18 +1505,11 @@ class AssetStoreManager:
         if not isinstance(loaded, dict):
             raise AssetStoreError("Asset Core storage payload is not a mapping")
 
-        # Store is versioned, so a version-one payload is expected to contain all
+        # Store is versioned, so the payload is expected to contain all
         # top-level keys. Refuse to guess if the private store is malformed.
-        if not all(
-            key in loaded
-            for key in (
-                "next_asset_number",
-                "purchases",
-                "assets",
-                "lifecycle_events",
-                "replacement_records",
-            )
-        ):
+        # Unexpected keys are rejected by the exact-shape check in
+        # _validate_store_data before anything is published.
+        if not STORE_TOP_LEVEL_KEYS.issubset(loaded):
             raise AssetStoreError("Asset Core storage payload is incomplete")
 
         data = cast(AssetStoreData, deepcopy(loaded))
@@ -1220,10 +1526,52 @@ class AssetStoreManager:
                 raise AssetStoreError(
                     "Asset Core persistence disappeared during recovery"
                 )
-        else:
-            _validate_store_data(persisted)
-            self._data = persisted
+            self._persistence_uncertain = False
+            return
+        _validate_store_data(persisted)
         self._persistence_uncertain = False
+        self._publish(persisted)
+
+    def async_add_publish_listener(
+        self,
+        listener: Callable[[frozenset[str]], None],
+    ) -> Callable[[], None]:
+        """Call ``listener`` after each publish of a changed snapshot.
+
+        The listener is called synchronously, in registration order, with the
+        Asset UUIDs the newly published snapshot changed, once the snapshot is
+        this manager's canonical data. It must not await. An exception is
+        logged and never affects the committed snapshot or other listeners.
+        The returned callback removes the listener and is safe to call again.
+        """
+        self._publish_listeners.append(listener)
+
+        def _remove() -> None:
+            if listener in self._publish_listeners:
+                self._publish_listeners.remove(listener)
+
+        return _remove
+
+    def _publish(self, data: AssetStoreData) -> None:
+        """Make a verified snapshot canonical, then tell the listeners.
+
+        The only place a mutation, a resolution, or a recovery publishes, so
+        no path can forget the refresh. An identical snapshot notifies no one.
+        """
+        previous = self._data
+        self._data = data
+        changed = _changed_asset_uuids(previous, data)
+        if not changed:
+            return
+        for listener in tuple(self._publish_listeners):
+            try:
+                listener(changed)
+            except Exception:
+                # The Store commit is authoritative; a refresh never undoes it.
+                _LOGGER.exception(
+                    "Device Lifecycle refresh after a Store commit failed; the "
+                    "committed data is unaffected"
+                )
 
     async def _async_mutate(
         self,
@@ -1236,6 +1584,9 @@ class AssetStoreManager:
     async def _async_mutate_reporting(
         self,
         mutator: Callable[[AssetStoreData], _MutationResultT],
+        *,
+        resolve_ambiguous: Callable[[AssetStoreData], _MutationResultT | None]
+        | None = None,
     ) -> tuple[_MutationResultT, bool]:
         """Apply one all-or-nothing mutation and report whether it changed data.
 
@@ -1245,6 +1596,12 @@ class AssetStoreManager:
         that existing fact instead of re-deriving it elsewhere (0.7.2 WP2 /
         F-2/F-3), so callers that need to skip an explicit reload for a no-op
         can do so without guessing from submitted UI values.
+
+        ``resolve_ambiguous`` is for mutations whose request can be replayed
+        deterministically. When the save is ambiguous, the persisted Store is
+        read back under the same lock and handed to it; see
+        ``_async_resolve_ambiguous_persistence``. Without it an ambiguous save
+        leaves persistence uncertain until the next mutation recovers it.
         """
         async with self._mutation_lock:
             await self._async_recover_uncertain_persistence()
@@ -1259,12 +1616,51 @@ class AssetStoreManager:
                     await self._store.async_save(data)
                 except AssetStorePersistenceError as err:
                     self._persistence_uncertain = err.ambiguous
-                    raise
+                    if not err.ambiguous or resolve_ambiguous is None:
+                        raise
+                    resolved = await self._async_resolve_ambiguous_persistence(
+                        err, resolve_ambiguous
+                    )
+                    return deepcopy(resolved), True
 
             # Publish only after the complete snapshot has been validated and
             # durably saved. A mutation or save exception leaves _data untouched.
-            self._data = data
+            self._publish(data)
             return deepcopy(result), changed
+
+    async def _async_resolve_ambiguous_persistence(
+        self,
+        error: AssetStorePersistenceError,
+        resolve_ambiguous: Callable[[AssetStoreData], _MutationResultT | None],
+    ) -> _MutationResultT:
+        """Settle an ambiguous save from the persisted Store, under the lock.
+
+        The persisted snapshot is read directly and validated as Store 4.1.
+        If it cannot be read or is invalid, nothing is published, persistence
+        stays uncertain, and the original ambiguous error is raised. Otherwise
+        the persisted state is known and published: the resolver's non-None
+        result proves the write landed and is returned, while ``None`` means
+        it did not, which is raised as a definite (non-ambiguous) failure.
+        The resolver works on a copy, so it cannot change what is published.
+        """
+        try:
+            persisted = await self._store.async_load_persisted_snapshot()
+            if persisted is None:
+                raise AssetStoreError(
+                    "Asset Core persistence disappeared during resolution"
+                )
+            _validate_store_data(persisted)
+        except AssetStoreError as err:
+            raise error from err
+
+        resolved = resolve_ambiguous(deepcopy(persisted))
+        self._persistence_uncertain = False
+        self._publish(persisted)
+        if resolved is None:
+            raise AssetStorePersistenceError(
+                "Asset Core mutation was not persisted"
+            ) from error
+        return resolved
 
     async def _async_mutate_history(
         self,
@@ -1292,7 +1688,7 @@ class AssetStoreManager:
         """Atomically initialize a new marked Runtime from null to zero."""
 
         def _initialize(data: AssetStoreData) -> Decimal:
-            asset = self._require_asset(data, asset_uuid)
+            asset = self._require_active_asset(data, asset_uuid)
             total = asset["runtime"]["total_seconds"]
             if total is None:
                 asset["runtime"]["total_seconds"] = "0"
@@ -1310,7 +1706,7 @@ class AssetStoreManager:
         normalized = _runtime_seconds(total_seconds)
 
         def _initialize(data: AssetStoreData) -> Decimal:
-            asset = self._require_asset(data, asset_uuid)
+            asset = self._require_active_asset(data, asset_uuid)
             current = asset["runtime"]["total_seconds"]
             if current is not None:
                 return Decimal(current)
@@ -1332,7 +1728,7 @@ class AssetStoreManager:
         committed = expected + increment
 
         def _commit(data: AssetStoreData) -> Decimal:
-            asset = self._require_asset(data, asset_uuid)
+            asset = self._require_active_asset(data, asset_uuid)
             stored = asset["runtime"]["total_seconds"]
             if stored is None:
                 raise AssetStoreError(
@@ -1349,6 +1745,397 @@ class AssetStoreManager:
             )
 
         return await self._async_mutate(_commit)
+
+    def register_runtime_checkpoint(
+        self,
+        asset_uuid: str,
+        checkpoint: RuntimeCheckpointCallback,
+        *,
+        prepare_unload: RuntimeCheckpointCallback,
+        durability: Callable[[], RuntimeWriterDurability] | None = None,
+        finalize: RuntimeCheckpointCallback | None = None,
+        retire: RuntimeCheckpointCallback | None = None,
+    ) -> Callable[[], None]:
+        """Register the active Runtime writer of one Asset.
+
+        The registration is in memory only and belongs to this manager, so a
+        reload starts empty. Only one writer may be registered per Asset; a
+        second registration fails closed, and so does a registration for an
+        archived Asset. The returned callback removes only
+        this registration, so a stale unregister never removes a newer writer.
+        """
+        asset = self._data["assets"].get(asset_uuid)
+        if asset is not None and asset_is_archived(asset):
+            raise AssetStoreError(
+                f"Asset {asset_uuid} is archived; Runtime cannot be tracked",
+                code="runtime_asset_archived",
+            )
+        if asset_uuid in self._runtime_writers:
+            raise AssetStoreError(
+                f"Asset {asset_uuid} already has an active Runtime writer",
+                code="runtime_checkpoint_writer_exists",
+            )
+        writer = RuntimeWriter(
+            checkpoint,
+            prepare_unload,
+            durability=durability,
+            finalize=finalize,
+            retire=retire,
+        )
+        self._runtime_writers[asset_uuid] = writer
+
+        def _unregister() -> None:
+            if self._runtime_writers.get(asset_uuid) is writer:
+                del self._runtime_writers[asset_uuid]
+
+        return _unregister
+
+    def mark_runtime_unresolved(self, asset_uuid: str) -> None:
+        """Record that a removed writer left Runtime that was never persisted.
+
+        Only a writer removed outside the unload gate, whose final checkpoint
+        failed, calls this. For the rest of this manager's lifetime a Runtime
+        checkpoint of the Asset fails instead of reporting the old total.
+        """
+        self._runtime_unresolved.add(asset_uuid)
+
+    async def async_checkpoint_runtime(self, asset_uuid: str) -> Decimal | None:
+        """Durably persist all observable Runtime now and return the canonical total.
+
+        With an active Runtime writer, its checkpoint seals the active interval
+        without stopping tracking and commits every pending delta through
+        ``async_commit_runtime_delta``. A delta that cannot be committed stays
+        pending and the checkpoint raises; the old total is never reported as
+        a successful checkpoint. A writer quiesced for unload also raises.
+        Without an active writer there is no uncommitted Runtime to flush, so
+        nothing is written and the canonical total is returned as is: ``None``
+        while Runtime is uninitialized. If a removed writer left unpersisted
+        Runtime behind, the checkpoint raises ``runtime_checkpoint_unresolved``.
+
+        The returned value is always the canonical persisted total, the same
+        value ``runtime_total_seconds`` returns, never a display estimate.
+
+        Lock ordering: the writer's Runtime lock is taken first and this
+        manager's ``_mutation_lock`` only inside each delta commit. This method
+        never holds ``_mutation_lock`` itself, and it must never be awaited
+        while ``_mutation_lock`` is held, for example from inside a Store
+        mutation. A caller that needs the value for a later Store mutation
+        awaits the checkpoint first and starts the mutation afterwards.
+        """
+        self.runtime_total_seconds(asset_uuid)
+        if asset_uuid in self._runtime_unresolved:
+            raise AssetStoreError(
+                f"Runtime for Asset {asset_uuid} was not persisted when its "
+                "writer was removed; reload Device Lifecycle",
+                code="runtime_checkpoint_unresolved",
+            )
+        writer = self._runtime_writers.get(asset_uuid)
+        if writer is not None:
+            await writer.checkpoint()
+        return self.runtime_total_seconds(asset_uuid)
+
+    async def async_prepare_runtime_unload(self) -> None:
+        """Durably checkpoint and quiesce every active Runtime writer.
+
+        Called before platforms are unloaded. Writers are prepared in Asset
+        UUID order and the first failure aborts with the Asset named, so the
+        caller must not start the unload. A writer that already prepared stays
+        quiesced: its tracking cannot be resumed losslessly, because source
+        changes after the quiesce were not observed. Preparing a quiesced
+        writer again succeeds, so a retried unload continues where it failed.
+
+        Same lock ordering as ``async_checkpoint_runtime``: ``_mutation_lock``
+        is never held around a writer.
+        """
+        for asset_uuid in sorted(self._runtime_writers):
+            writer = self._runtime_writers.get(asset_uuid)
+            if writer is None:
+                continue
+            try:
+                await writer.prepare_unload()
+            except AssetStoreError as err:
+                raise AssetStoreError(
+                    f"Runtime for Asset {asset_uuid} could not be durably "
+                    "checkpointed before unload",
+                    code="runtime_unload_checkpoint_failed",
+                ) from err
+
+    async def async_finalize_runtime(self, asset_uuid: str) -> Decimal | None:
+        """Strictly commit a writer's already-pending Runtime; seal nothing new.
+
+        For the Archive flow, awaited before ``async_archive_asset`` and never
+        while ``_mutation_lock`` is held: the writer takes its Runtime lock and
+        this manager's ``_mutation_lock`` only per delta commit. A failure
+        raises and keeps every pending delta. Unresolved Runtime of a removed
+        writer is never cleared here. Returns the canonical persisted total.
+        """
+        self.runtime_total_seconds(asset_uuid)
+        if asset_uuid in self._runtime_unresolved:
+            raise AssetStoreError(
+                f"Runtime for Asset {asset_uuid} was not persisted when its "
+                "writer was removed; reload Device Lifecycle",
+                code="runtime_checkpoint_unresolved",
+            )
+        writer = self._runtime_writers.get(asset_uuid)
+        if writer is not None:
+            if writer.finalize is None:
+                raise AssetStoreError(
+                    f"Runtime writer for Asset {asset_uuid} cannot be finalized",
+                    code="runtime_checkpoint_failed",
+                )
+            await writer.finalize()
+        return self.runtime_total_seconds(asset_uuid)
+
+    async def async_retire_orphaned_runtime_writers(self, entry: ConfigEntry) -> None:
+        """Retire every writer whose Asset has no resolving Runtime subentry.
+
+        Run before the reload that follows a subentry change. Retiring stops
+        observation at once, even if its strict flush fails; a failure is
+        logged, the writer stays registered and quiesced with its pending
+        deltas, and the reload is still scheduled by the caller. The unload
+        gate then decides whether that reload can proceed.
+        """
+        for asset_uuid in sorted(self._runtime_writers):
+            writer = self._runtime_writers.get(asset_uuid)
+            if writer is None:
+                continue
+            if runtime_subentries_resolving_to(
+                entry.subentries.values(), self._data["assets"], asset_uuid
+            ):
+                continue
+            if writer.retire is None:
+                _LOGGER.error(
+                    "Runtime writer for Asset %s cannot be retired", asset_uuid
+                )
+                continue
+            try:
+                await writer.retire()
+            except AssetStoreError as err:
+                _LOGGER.error(
+                    "Runtime tracking for Asset %s was removed and has stopped, "
+                    "but its pending Runtime could not be persisted yet; it is "
+                    "kept and retried: %s",
+                    asset_uuid,
+                    err,
+                )
+
+    def _runtime_archive_eligibility(
+        self,
+        data: AssetStoreData,
+        asset_uuid: str,
+    ) -> RuntimeArchiveEligibility:
+        """Classify the Asset's Runtime writer from in-memory evidence only.
+
+        Synchronous, so an Archive mutator reads it in the same locked
+        segment as its change. The order is authoritative: unresolved Runtime
+        of a removed writer first, then no writer, then an observing writer,
+        then pending deltas or a committed total that differs from the
+        canonical total of ``data``. Nothing is inferred or persisted.
+        """
+        if asset_uuid in self._runtime_unresolved:
+            return RuntimeArchiveEligibility.UNRESOLVED
+        writer = self._runtime_writers.get(asset_uuid)
+        if writer is None:
+            return RuntimeArchiveEligibility.ABSENT
+        if writer.durability is None:
+            return RuntimeArchiveEligibility.ACTIVE
+        durability = writer.durability()
+        if durability.observing:
+            return RuntimeArchiveEligibility.ACTIVE
+        total = data["assets"][asset_uuid]["runtime"]["total_seconds"]
+        if (
+            durability.pending
+            or total is None
+            or Decimal(total) != durability.committed_seconds
+        ):
+            return RuntimeArchiveEligibility.UNDURABLE
+        return RuntimeArchiveEligibility.QUIESCED_DURABLE
+
+    def _runtime_binding_reservations(self) -> dict[tuple[str, str], set[object]]:
+        return self.hass.data.setdefault(RUNTIME_BINDING_RESERVATIONS, {})
+
+    def _archive_blockers_in(
+        self,
+        data: AssetStoreData,
+        entry: ConfigEntry,
+        asset_uuid: str,
+    ) -> tuple[str, ...]:
+        """Return every current Archive blocker of an active Asset in ``data``."""
+        blockers: list[str] = []
+        asset = data["assets"][asset_uuid]
+        if asset[CONF_DEPLOYMENT_STATE] == DEPLOYMENT_STATE_DEPLOYED:
+            blockers.append(ARCHIVE_ASSET_DEPLOYED)
+        if runtime_subentries_resolving_to(
+            entry.subentries.values(), data["assets"], asset_uuid
+        ):
+            blockers.append(ARCHIVE_RUNTIME_CONFIGURED)
+        if self._runtime_binding_reservations().get((entry.entry_id, asset_uuid)):
+            blockers.append(ARCHIVE_RUNTIME_BINDING_IN_PROGRESS)
+        eligibility = self._runtime_archive_eligibility(data, asset_uuid)
+        if (blocker := _ELIGIBILITY_BLOCKERS.get(eligibility)) is not None:
+            blockers.append(blocker)
+        return tuple(blockers)
+
+    def archive_blockers(self, entry: ConfigEntry, asset_uuid: str) -> tuple[str, ...]:
+        """Preview what currently blocks archiving an Asset, for the UI.
+
+        Read-only and advisory: a blocker can appear or disappear before the
+        request is submitted, and ``async_archive_asset`` checks everything
+        again under the lock. An archived Asset has no blockers.
+        """
+        self._require_asset(self._data, asset_uuid)
+        if archive_state_matches(
+            self._data["assets"][asset_uuid], ArchiveAssetRequest(asset_uuid)
+        ):
+            return ()
+        return self._archive_blockers_in(self._data, entry, asset_uuid)
+
+    async def async_archive_asset(
+        self,
+        entry: ConfigEntry,
+        asset_uuid: str,
+    ) -> ArchiveOutcome:
+        """Archive an Asset once nothing can still create Runtime for it.
+
+        Every check and the change run in one synchronous mutator under
+        ``_mutation_lock``: the Asset exists; an archived Asset is NO_OP
+        before anything else; it is not deployed; no Runtime subentry
+        resolves to it; no Runtime binding is reserved for it; and its
+        Runtime writer is absent or quiesced with durable Runtime. Nothing is
+        undeployed, removed, flushed, or cleared on the caller's behalf, and
+        no Runtime writer is awaited. Only ``archived_at`` changes. An
+        ambiguous save succeeds if the persisted Asset is archived.
+        """
+
+        def _archive(data: AssetStoreData) -> ArchiveOutcome:
+            self._require_asset(data, asset_uuid)
+            request = ArchiveAssetRequest(asset_uuid)
+            if archive_state_matches(data["assets"][asset_uuid], request):
+                return ArchiveOutcome.NO_OP
+            blockers = self._archive_blockers_in(data, entry, asset_uuid)
+            if blockers:
+                raise AssetStoreError(
+                    f"Asset {asset_uuid} cannot be archived: {blockers[0]}",
+                    code=blockers[0],
+                )
+            return self._apply_archive_request(
+                data, request, observed_utc=utc_now_iso()
+            )
+
+        outcome, _changed = await self._async_mutate_reporting(
+            _archive,
+            resolve_ambiguous=self._archive_state_resolver(
+                ArchiveAssetRequest(asset_uuid)
+            ),
+        )
+        return outcome
+
+    async def async_restore_asset(self, asset_uuid: str) -> ArchiveOutcome:
+        """Return an archived Asset to current management.
+
+        No Runtime precondition, and nothing else is recreated or repaired:
+        only ``archived_at`` returns to ``None``. An active Asset is NO_OP.
+        An ambiguous save succeeds if the persisted Asset is active.
+        """
+
+        def _restore(data: AssetStoreData) -> ArchiveOutcome:
+            self._require_asset(data, asset_uuid)
+            return self._apply_archive_request(
+                data, RestoreAssetRequest(asset_uuid), observed_utc=None
+            )
+
+        outcome, _changed = await self._async_mutate_reporting(
+            _restore,
+            resolve_ambiguous=self._archive_state_resolver(
+                RestoreAssetRequest(asset_uuid)
+            ),
+        )
+        return outcome
+
+    @staticmethod
+    def _apply_archive_request(
+        data: AssetStoreData,
+        request: ArchiveAssetRequest | RestoreAssetRequest,
+        *,
+        observed_utc: str | None,
+    ) -> ArchiveOutcome:
+        try:
+            return apply_archive_request(
+                data["assets"], request, observed_utc=observed_utc
+            )
+        except ArchiveMutationError as err:
+            raise AssetStoreError(str(err), code=err.code) from err
+
+    @staticmethod
+    def _archive_state_resolver(
+        request: ArchiveAssetRequest | RestoreAssetRequest,
+    ) -> Callable[[AssetStoreData], ArchiveOutcome | None]:
+        """Prove an ambiguous Archive or Restore from the persisted state.
+
+        The requested state, not the ``archived_at`` timestamp, is the proof.
+        """
+
+        def _resolve(persisted: AssetStoreData) -> ArchiveOutcome | None:
+            asset = persisted["assets"].get(request.asset_uuid)
+            if asset is None or not archive_state_matches(asset, request):
+                return None
+            return ArchiveOutcome.CHANGED
+
+        return _resolve
+
+    async def async_reserve_runtime_binding(
+        self,
+        entry: ConfigEntry,
+        asset_uuid: str,
+    ) -> Callable[[], None]:
+        """Reserve an active Asset for a Runtime subentry about to be created.
+
+        Taken under the same ``_mutation_lock`` as Archive, so the two are
+        totally ordered: an Archive published first makes this fail, and a
+        reservation taken first makes Archive fail until it is released. The
+        reservation is kept in ``hass.data`` per ConfigEntry, so it survives a
+        manager replacement; the returned callback releases it and is safe to
+        call more than once. A replaced manager fails closed.
+        """
+        async with self._mutation_lock:
+            await self._async_recover_uncertain_persistence()
+            if getattr(entry, "runtime_data", None) is not self:
+                raise AssetStoreError(
+                    "Device Lifecycle is not loaded", code="entry_not_loaded"
+                )
+            asset = self._require_asset(self._data, asset_uuid)
+            if not archive_state_matches(asset, RestoreAssetRequest(asset_uuid)):
+                raise AssetStoreError(
+                    f"Asset {asset_uuid} is archived; Runtime cannot be tracked",
+                    code="runtime_asset_archived",
+                )
+            key = (entry.entry_id, asset_uuid)
+            token = object()
+            reservations = self._runtime_binding_reservations()
+            reservations.setdefault(key, set()).add(token)
+
+        def _release() -> None:
+            held = reservations.get(key)
+            if held is None:
+                return
+            held.discard(token)
+            if not held:
+                reservations.pop(key, None)
+
+        return _release
+
+    def runtime_binding_target(
+        self,
+        subentry_data: Mapping[str, Any],
+    ) -> tuple[str, bool] | None:
+        """Return the canonical Asset a Runtime binding resolves to, and
+        whether it is archived. Resolution sees every Asset."""
+        asset_uuid = resolve_runtime_subentry_asset(self._data["assets"], subentry_data)
+        if asset_uuid is None:
+            return None
+        return asset_uuid, not archive_state_matches(
+            self._data["assets"][asset_uuid], RestoreAssetRequest(asset_uuid)
+        )
 
     def runtime_total_seconds(self, asset_uuid: str) -> Decimal | None:
         """Return one Asset's detached canonical Runtime total."""
@@ -1374,6 +2161,26 @@ class AssetStoreManager:
             raise AssetStoreError(
                 f"Asset {asset_uuid} does not exist",
                 code="asset_missing",
+            )
+        return asset
+
+    def _require_active_asset(
+        self,
+        data: AssetStoreData,
+        asset_uuid: str,
+    ) -> AssetData:
+        """Return an active Asset from a transaction snapshot for management.
+
+        The authoritative current-management guard. It runs inside the locked
+        mutator on the mutation candidate, so a selector rendered before the
+        Asset was archived cannot change it. Archive is not deletion: identity
+        lookups still see archived Assets, only current management is refused.
+        """
+        asset = self._require_asset(data, asset_uuid)
+        if asset_is_archived(asset):
+            raise AssetStoreError(
+                f"Asset {asset_uuid} is archived",
+                code="asset_archived",
             )
         return asset
 
@@ -1553,6 +2360,7 @@ class AssetStoreManager:
             "hw_version": metadata.get("hw_version"),
             "notes": metadata.get("notes"),
             "field_sources": dict(field_sources),
+            "archived_at": None,
             "ha_device_refs": (
                 []
                 if primary_device_id is None
@@ -2267,7 +3075,9 @@ class AssetStoreManager:
 
         predecessor: AssetData | None = None
         if request.predecessor_asset_uuid is not None:
-            predecessor = self._require_asset(data, request.predecessor_asset_uuid)
+            predecessor = self._require_active_asset(
+                data, request.predecessor_asset_uuid
+            )
             lifecycle = predecessor["lifecycle"]
             if (
                 lifecycle["status"]
@@ -2407,8 +3217,8 @@ class AssetStoreManager:
                     _validate_store_data(persisted)
                 except AssetStorePersistenceError:
                     raise
-                self._data = persisted
                 self._persistence_uncertain = False
+                self._publish(persisted)
                 if request.asset_uuid not in persisted["assets"]:
                     raise AssetStorePersistenceError(
                         "Quick Create was not persisted"
@@ -2419,7 +3229,7 @@ class AssetStoreManager:
                     "Quick Create could not be persisted"
                 ) from err
 
-            self._data = data
+            self._publish(data)
             return deepcopy(result)
 
     async def async_set_asset_lifecycle(
@@ -2455,7 +3265,7 @@ class AssetStoreManager:
         """
 
         def _set_lifecycle(data: AssetStoreData) -> AssetData:
-            asset = self._require_asset(data, asset_uuid)
+            asset = self._require_active_asset(data, asset_uuid)
             self._append_lifecycle_transition(
                 data,
                 asset,
@@ -2575,9 +3385,13 @@ class AssetStoreManager:
         notes: str | None,
         recorded_at: str | None = None,
     ) -> ReplacementRecordData:
-        """Create one active record inside an existing atomic mutation."""
-        self._require_asset(data, predecessor_asset_uuid)
-        self._require_asset(data, successor_asset_uuid)
+        """Create one active record inside an existing atomic mutation.
+
+        Creating a relationship is current management, so both Assets must be
+        active. Voiding one is history and stays allowed for archived Assets.
+        """
+        self._require_active_asset(data, predecessor_asset_uuid)
+        self._require_active_asset(data, successor_asset_uuid)
         if predecessor_asset_uuid == successor_asset_uuid:
             raise AssetStoreError(
                 "An Asset cannot replace itself",
@@ -2701,6 +3515,10 @@ class AssetStoreManager:
                     "A non-empty void reason is required",
                     code="replacement_void_reason_required",
                 )
+            # The correction creates a new relationship, which is current
+            # management: refuse an archived side before voiding anything.
+            self._require_active_asset(data, predecessor_asset_uuid)
+            self._require_active_asset(data, successor_asset_uuid)
             old_record["voided_at"] = datetime.now(UTC).isoformat()
             old_record["void_reason"] = void_reason.strip()
             return self._create_replacement_record(
@@ -2713,6 +3531,252 @@ class AssetStoreManager:
             )
 
         return await self._async_mutate_history(_correct)
+
+    def _maintenance_request_asset(
+        self,
+        data: AssetStoreData,
+        request: Any,
+    ) -> AssetData | None:
+        """Return the Asset a Maintenance request concerns, if it exists.
+
+        Only to take that Asset's canonical Runtime into the mutation
+        context; the pure mutation decides everything else, including what
+        a missing record means.
+        """
+        asset_uuid: Any = getattr(request, "asset_uuid", None)
+        if asset_uuid is None:
+            record: Any = None
+            for field, collection in (
+                ("schedule_uuid", data["maintenance_schedules"]),
+                ("target_event_uuid", data["maintenance_events"]),
+                ("event_uuid", data["maintenance_events"]),
+            ):
+                key = getattr(request, field, None)
+                if isinstance(key, str):
+                    record = collection.get(key)
+                    break
+            asset_uuid = None if record is None else record["asset_uuid"]
+        if not isinstance(asset_uuid, str):
+            return None
+        return data["assets"].get(asset_uuid)
+
+    def _run_maintenance(
+        self,
+        data: AssetStoreData,
+        request: Any,
+    ) -> MaintenanceMutationResult:
+        """Run one Maintenance request against one Store snapshot.
+
+        The context comes from the same snapshot: Home Assistant's local
+        civil date, the observed UTC time, and the Asset's canonical
+        persisted Runtime. Pure Maintenance errors become AssetStoreErrors
+        with the pure layer's stable code; an archived Asset is the same
+        ``asset_archived`` refusal as every other current-management change.
+        The original error stays available as ``__cause__``.
+        """
+        asset = self._maintenance_request_asset(data, request)
+        context = MaintenanceMutationContext(
+            today=dt_util.now().date(),
+            observed_utc=utc_now_iso(),
+            current_runtime=(
+                None if asset is None else asset["runtime"]["total_seconds"]
+            ),
+        )
+        snapshot = MaintenanceSnapshot(
+            assets=data["assets"],
+            schedules=data["maintenance_schedules"],
+            events=data["maintenance_events"],
+        )
+        try:
+            return mutate_maintenance(snapshot, request, context)
+        except MaintenanceArchivedAssetError as err:
+            raise AssetStoreError(
+                "The Asset is archived", code="asset_archived"
+            ) from err
+        except MaintenanceMutationError as err:
+            raise AssetStoreError(
+                f"Maintenance request refused: {err.code}", code=err.code
+            ) from err
+
+    async def async_mutate_maintenance(
+        self,
+        request: Any,
+    ) -> MaintenanceMutationResult:
+        """Apply one Maintenance request through the verified Store pipeline.
+
+        The request runs inside ``_mutation_lock`` on the mutation candidate.
+        CHANGED writes back only the two Maintenance collections and saves;
+        NO_OP and REPLAY write nothing. Maintenance reads Asset state and
+        Runtime and never writes either.
+
+        Create-style requests carry their pre-generated UUIDs, so the same
+        request can be replayed. If the save is ambiguous, the same request
+        is replayed against the persisted Store: REPLAY or NO_OP proves the
+        write landed and is returned; CHANGED or a refusal proves it did not,
+        which is raised as a definite persistence failure.
+
+        This never awaits a Runtime checkpoint. For a "just now" Runtime,
+        ``async_checkpoint_runtime`` is awaited first and this afterwards,
+        never while a Runtime lock is held.
+        """
+
+        def _mutate(data: AssetStoreData) -> MaintenanceMutationResult:
+            result = self._run_maintenance(data, request)
+            if result.changed:
+                data["maintenance_schedules"] = dict(result.snapshot.schedules)
+                data["maintenance_events"] = dict(result.snapshot.events)
+            return result
+
+        def _resolve(persisted: AssetStoreData) -> MaintenanceMutationResult | None:
+            try:
+                replayed = self._run_maintenance(persisted, request)
+            except AssetStoreError:
+                return None
+            return None if replayed.changed else replayed
+
+        result, _changed = await self._async_mutate_reporting(
+            _mutate,
+            resolve_ambiguous=_resolve,
+        )
+        return result
+
+    def maintenance_schedules_for_asset(
+        self,
+        asset_uuid: str,
+    ) -> list[MaintenanceScheduleData]:
+        """Return detached snapshots of every Schedule of one Asset.
+
+        Disabled Schedules and those of an archived Asset are included;
+        ordered by name, then Schedule UUID.
+        """
+        return deepcopy(
+            sorted(
+                (
+                    schedule
+                    for schedule in self._data["maintenance_schedules"].values()
+                    if schedule["asset_uuid"] == asset_uuid
+                ),
+                key=lambda item: (item["name"].casefold(), item["schedule_uuid"]),
+            )
+        )
+
+    def maintenance_events_for_asset(
+        self,
+        asset_uuid: str,
+    ) -> list[MaintenanceEventData]:
+        """Return detached snapshots of every Maintenance Event of one Asset.
+
+        Voided and correcting Events are included; ordered by performed
+        date, then recorded time, then Event UUID.
+        """
+        return deepcopy(
+            sorted(
+                (
+                    event
+                    for event in self._data["maintenance_events"].values()
+                    if event["asset_uuid"] == asset_uuid
+                ),
+                key=lambda item: (
+                    item["performed_date"],
+                    item["recorded_at"],
+                    item["event_uuid"],
+                ),
+            )
+        )
+
+    def maintenance_projection(
+        self,
+        schedule_uuid: str,
+    ) -> MaintenanceProjection | None:
+        """Project one Schedule from the canonical persisted state.
+
+        The pure projection owns every rule; this supplies the Schedule, its
+        Asset's Events, Home Assistant's local date, the canonical persisted
+        Runtime, and the Asset's Archive state. ``None`` if the Schedule
+        does not exist.
+        """
+        schedule = self._data["maintenance_schedules"].get(schedule_uuid)
+        if schedule is None:
+            return None
+        asset = self._data["assets"][schedule["asset_uuid"]]
+        events = {
+            event_uuid: event
+            for event_uuid, event in self._data["maintenance_events"].items()
+            if event["asset_uuid"] == schedule["asset_uuid"]
+        }
+        return project_schedule(
+            deepcopy(schedule),
+            deepcopy(events),
+            today=dt_util.now().date(),
+            current_runtime=asset["runtime"]["total_seconds"],
+            asset_archived=asset_is_archived(asset),
+        )
+
+    def maintenance_schedule(
+        self, schedule_uuid: str | None
+    ) -> MaintenanceScheduleData | None:
+        """Return a detached snapshot of one Maintenance Schedule."""
+        if not schedule_uuid:
+            return None
+        schedule = self._data["maintenance_schedules"].get(schedule_uuid)
+        return deepcopy(schedule) if schedule is not None else None
+
+    def maintenance_event(self, event_uuid: str | None) -> MaintenanceEventData | None:
+        """Return a detached snapshot of one Maintenance Event."""
+        if not event_uuid:
+            return None
+        event = self._data["maintenance_events"].get(event_uuid)
+        return deepcopy(event) if event is not None else None
+
+    def maintenance_baseline_locked(self, schedule_uuid: str) -> bool:
+        """Return whether any Event, voided or not, references the Schedule."""
+        return is_baseline_locked(self._data["maintenance_events"], schedule_uuid)
+
+    def maintenance_schedule_deletable(self, schedule_uuid: str) -> bool:
+        """Return whether no Event, including a voided one, references it.
+
+        Only a preview for the user interface; the delete rechecks.
+        """
+        return can_hard_delete_schedule(
+            self._data["maintenance_events"], schedule_uuid
+        )
+
+    def maintenance_event_guards(
+        self,
+        schedule_uuids: list[str],
+        performed_date: str,
+        *,
+        replacing_event_uuid: str | None = None,
+        own_event_uuid: str | None = None,
+    ) -> EventGuards:
+        """Preview the guards a new or corrected Event would raise.
+
+        Read-only and advisory: the pure preflight runs on a detached copy
+        of the current snapshot, and the mutation recomputes every guard.
+        ``own_event_uuid`` is the pre-generated identity of the Event being
+        saved: if an earlier attempt already landed, it is not counted as
+        another Event. A refused preview becomes an AssetStoreError with the
+        stable code.
+        """
+        events = deepcopy(self._data["maintenance_events"])
+        if own_event_uuid is not None:
+            events.pop(own_event_uuid, None)
+        snapshot = MaintenanceSnapshot(
+            assets=deepcopy(self._data["assets"]),
+            schedules=deepcopy(self._data["maintenance_schedules"]),
+            events=events,
+        )
+        try:
+            return preflight_event_guards(
+                snapshot,
+                schedule_uuids,
+                performed_date,
+                replacing_event_uuid=replacing_event_uuid,
+            )
+        except MaintenanceMutationError as err:
+            raise AssetStoreError(
+                f"Maintenance request refused: {err.code}", code=err.code
+            ) from err
 
     async def async_update_asset_metadata(
         self,
@@ -2790,7 +3854,7 @@ class AssetStoreManager:
             )
 
         def _update(data: AssetStoreData) -> AssetData:
-            asset = self._require_asset(data, asset_uuid)
+            asset = self._require_active_asset(data, asset_uuid)
             sources = asset.setdefault("field_sources", {})
             for field, value in normalized.items():
                 asset[field] = value  # type: ignore[literal-required]
@@ -2818,7 +3882,7 @@ class AssetStoreManager:
         """Same as async_set_asset_purchase, also reporting a canonical no-op."""
 
         def _set_purchase(data: AssetStoreData) -> AssetData:
-            asset = self._require_asset(data, asset_uuid)
+            asset = self._require_active_asset(data, asset_uuid)
             return self._assign_asset_purchase_in_snapshot(
                 data,
                 asset,
@@ -2899,7 +3963,7 @@ class AssetStoreManager:
         }
 
         def _set_deployment(data: AssetStoreData) -> AssetData:
-            asset = self._require_asset(data, asset_uuid)
+            asset = self._require_active_asset(data, asset_uuid)
             return self._set_asset_deployment_in_snapshot(asset, updates)
 
         return await self._async_mutate_reporting(_set_deployment)
@@ -2961,7 +4025,7 @@ class AssetStoreManager:
         device_id = device_id.strip()
 
         def _link(data: AssetStoreData) -> AssetData:
-            asset = self._require_asset(data, asset_uuid)
+            asset = self._require_active_asset(data, asset_uuid)
             current = _primary_device_id(asset)
             if (
                 expected_current_device_id is not _UNSET
@@ -3010,7 +4074,7 @@ class AssetStoreManager:
         """Same as async_unlink_asset_device, also reporting a canonical no-op."""
 
         def _unlink(data: AssetStoreData) -> AssetData:
-            asset = self._require_asset(data, asset_uuid)
+            asset = self._require_active_asset(data, asset_uuid)
             current = _primary_device_id(asset)
             if expected_device_id is not _UNSET and current != expected_device_id:
                 raise AssetStoreError(
@@ -3051,7 +4115,7 @@ class AssetStoreManager:
         device_id = device_id.strip()
 
         def _add_related(data: AssetStoreData) -> AssetData:
-            asset = self._require_asset(data, asset_uuid)
+            asset = self._require_active_asset(data, asset_uuid)
             for reference in asset.get("ha_device_refs", []):
                 if reference.get("device_id") != device_id:
                     continue
@@ -3080,7 +4144,7 @@ class AssetStoreManager:
         device_id = device_id.strip()
 
         def _remove_related(data: AssetStoreData) -> AssetData:
-            asset = self._require_asset(data, asset_uuid)
+            asset = self._require_active_asset(data, asset_uuid)
             asset["ha_device_refs"] = [
                 reference
                 for reference in asset.get("ha_device_refs", [])
@@ -3269,13 +4333,60 @@ class AssetStoreManager:
         ] = FIELD_SOURCE_PURCHASE
         return True
 
+    def quarantined_runtime_subentries(self, entry: ConfigEntry) -> frozenset[str]:
+        """Return the Runtime subentries that resolve to an archived Asset.
+
+        Each Runtime subentry is resolved by the canonical resolver over every
+        Asset, archived ones included, so a modern ``asset_uuid`` binding and a
+        legacy device-only binding are judged alike. A subentry that resolves
+        to no Asset is not quarantined; reconciliation handles it as before.
+        """
+        assets = self._data["assets"]
+        quarantined: set[str] = set()
+        for subentry in entry.subentries.values():
+            if subentry.subentry_type != SUBENTRY_TYPE_RUNTIME:
+                continue
+            asset_uuid = resolve_runtime_subentry_asset(assets, subentry.data)
+            if asset_uuid is not None and asset_is_archived(assets[asset_uuid]):
+                quarantined.add(subentry.subentry_id)
+        return frozenset(quarantined)
+
+    def apply_runtime_quarantine(self, entry: ConfigEntry) -> frozenset[str]:
+        """Derive this setup's Runtime quarantine and keep it on the manager.
+
+        The one set reconciliation, exposure, the Runtime platform, and the
+        conflict Repairs all use for this loaded setup.
+        """
+        quarantined = self.quarantined_runtime_subentries(entry)
+        assets = self._data["assets"]
+        self._runtime_quarantine_assets = {
+            subentry_id: cast(
+                str,
+                resolve_runtime_subentry_asset(
+                    assets, entry.subentries[subentry_id].data
+                ),
+            )
+            for subentry_id in sorted(quarantined)
+        }
+        self.runtime_quarantine = quarantined
+        return quarantined
+
+    def quarantined_runtime_asset(self, subentry_id: str) -> AssetData | None:
+        """Return the archived Asset a quarantined Runtime subentry resolves to."""
+        return self.asset(self._runtime_quarantine_assets.get(subentry_id))
+
     def _reconcile_entry_data(
         self,
         data: AssetStoreData,
         entry: ConfigEntry,
         device_registry: dr.DeviceRegistry,
+        quarantined: frozenset[str] = frozenset(),
     ) -> dict[str, dict[str, Any]]:
-        """Reconcile config subentries into one transaction snapshot."""
+        """Reconcile config subentries into one transaction snapshot.
+
+        A quarantined Runtime subentry is skipped entirely: it creates no
+        Asset, refreshes and links nothing, and is never rewritten.
+        """
         subentry_updates: dict[str, dict[str, Any]] = {}
         touched_purchase_uuids: set[str] = set()
 
@@ -3390,6 +4501,8 @@ class AssetStoreManager:
         )
 
         for subentry in runtime_subentries:
+            if subentry.subentry_id in quarantined:
+                continue
             raw = dict(subentry.data)
             device_id = str(raw.get(CONF_DEVICE_ID) or "")
             if not device_id:
@@ -3397,18 +4510,12 @@ class AssetStoreManager:
                 # do not fabricate an Asset without an identity relationship.
                 continue
 
-            asset: AssetData | None = None
-            referenced_asset_uuid = _valid_uuid(raw.get(CONF_ASSET_UUID))
-            if referenced_asset_uuid is not None:
-                candidate = data["assets"].get(referenced_asset_uuid)
-                if candidate is not None and _primary_device_id(candidate) in (
-                    None,
-                    device_id,
-                ):
-                    asset = candidate
-
-            if asset is None:
-                asset = self._find_asset_by_primary_device(data, device_id)
+            # Identity is decided by the canonical resolver; creating,
+            # refreshing, and rewriting stay here.
+            resolved_uuid = resolve_runtime_subentry_asset(data["assets"], raw)
+            asset: AssetData | None = (
+                None if resolved_uuid is None else data["assets"][resolved_uuid]
+            )
 
             device = device_registry.async_get(device_id)
             if asset is None:
@@ -3424,20 +4531,30 @@ class AssetStoreManager:
 
         return subentry_updates
 
-    async def async_reconcile_entry(self, entry: ConfigEntry) -> None:
+    async def async_reconcile_entry(
+        self,
+        entry: ConfigEntry,
+        *,
+        quarantined: frozenset[str] | None = None,
+    ) -> None:
         """Normalize current 0.4.x/0.5.x subentries into Asset Core storage.
 
         Storage is written before adding the generated UUID references back to
         config subentries. If a later config-entry write fails, the next setup can
         recover the same objects by subentry/device relationship instead of
         allocating new Asset IDs.
+
+        Quarantined Runtime subentries are skipped: ``quarantined`` when
+        given, otherwise this setup's ``runtime_quarantine``.
         """
         device_registry = dr.async_get(self.hass)
+        skipped = self.runtime_quarantine if quarantined is None else quarantined
         subentry_updates = await self._async_mutate(
             lambda data: self._reconcile_entry_data(
                 data,
                 entry,
                 device_registry,
+                skipped,
             )
         )
 
@@ -3460,6 +4577,11 @@ class AssetStoreManager:
         asset = self._data["assets"].get(asset_uuid)
         return deepcopy(asset) if asset is not None else None
 
+    def asset_archived(self, asset_uuid: str) -> bool:
+        """Return whether an existing Asset is archived."""
+        asset = self._data["assets"].get(asset_uuid)
+        return asset is not None and asset_is_archived(asset)
+
     def asset_for_primary_device_id(self, device_id: str) -> AssetData | None:
         """Return a detached Asset snapshot for a primary HA device."""
         asset = self._find_asset_by_primary_device(self._data, device_id)
@@ -3480,8 +4602,33 @@ class AssetStoreManager:
         return deepcopy(purchase)
 
     def assets(self) -> list[AssetData]:
-        """Return detached snapshots of all persistent Assets."""
+        """Return detached snapshots of all persistent Assets.
+
+        Identity and reconciliation view: archived Assets are included, since
+        Archive is not deletion and frees no identity. Current-management
+        candidates come from ``active_assets``.
+        """
         return deepcopy(list(self._data["assets"].values()))
+
+    def active_assets(self) -> list[AssetData]:
+        """Return detached snapshots of the Assets open to current management."""
+        return deepcopy(
+            [
+                asset
+                for asset in self._data["assets"].values()
+                if not asset_is_archived(asset)
+            ]
+        )
+
+    def archived_assets(self) -> list[AssetData]:
+        """Return detached snapshots of the archived Assets."""
+        return deepcopy(
+            [
+                asset
+                for asset in self._data["assets"].values()
+                if asset_is_archived(asset)
+            ]
+        )
 
     def purchases(self) -> list[PurchaseData]:
         """Return detached snapshots of all persistent Purchases."""

@@ -220,9 +220,13 @@ def async_sync_stale_reference_issues(
     any dismissal, and Home Assistant only announces an actual change, so an
     unchanged state is a no-op. Only owned issues that are no longer desired
     are deleted.
+
+    References come from active Assets only: an archived Asset is not under
+    current management, so its issues are deleted by the same owned-issue
+    cleanup and derived again on the first sync after it is restored.
     """
     desired = desired_stale_reference_issues(
-        collect_asset_device_references(manager.assets()),
+        collect_asset_device_references(manager.active_assets()),
         dr.async_get(hass),
     )
     for issue in desired.values():

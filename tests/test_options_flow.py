@@ -91,6 +91,8 @@ def _store_with_purchase(*, configured: bool = True) -> AssetStoreData:
         "assets": {},
         "lifecycle_events": {},
         "replacement_records": {},
+        "maintenance_schedules": {},
+        "maintenance_events": {},
     }
 
 
@@ -165,7 +167,7 @@ async def test_parent_options_flow_opens_asset_menu(
     assert isinstance(flow, DeviceLifecycleOptionsFlow)
     assert result["type"] is FlowResultType.MENU
     assert result["step_id"] == "init"
-    assert result["menu_options"] == ["quick_add", "manage_asset"]
+    assert result["menu_options"] == ["quick_add", "manage_asset", "archived_assets"]
 
 
 def _unloaded_parent_entry(hass: HomeAssistant) -> MockConfigEntry:
@@ -198,7 +200,7 @@ async def test_options_flow_init_with_runtime_data_behaves_unchanged(
     assert isinstance(flow, DeviceLifecycleOptionsFlow)
     assert result["type"] is FlowResultType.MENU
     assert result["step_id"] == "init"
-    assert result["menu_options"] == ["quick_add", "manage_asset"]
+    assert result["menu_options"] == ["quick_add", "manage_asset", "archived_assets"]
     reload.assert_not_called()
 
 

@@ -54,6 +54,7 @@ from .conftest import (
     PURCHASE_UUID,
     RUNTIME_SUBENTRY_ID,
     SOURCE_ENTITY_ID,
+    loaded_entry,
 )
 
 
@@ -154,6 +155,7 @@ async def test_new_runtime_flow_adds_provenance_marker(
     """Every newly created 0.5.7 Runtime declares safe-zero provenance."""
     flow = RuntimeSubentryFlow()
     flow.hass = hass
+    flow._get_entry = lambda: loaded_entry(hass)  # type: ignore[method-assign]
     flow._set_runtime_context(
         device_id=DEVICE_ID,
         runtime_mode=RUNTIME_MODE_POWER,
@@ -198,7 +200,7 @@ async def test_runtime_reconfigure_preserves_provenance_marker(
             CONF_RUNTIME_DATA_VERSION: RUNTIME_DATA_VERSION,
         }
     )
-    entry = SimpleNamespace()
+    entry = loaded_entry(hass)
     flow._set_runtime_context(
         device_id=DEVICE_ID,
         runtime_mode=RUNTIME_MODE_POWER,

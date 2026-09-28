@@ -474,13 +474,18 @@ async def test_orphan_legacy_entity_ids_fail_preflight(
         )
 
 
-async def test_stale_canonical_runtime_entity_is_left_for_platform_cleanup(
+async def test_runtime_entity_without_subentry_is_planned_parent_owned(
     hass: HomeAssistant,
     device_registry: dr.DeviceRegistry,
     entity_registry: er.EntityRegistry,
     asset_store_data: AssetStoreData,
 ) -> None:
-    """No Runtime subentry means preflight must not infer new subentry ownership."""
+    """Without a Runtime subentry the Runtime identity stays, parent-owned (WP7).
+
+    No subentry ownership is inferred; the entry is placed on the Asset
+    Device with no ConfigSubentry, exactly like a Runtime entity whose
+    tracking is configured.
+    """
     entry = _entry(hass)
     entity_registry.async_get_or_create(
         Platform.SENSOR,
@@ -494,7 +499,11 @@ async def test_stale_canonical_runtime_entity_is_left_for_platform_cleanup(
         device_registry=device_registry,
         entity_registry=entity_registry,
     )
-    assert not [update for update in plan.entity_updates if update.kind == "runtime"]
+    runtime_updates = [
+        update for update in plan.entity_updates if update.kind == "runtime"
+    ]
+    assert len(runtime_updates) == 1
+    assert runtime_updates[0].desired_config_subentry_id is None
 
 
 def test_entity_disappearing_between_lookup_and_read_fails_preflight(

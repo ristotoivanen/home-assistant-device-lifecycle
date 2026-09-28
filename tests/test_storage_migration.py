@@ -94,12 +94,12 @@ async def test_complete_store_migration_preserves_identity_and_relationships(
     _validate_store_data(migrated)
 
 
-async def test_store_2_1_to_3_1_preserves_all_existing_canonical_data(
+async def test_store_2_1_to_4_1_preserves_all_existing_canonical_data(
     hass: HomeAssistant,
-    asset_store_data,
+    asset_store_data_v3_1,
 ) -> None:
-    """The 3.1 boundary adds only lifecycle/replacement structures."""
-    source = deepcopy(asset_store_data)
+    """2.1 -> 4.1 adds only the 3.1 history and the 4.1 structures."""
+    source = deepcopy(asset_store_data_v3_1)
     for asset in source["assets"].values():
         del asset["lifecycle"]
         asset["runtime"]["total_seconds"] = "1234.500"
@@ -116,25 +116,30 @@ async def test_store_2_1_to_3_1_preserves_all_existing_canonical_data(
             "status": "unknown",
             "current_event_uuid": None,
         }
+        assert asset.pop("archived_at") is None
     assert comparable.pop("lifecycle_events") == {}
     assert comparable.pop("replacement_records") == {}
+    assert comparable.pop("maintenance_schedules") == {}
+    assert comparable.pop("maintenance_events") == {}
     assert comparable == before
     _validate_store_data(migrated)
 
 
-async def test_valid_store_3_1_load_is_exact(
+async def test_valid_store_4_1_load_is_exact(
     hass: HomeAssistant,
     asset_store_data,
 ) -> None:
     source = deepcopy(asset_store_data)
 
-    loaded = await DeviceLifecycleStore(hass)._async_migrate_func(3, 1, source)
+    loaded = await DeviceLifecycleStore(hass)._async_migrate_func(4, 1, source)
 
     assert loaded == source
     assert loaded is not source
 
 
-@pytest.mark.parametrize(("major", "minor"), [(3, 2), (4, 1), (2, 2)])
+@pytest.mark.parametrize(
+    ("major", "minor"), [(3, 2), (4, 0), (4, 2), (2, 2), (0, 1)]
+)
 async def test_unsupported_store_versions_fail_closed(
     hass: HomeAssistant,
     asset_store_data,
@@ -151,9 +156,9 @@ async def test_unsupported_store_versions_fail_closed(
 
 async def test_corrupt_store_3_1_is_rejected(
     hass: HomeAssistant,
-    asset_store_data,
+    asset_store_data_v3_1,
 ) -> None:
-    asset_store_data["assets"][ASSET_UUID]["lifecycle"] = {
+    asset_store_data_v3_1["assets"][ASSET_UUID]["lifecycle"] = {
         "status": "active",
         "current_event_uuid": None,
     }
@@ -162,7 +167,7 @@ async def test_corrupt_store_3_1_is_rejected(
         await DeviceLifecycleStore(hass)._async_migrate_func(
             3,
             1,
-            asset_store_data,
+            asset_store_data_v3_1,
         )
 
     assert raised.value.code == "lifecycle_chain_invalid"
@@ -180,7 +185,7 @@ async def test_store_migration_is_idempotent(
     hass: HomeAssistant,
     asset_store_data_v1_1,
 ) -> None:
-    """Repeated migration does not rewrite or duplicate schema fields."""
+    """Migration is deterministic, and its result loads as current 4.1 as is."""
     store = DeviceLifecycleStore(hass)
 
     migrated_once = await store._async_migrate_func(
@@ -191,19 +196,19 @@ async def test_store_migration_is_idempotent(
     migrated_twice = await store._async_migrate_func(
         1,
         1,
-        deepcopy(migrated_once),
+        deepcopy(asset_store_data_v1_1),
     )
-    current_schema = await store._async_migrate_func(3, 1, deepcopy(migrated_once))
+    current_schema = await store._async_migrate_func(4, 1, deepcopy(migrated_once))
 
     assert migrated_twice == migrated_once
     assert current_schema == migrated_once
 
 
-async def test_authentic_store_1_2_migrates_directly_to_3_1_without_rewrite(
+async def test_authentic_store_1_2_migrates_directly_to_4_1_without_rewrite(
     hass: HomeAssistant,
     asset_store_data_v1_2,
 ) -> None:
-    """A historical 0.5.6 payload gains only Runtime and 3.1 history fields."""
+    """A historical 0.5.6 payload gains only Runtime, 3.1, and 4.1 fields."""
     source = deepcopy(asset_store_data_v1_2)
     source_before = deepcopy(source)
     assert all("runtime" not in asset for asset in source["assets"].values())
@@ -262,8 +267,11 @@ async def test_authentic_store_1_2_migrates_directly_to_3_1_without_rewrite(
             "status": "unknown",
             "current_event_uuid": None,
         }
+        assert asset.pop("archived_at") is None
     assert comparable.pop("lifecycle_events") == {}
     assert comparable.pop("replacement_records") == {}
+    assert comparable.pop("maintenance_schedules") == {}
+    assert comparable.pop("maintenance_events") == {}
     assert comparable == source_before
     _validate_store_data(migrated)
 
@@ -343,9 +351,9 @@ def test_purchase_relationship_rejects_home_assistant_provenance(
         _validate_store_data(asset_store_data)
 
 
-def test_schema_and_config_entry_versions_for_0_7_0() -> None:
-    """0.7.0 uses Store 3.1 without changing the ConfigEntry schema."""
-    assert STORAGE_VERSION == 3
+def test_store_4_1_keeps_the_config_entry_schema() -> None:
+    """Store 4.1 changes the Store schema only; the ConfigEntry stays 4."""
+    assert STORAGE_VERSION == 4
     assert STORAGE_MINOR_VERSION == 1
     assert CONFIG_ENTRY_VERSION == 4
 
@@ -434,6 +442,8 @@ async def test_existing_device_purchase_creation_sets_purchase_provenance(
         "assets": {},
         "lifecycle_events": {},
         "replacement_records": {},
+        "maintenance_schedules": {},
+        "maintenance_events": {},
     }
     purchase = SimpleNamespace(
         subentry_id=PURCHASE_SUBENTRY_ID,

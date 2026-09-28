@@ -78,9 +78,24 @@ from .exposure import (
     relationships_unique_id,
     replacement_unique_id,
 )
+from .maintenance_entities import (
+    MAINTENANCE_DUE_DATE_SUFFIX,
+    MAINTENANCE_STATUS_SUFFIX,
+    MAINTENANCE_STATUSES,
+    MaintenanceEntity,
+    MaintenanceEntityCoordinator,
+    maintenance_due_date_unique_id,
+    maintenance_status_unique_id,
+)
+from .maintenance_projection import InactiveReason
 from .migration import lifecycle_unique_id, runtime_unique_id
-from .models import AssetData, LifecycleEventData, PurchaseData
-from .storage import AssetStoreError, AssetStoreManager
+from .models import (
+    AssetData,
+    LifecycleEventData,
+    MaintenanceScheduleData,
+    PurchaseData,
+)
+from .storage import AssetStoreError, AssetStoreManager, RuntimeWriterDurability
 
 RUNTIME_REFRESH_INTERVAL = timedelta(minutes=5)
 _LOGGER = logging.getLogger(__name__)
@@ -277,6 +292,7 @@ async def async_setup_entry(
         deployment = DeviceDeploymentSensor(
             asset=asset,
             device_entry=device_entry,
+            manager=manager,
         )
         parent_entities.extend(
             (
@@ -286,15 +302,19 @@ async def async_setup_entry(
                     device_entry=device_entry,
                     unique_id=lifecycle_unique_id(asset["asset_uuid"]),
                     purchase_title=purchase_title,
+                    manager=manager,
                 ),
                 deployment,
                 DeviceInstallationDateSensor(
                     asset=asset,
                     device_entry=device_entry,
+                    manager=manager,
                 ),
                 DeviceAssetIdSensor(
                     asset=asset,
                     device_entry=device_entry,
+                    manager=manager,
+                    archived=manager.asset_archived(asset["asset_uuid"]),
                 ),
                 DeviceLifecycleStatusSensor(
                     asset=asset,
@@ -302,6 +322,7 @@ async def async_setup_entry(
                         asset["lifecycle"]["current_event_uuid"]
                     ),
                     device_entry=device_entry,
+                    manager=manager,
                 ),
                 DeviceReplacementSensor(
                     asset=asset,
@@ -312,6 +333,7 @@ async def async_setup_entry(
                         asset["asset_uuid"]
                     ),
                     device_entry=device_entry,
+                    manager=manager,
                 ),
             )
         )
@@ -320,6 +342,7 @@ async def async_setup_entry(
             asset=asset,
             device_entry=device_entry,
             device_registry=device_registry,
+            manager=manager,
         )
         parent_entities.append(relationships)
         relationship_entities.append(relationships)
@@ -345,7 +368,27 @@ async def async_setup_entry(
         if hasattr(entry, "async_on_unload"):
             entry.async_on_unload(unsubscribe)
 
+    if hasattr(entry, "async_on_unload"):
+        MaintenanceEntityCoordinator(
+            hass,
+            entry,
+            manager,
+            domain="sensor",
+            suffixes=(MAINTENANCE_STATUS_SUFFIX, MAINTENANCE_DUE_DATE_SUFFIX),
+            expected_unique_ids=_maintenance_sensor_unique_ids,
+            factory=_maintenance_sensors,
+            async_add_entities=async_add_entities,
+        ).async_setup()
+
     for subentry in entry.subentries.values():
+        if (
+            subentry.subentry_type == SUBENTRY_TYPE_RUNTIME
+            and subentry.subentry_id in manager.runtime_quarantine
+        ):
+            # Quarantined: it resolves to an archived Asset. No Runtime is
+            # initialized or imported and no writer starts; the subentry and
+            # the Asset's parent-owned Runtime entity are left untouched.
+            continue
         if subentry.subentry_type == SUBENTRY_TYPE_RUNTIME:
             device_id = str(subentry.data.get(CONF_DEVICE_ID) or "")
             source_entity_id = str(subentry.data.get(CONF_SOURCE_ENTITY_ID) or "")
@@ -445,10 +488,9 @@ async def async_setup_entry(
             )
 
             if runtime_entities:
-                async_add_entities(
-                    runtime_entities,
-                    config_subentry_id=subentry.subentry_id,
-                )
+                # Parent-owned: the Runtime subentry owns only the tracking
+                # configuration, so removing it keeps the entity's identity.
+                async_add_entities(runtime_entities)
 
 
 def _remove_unexpected_subentry_entities(
@@ -471,7 +513,134 @@ def _remove_unexpected_subentry_entities(
             entity_registry.async_remove(registry_entry.entity_id)
 
 
-class DeviceLifecycleSensor(SensorEntity):
+def _maintenance_sensor_unique_ids(schedule: MaintenanceScheduleData) -> set[str]:
+    """Every Schedule has a status and a next-maintenance sensor."""
+    return {
+        maintenance_status_unique_id(schedule["schedule_uuid"]),
+        maintenance_due_date_unique_id(schedule["schedule_uuid"]),
+    }
+
+
+def _maintenance_sensors(
+    manager: AssetStoreManager,
+    schedule: MaintenanceScheduleData,
+    device_entry: dr.DeviceEntry,
+) -> list[MaintenanceEntity]:
+    return [
+        MaintenanceStatusSensor(
+            manager=manager,
+            schedule=schedule,
+            device_entry=device_entry,
+            unique_id=maintenance_status_unique_id(schedule["schedule_uuid"]),
+        ),
+        MaintenanceDueDateSensor(
+            manager=manager,
+            schedule=schedule,
+            device_entry=device_entry,
+            unique_id=maintenance_due_date_unique_id(schedule["schedule_uuid"]),
+        ),
+    ]
+
+
+class MaintenanceStatusSensor(MaintenanceEntity, SensorEntity):
+    """The current due state of one Maintenance Schedule.
+
+    ``disabled`` is a presentation value for a disabled Schedule, distinct
+    from ``unknown``; it is never persisted. An archived Asset makes the
+    entity unavailable instead.
+    """
+
+    _attr_translation_key = "maintenance_status"
+    _attr_device_class = SensorDeviceClass.ENUM
+
+    @property
+    def options(self) -> list[str]:
+        """Return the fixed status states."""
+        return list(MAINTENANCE_STATUSES)
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the combined due state, or ``disabled``."""
+        projection = self._projection
+        if projection is None:
+            return None
+        if projection.active:
+            return str(projection.combined_state)
+        if projection.inactive_reason is InactiveReason.DISABLED:
+            return "disabled"
+        return None
+
+
+class MaintenanceDueDateSensor(MaintenanceEntity, SensorEntity):
+    """The calendar due date of one Maintenance Schedule, if known.
+
+    Unknown when the Schedule has no calendar interval, its calendar due
+    date is unknown, or it is disabled. Never derived from Runtime.
+    """
+
+    _attr_translation_key = "maintenance_due_date"
+    _attr_device_class = SensorDeviceClass.DATE
+
+    @property
+    def native_value(self) -> date | None:
+        """Return the projected calendar due date."""
+        projection = self.active_projection
+        if projection is None or projection.calendar is None:
+            return None
+        return projection.calendar.due
+
+
+class _AssetSnapshotEntity(SensorEntity):
+    """An Asset entity that re-reads its canonical snapshot after a commit.
+
+    It subscribes to the Store manager's publish listener while added, and
+    when a published snapshot changed its Asset it re-reads the detached
+    canonical Asset (and whatever related snapshot it renders) before it
+    writes its state. Without a manager the entity is a static projection.
+    """
+
+    _snapshot_manager: AssetStoreManager | None = None
+    _snapshot_asset_uuid: str | None = None
+    _unsub_publish: Callable[[], None] | None = None
+
+    def _bind_snapshot(
+        self, manager: AssetStoreManager | None, asset_uuid: str
+    ) -> None:
+        self._snapshot_manager = manager
+        self._snapshot_asset_uuid = asset_uuid
+
+    async def async_added_to_hass(self) -> None:
+        """Follow the canonical Store while this entity is added."""
+        await super().async_added_to_hass()
+        if self._snapshot_manager is not None:
+            self._unsub_publish = self._snapshot_manager.async_add_publish_listener(
+                self._handle_store_publish
+            )
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Stop following the Store."""
+        if self._unsub_publish is not None:
+            self._unsub_publish()
+            self._unsub_publish = None
+        await super().async_will_remove_from_hass()
+
+    @callback
+    def _handle_store_publish(self, changed: frozenset[str]) -> None:
+        manager = self._snapshot_manager
+        if manager is None or self._snapshot_asset_uuid not in changed:
+            return
+        asset = manager.asset(self._snapshot_asset_uuid)
+        if asset is None:
+            return
+        self._refresh_snapshot(manager, asset)
+        self.async_write_ha_state()
+
+    def _refresh_snapshot(self, manager: AssetStoreManager, asset: AssetData) -> None:
+        """Replace the rendered snapshots with the canonical ones."""
+        raise NotImplementedError
+
+
+class DeviceLifecycleSensor(_AssetSnapshotEntity):
     """Lifecycle information for one persistent physical Asset."""
 
     _attr_has_entity_name = True
@@ -486,6 +655,7 @@ class DeviceLifecycleSensor(SensorEntity):
         device_entry: dr.DeviceEntry,
         unique_id: str,
         purchase_title: str | None,
+        manager: AssetStoreManager | None = None,
     ) -> None:
         """Initialize lifecycle sensor."""
         self._asset = asset
@@ -493,6 +663,22 @@ class DeviceLifecycleSensor(SensorEntity):
         self._purchase_title = purchase_title
         self.device_entry = device_entry
         self._attr_unique_id = unique_id
+        self._bind_snapshot(manager, asset["asset_uuid"])
+
+    def _refresh_snapshot(self, manager: AssetStoreManager, asset: AssetData) -> None:
+        purchase = manager.purchase(asset.get("purchase_uuid"))
+        previous = self._purchase
+        if purchase is None:
+            self._purchase_title = None
+        elif (
+            previous is None
+            or previous["purchase_uuid"] != purchase["purchase_uuid"]
+        ):
+            self._purchase_title = str(
+                purchase.get("name") or purchase["purchase_uuid"]
+            )
+        self._asset = asset
+        self._purchase = purchase
 
     @property
     def icon(self) -> str:
@@ -644,7 +830,7 @@ def _device_display_name(device: dr.DeviceEntry | None) -> str | None:
     return str(value) if value not in (None, "") else None
 
 
-class DeviceDeploymentSensor(SensorEntity):
+class DeviceDeploymentSensor(_AssetSnapshotEntity):
     """Projection of one Asset's canonical deployment state."""
 
     _attr_has_entity_name = True
@@ -659,11 +845,16 @@ class DeviceDeploymentSensor(SensorEntity):
         *,
         asset: AssetData,
         device_entry: dr.DeviceEntry,
+        manager: AssetStoreManager | None = None,
     ) -> None:
         """Initialize a Deployment projection."""
         self._asset = asset
         self.device_entry = device_entry
         self._attr_unique_id = deployment_unique_id(asset["asset_uuid"])
+        self._bind_snapshot(manager, asset["asset_uuid"])
+
+    def _refresh_snapshot(self, manager: AssetStoreManager, asset: AssetData) -> None:
+        self._asset = asset
 
     @property
     def stored_area_id(self) -> str | None:
@@ -699,7 +890,7 @@ class DeviceDeploymentSensor(SensorEntity):
         }
 
 
-class DeviceInstallationDateSensor(SensorEntity):
+class DeviceInstallationDateSensor(_AssetSnapshotEntity):
     """Native date projection of one Asset's canonical installation date."""
 
     _attr_has_entity_name = True
@@ -713,11 +904,16 @@ class DeviceInstallationDateSensor(SensorEntity):
         *,
         asset: AssetData,
         device_entry: dr.DeviceEntry,
+        manager: AssetStoreManager | None = None,
     ) -> None:
         """Initialize an Installation Date projection."""
         self._asset = asset
         self.device_entry = device_entry
         self._attr_unique_id = installed_date_unique_id(asset["asset_uuid"])
+        self._bind_snapshot(manager, asset["asset_uuid"])
+
+    def _refresh_snapshot(self, manager: AssetStoreManager, asset: AssetData) -> None:
+        self._asset = asset
 
     @property
     def native_value(self) -> date | None:
@@ -766,7 +962,7 @@ class _DeploymentAreaRegistryCoordinator:
         )
 
 
-class DeviceRelationshipsSensor(SensorEntity):
+class DeviceRelationshipsSensor(_AssetSnapshotEntity):
     """Read-only projection of exact external Device Registry references."""
 
     _attr_has_entity_name = True
@@ -784,12 +980,20 @@ class DeviceRelationshipsSensor(SensorEntity):
         asset: AssetData,
         device_entry: dr.DeviceEntry,
         device_registry: dr.DeviceRegistry,
+        manager: AssetStoreManager | None = None,
     ) -> None:
         """Initialize a Relationships projection."""
         self._asset = asset
         self._device_registry = device_registry
         self.device_entry = device_entry
         self._attr_unique_id = relationships_unique_id(asset["asset_uuid"])
+        self.referenced_device_ids = frozenset(
+            str(reference["device_id"]) for reference in asset.get("ha_device_refs", [])
+        )
+        self._bind_snapshot(manager, asset["asset_uuid"])
+
+    def _refresh_snapshot(self, manager: AssetStoreManager, asset: AssetData) -> None:
+        self._asset = asset
         self.referenced_device_ids = frozenset(
             str(reference["device_id"]) for reference in asset.get("ha_device_refs", [])
         )
@@ -855,7 +1059,7 @@ class DeviceRelationshipsSensor(SensorEntity):
         }
 
 
-class DeviceAssetIdSensor(SensorEntity):
+class DeviceAssetIdSensor(_AssetSnapshotEntity):
     """Diagnostic projection of one permanent human-facing Asset ID."""
 
     _attr_has_entity_name = True
@@ -870,19 +1074,32 @@ class DeviceAssetIdSensor(SensorEntity):
         *,
         asset: AssetData,
         device_entry: dr.DeviceEntry,
+        manager: AssetStoreManager | None = None,
+        archived: bool = False,
     ) -> None:
         """Initialize an Asset ID projection."""
         self._asset_id = asset["asset_id"]
+        self._archived = archived
         self.device_entry = device_entry
         self._attr_unique_id = asset_id_unique_id(asset["asset_uuid"])
+        self._bind_snapshot(manager, asset["asset_uuid"])
+
+    def _refresh_snapshot(self, manager: AssetStoreManager, asset: AssetData) -> None:
+        self._asset_id = asset["asset_id"]
+        self._archived = manager.asset_archived(asset["asset_uuid"])
 
     @property
     def native_value(self) -> str:
         """Return the permanent DLxxxx identity."""
         return self._asset_id
 
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Report whether the Asset is archived; its identity never changes."""
+        return {"archived": self._archived}
 
-class DeviceLifecycleStatusSensor(SensorEntity):
+
+class DeviceLifecycleStatusSensor(_AssetSnapshotEntity):
     """Projection of one Asset's canonical current lifecycle status."""
 
     _attr_has_entity_name = True
@@ -898,6 +1115,7 @@ class DeviceLifecycleStatusSensor(SensorEntity):
         asset: AssetData,
         current_event: LifecycleEventData | None,
         device_entry: dr.DeviceEntry,
+        manager: AssetStoreManager | None = None,
     ) -> None:
         """Initialize a Lifecycle Status projection."""
         self._status = asset["lifecycle"]["status"]
@@ -906,6 +1124,16 @@ class DeviceLifecycleStatusSensor(SensorEntity):
         )
         self.device_entry = device_entry
         self._attr_unique_id = lifecycle_status_unique_id(asset["asset_uuid"])
+        self._bind_snapshot(manager, asset["asset_uuid"])
+
+    def _refresh_snapshot(self, manager: AssetStoreManager, asset: AssetData) -> None:
+        current_event = manager.lifecycle_event(
+            asset["lifecycle"]["current_event_uuid"]
+        )
+        self._status = asset["lifecycle"]["status"]
+        self._effective_date = (
+            current_event["effective_date"] if current_event is not None else None
+        )
 
     @property
     def native_value(self) -> str:
@@ -918,7 +1146,7 @@ class DeviceLifecycleStatusSensor(SensorEntity):
         return {"effective_date": self._effective_date}
 
 
-class DeviceReplacementSensor(SensorEntity):
+class DeviceReplacementSensor(_AssetSnapshotEntity):
     """Projection of one Asset's current active replacement graph context."""
 
     _attr_has_entity_name = True
@@ -936,19 +1164,32 @@ class DeviceReplacementSensor(SensorEntity):
         predecessor: AssetData | None,
         successor: AssetData | None,
         device_entry: dr.DeviceEntry,
+        manager: AssetStoreManager | None = None,
     ) -> None:
         """Initialize a Replacement projection."""
+        self._set_replacements(predecessor, successor)
+        self._attr_entity_registry_enabled_default = (
+            predecessor is not None or successor is not None
+        )
+        self.device_entry = device_entry
+        self._attr_unique_id = replacement_unique_id(asset["asset_uuid"])
+        self._bind_snapshot(manager, asset["asset_uuid"])
+
+    def _set_replacements(
+        self, predecessor: AssetData | None, successor: AssetData | None
+    ) -> None:
         self._predecessor_asset_ids = (
             [predecessor["asset_id"]] if predecessor is not None else []
         )
         self._successor_asset_ids = (
             [successor["asset_id"]] if successor is not None else []
         )
-        self._attr_entity_registry_enabled_default = (
-            predecessor is not None or successor is not None
+
+    def _refresh_snapshot(self, manager: AssetStoreManager, asset: AssetData) -> None:
+        self._set_replacements(
+            manager.active_replacement_predecessor(asset["asset_uuid"]),
+            manager.active_replacement_successor(asset["asset_uuid"]),
         )
-        self.device_entry = device_entry
-        self._attr_unique_id = replacement_unique_id(asset["asset_uuid"])
 
     @property
     def native_value(self) -> str:
@@ -1009,7 +1250,7 @@ class _RelationshipsRegistryCoordinator:
         )
 
 
-class DeviceRuntimeHoursSensor(SensorEntity):
+class DeviceRuntimeHoursSensor(_AssetSnapshotEntity):
     """Projection of one Asset's canonical cumulative Runtime total."""
 
     _attr_has_entity_name = True
@@ -1044,6 +1285,7 @@ class DeviceRuntimeHoursSensor(SensorEntity):
         self._monotonic = monotonic
         self.device_entry = device_entry
         self._attr_unique_id = unique_id
+        self._bind_snapshot(manager, self._asset_uuid)
 
         self._source_entity_id = str(data[CONF_SOURCE_ENTITY_ID])
         self._runtime_mode = str(data[CONF_RUNTIME_MODE])
@@ -1063,6 +1305,15 @@ class DeviceRuntimeHoursSensor(SensorEntity):
         self._unsub_source: Callable[[], None] | None = None
         self._unsub_interval: Callable[[], None] | None = None
         self._unsub_shutdown: Callable[[], None] | None = None
+        self._unsub_checkpoint: Callable[[], None] | None = None
+
+    def _refresh_snapshot(self, manager: AssetStoreManager, asset: AssetData) -> None:
+        """Re-read the Asset identity; Runtime accounting is never touched.
+
+        The committed total, pending deltas, and the active interval belong
+        to this writer and change only through its own Runtime operations.
+        """
+        self._asset_id = asset["asset_id"]
 
     @property
     def native_value(self) -> Decimal:
@@ -1104,6 +1355,16 @@ class DeviceRuntimeHoursSensor(SensorEntity):
         """Start a fresh observable interval and register Runtime listeners."""
         await super().async_added_to_hass()
 
+        # Register first so a duplicate writer fails before any listener exists.
+        self._unsub_checkpoint = self._manager.register_runtime_checkpoint(
+            self._asset_uuid,
+            self.async_checkpoint_runtime,
+            prepare_unload=self.async_prepare_runtime_unload,
+            durability=self.runtime_durability,
+            finalize=self.async_finalize_runtime,
+            retire=self.async_retire_runtime,
+        )
+
         current_state = self.hass.states.get(self._source_entity_id)
         if self._is_active(current_state, currently_active=False):
             self._active_since = self._monotonic()
@@ -1129,13 +1390,22 @@ class DeviceRuntimeHoursSensor(SensorEntity):
         self.async_write_ha_state()
 
     async def async_will_remove_from_hass(self) -> None:
-        """Attempt a final serialized checkpoint before listener cleanup."""
+        """Attempt a final serialized checkpoint before listener cleanup.
+
+        The config-entry unload path has already made Runtime durable and
+        quiesced this writer with ``async_prepare_runtime_unload``, so this is
+        normally a no-op checkpoint. A direct removal outside that gate stays
+        best effort; if Runtime is still pending afterwards it is reported to
+        the manager so no later checkpoint presents the old total as current.
+        """
         self._removing = True
         try:
             async with self._runtime_lock:
                 self._seal_active(self._monotonic(), continue_active=False)
                 await self._async_flush_pending()
                 self.async_write_ha_state()
+                if self._pending:
+                    self._manager.mark_runtime_unresolved(self._asset_uuid)
         finally:
             self._cleanup_runtime_listeners()
         await super().async_will_remove_from_hass()
@@ -1152,6 +1422,10 @@ class DeviceRuntimeHoursSensor(SensorEntity):
         new_state = event.data["new_state"]
 
         async with self._runtime_lock:
+            # Re-check inside the lock: a callback queued behind a successful
+            # unload preparation must not create Runtime after it.
+            if self._removing:
+                return
             currently_active = self._active_since is not None
             new_active = self._is_active(
                 new_state,
@@ -1173,14 +1447,122 @@ class DeviceRuntimeHoursSensor(SensorEntity):
             self.async_write_ha_state()
 
     async def _handle_periodic_checkpoint(self, _now: datetime) -> None:
-        """Seal active elapsed and durably retry all pending Runtime deltas."""
-        if self._removing:
+        """Seal active elapsed and durably retry all pending Runtime deltas.
+
+        A quiesced writer seals nothing; it only retries the Runtime it
+        already holds, best effort, so a failed retirement can still become
+        durable without a reload.
+        """
+        if self._removing and not self._pending:
             return
         async with self._runtime_lock:
+            if self._removing:
+                await self._async_flush_pending()
+                self.async_write_ha_state()
+                return
             if self._active_since is not None:
                 self._seal_active(self._monotonic(), continue_active=True)
             await self._async_flush_pending()
             self.async_write_ha_state()
+
+    async def async_checkpoint_runtime(self) -> Decimal:
+        """Strictly checkpoint observable Runtime on request and keep tracking.
+
+        Serialized with every other Runtime operation by the Runtime lock:
+        active elapsed time is sealed behind any existing pending deltas, the
+        interval continues from now, and all pending deltas are committed in
+        order. Unlike the best-effort background checkpoints, any delta that
+        cannot be committed stays pending and the request raises.
+        """
+        async with self._runtime_lock:
+            if self._removing:
+                # A quiesced or removed writer no longer observes Runtime, so
+                # its committed total is not a current checkpoint.
+                raise AssetStoreError(
+                    f"Runtime writer for Asset {self._asset_uuid} is stopped for "
+                    "unload",
+                    code="runtime_writer_quiesced",
+                )
+            if self._active_since is not None:
+                self._seal_active(self._monotonic(), continue_active=True)
+            try:
+                await self._async_flush_pending(strict=True)
+            finally:
+                self.async_write_ha_state()
+            return self._committed_seconds
+
+    async def async_prepare_runtime_unload(self) -> None:
+        """Durably checkpoint and quiesce this writer before platform unload.
+
+        Under the Runtime lock the active interval is sealed through now and
+        every pending delta is committed strictly. Only after that succeeds is
+        tracking stopped and the writer quiesced, so no queued callback can
+        create Runtime afterwards. On failure every pending delta is kept, the
+        writer stays registered, tracking continues from the sealed boundary
+        without double counting, and the error is raised. A writer that is
+        already quiesced seals nothing, but its pending deltas must still be
+        committed strictly before the unload may proceed.
+        """
+        async with self._runtime_lock:
+            if self._removing:
+                try:
+                    await self._async_flush_pending(strict=True)
+                finally:
+                    self.async_write_ha_state()
+                return
+            if self._active_since is not None:
+                self._seal_active(self._monotonic(), continue_active=True)
+            try:
+                await self._async_flush_pending(strict=True)
+            finally:
+                self.async_write_ha_state()
+            self._active_since = None
+            self._removing = True
+            self.async_write_ha_state()
+
+    def runtime_durability(self) -> RuntimeWriterDurability:
+        """Return this writer's in-memory durability evidence; no side effects."""
+        return RuntimeWriterDurability(
+            observing=not self._removing,
+            pending=bool(self._pending),
+            committed_seconds=self._committed_seconds,
+        )
+
+    async def async_finalize_runtime(self) -> Decimal:
+        """Strictly commit the already-pending deltas; seal no new time.
+
+        Under the Runtime lock. Observation is neither started nor stopped.
+        On failure every pending delta is kept and the error is raised.
+        """
+        async with self._runtime_lock:
+            try:
+                await self._async_flush_pending(strict=True)
+            finally:
+                self.async_write_ha_state()
+            return self._committed_seconds
+
+    async def async_retire_runtime(self) -> None:
+        """Stop tracking for good because the Runtime configuration is gone.
+
+        Under the Runtime lock: seal observed time through now, stop observing
+        and remove the source listener, then strictly commit every pending
+        delta. Unlike the unload preparation, the writer stays quiesced when
+        that commit fails: its configuration no longer exists, so it must
+        never observe again. The pending deltas are kept for a later retry
+        by the periodic interval, ``async_finalize_runtime``, or the unload
+        gate; none of them adds time observed after this point.
+        """
+        async with self._runtime_lock:
+            if not self._removing:
+                self._seal_active(self._monotonic(), continue_active=False)
+                self._removing = True
+                if self._unsub_source is not None:
+                    self._unsub_source()
+                    self._unsub_source = None
+            try:
+                await self._async_flush_pending(strict=True)
+            finally:
+                self.async_write_ha_state()
 
     async def _handle_shutdown(self, _event: Event) -> None:
         """Attempt a final checkpoint during normal Home Assistant shutdown."""
@@ -1205,8 +1587,13 @@ class DeviceRuntimeHoursSensor(SensorEntity):
 
         self._active_since = now if continue_active else None
 
-    async def _async_flush_pending(self) -> None:
-        """Commit pending deltas in order, retaining every failed delta."""
+    async def _async_flush_pending(self, *, strict: bool = False) -> None:
+        """Commit pending deltas in order, retaining every failed delta.
+
+        Background checkpoints are best effort: a failure is logged and the
+        delta is retried later. With ``strict`` the failure also raises, so an
+        explicit checkpoint never reports an uncommitted delta as durable.
+        """
         while self._pending:
             pending = self._pending[0]
             try:
@@ -1226,6 +1613,12 @@ class DeviceRuntimeHoursSensor(SensorEntity):
                     ),
                     err,
                 )
+                if strict:
+                    raise AssetStoreError(
+                        f"Runtime checkpoint for Asset {self._asset_uuid} could "
+                        "not be persisted; the Runtime remains pending",
+                        code="runtime_checkpoint_failed",
+                    ) from err
                 return
 
             expected_committed = pending.expected_total + pending.delta
@@ -1235,6 +1628,12 @@ class DeviceRuntimeHoursSensor(SensorEntity):
                     "the delta remains pending",
                     self._asset_uuid,
                 )
+                if strict:
+                    raise AssetStoreError(
+                        f"Runtime checkpoint for Asset {self._asset_uuid} returned "
+                        "an unexpected total; the Runtime remains pending",
+                        code="runtime_checkpoint_failed",
+                    )
                 return
             self._committed_seconds = committed
             self._pending.pop(0)
@@ -1245,6 +1644,7 @@ class DeviceRuntimeHoursSensor(SensorEntity):
             "_unsub_source",
             "_unsub_interval",
             "_unsub_shutdown",
+            "_unsub_checkpoint",
         ):
             unsubscribe = getattr(self, attribute)
             if unsubscribe is not None:

@@ -13,13 +13,14 @@
 </p>
 
 <p align="center">
-  <a href="#whats-new-in-075">What's new</a> ·
+  <a href="#whats-new-in-080">What's new</a> ·
   <a href="#installation">Installation</a> ·
   <a href="#quick-add">Quick Add</a> ·
   <a href="#optional-dashboard">Dashboard</a> ·
   <a href="#what-device-lifecycle-is">Asset concepts</a> ·
   <a href="#lifecycle-status">Lifecycle</a> ·
   <a href="#runtime-tracking">Runtime</a> ·
+  <a href="#maintenance">Maintenance</a> ·
   <a href="#documentation">Documentation</a> ·
   <a href="#support">Support</a>
 </p>
@@ -37,7 +38,24 @@ Every Asset has two permanent identifiers:
 
 Asset IDs are allocated monotonically and never recycled. The UUID and Asset ID remain unchanged when the Purchase, deployment information, or linked Home Assistant device changes.
 
-Asset Core uses Home Assistant's private, atomic, versioned storage. Its invariants and Store 3.1 schema are documented in [`ARCHITECTURE.md`](ARCHITECTURE.md).
+Asset Core uses Home Assistant's private, atomic, versioned storage. Its invariants and the Store 4.1 schema are documented in [`ARCHITECTURE.md`](ARCHITECTURE.md).
+
+## What's new in 0.8.0
+
+> [!WARNING]
+> **Before upgrading from 0.7.x to 0.8.0, take a Home Assistant backup.**
+>
+> The first successful start of 0.8.0 migrates the Device Lifecycle Store from 3.1 to **4.1**. Every 0.7.x release intentionally refuses a Store 4.1 file, and there is no automatic 4.1 → 3.1 downgrade. After 0.8.0 has written Store 4.1, reinstalling 0.7.x alone does not bring Device Lifecycle back: returning to 0.7.x requires restoring the Home Assistant backup made before the upgrade. See [Upgrading from 0.7.x to 0.8.0](#upgrading-from-07x-to-080).
+
+Device Lifecycle 0.8.0 adds reversible Asset Archive and Maintenance, and keeps Runtime entities through removal and re-adding of Runtime tracking. It migrates the Store once from 3.1 to 4.1. ConfigEntry remains version 4, and the Home Assistant 2026.8.0 minimum is unchanged.
+
+- **Archive and Restore.** An Asset you no longer manage can be archived from its hub (**Archive this device** / **Arkistoi tämä laite**) and found again under **Archived devices** / **Arkistoidut laitteet**. See [Archive and Restore](#archive-and-restore).
+- **Maintenance.** Each Asset can have Maintenance schedules with a time interval, a Runtime interval, or both, a current due status, an optional preparation reminder, and a Maintenance history that can be corrected but never silently rewritten. See [Maintenance](#maintenance).
+- **Maintenance entities.** Each schedule gets a status sensor, a next-maintenance date sensor, and, with a preparation reminder, a preparation binary sensor on the Asset's device.
+- **Runtime identity continuity.** Removing Runtime tracking keeps the Runtime entity, its entity ID, and its history. Adding tracking again for the same device reuses the same entity, and the Runtime total continues from where it stopped.
+- **No reload for these changes.** Archive, Restore, and every Maintenance change update the entities and Repairs directly, without reloading the integration.
+
+Not included in 0.8.x (planned for 0.9.x — Portability, Data Safety & Hardening): permanent Asset deletion (purge), export and import, recovery tooling beyond restoring a Home Assistant backup, and historical references (tombstones) for deleted Assets. Archive is reversible management state, not deletion.
 
 ## What's new in 0.7.7
 
@@ -140,7 +158,7 @@ If the repository is not already available in your HACS instance, add it manuall
 
 Copy `custom_components/device_lifecycle/` into `/config/custom_components/device_lifecycle/`, restart Home Assistant, and add the integration from **Settings > Devices & services**.
 
-Device Lifecycle 0.7.7 requires Home Assistant 2026.8.0 or newer. Review the [upgrade notes](#upgrade-notes) and create a Home Assistant backup before any upgrade that changes the Store schema.
+Device Lifecycle 0.8.0 requires Home Assistant 2026.8.0 or newer. Review the [upgrade notes](#upgrade-notes) and create a Home Assistant backup before any upgrade that changes the Store schema; the upgrade from 0.7.x to 0.8.0 does.
 
 ## Optional dashboard
 
@@ -268,6 +286,7 @@ Open the existing Device Lifecycle integration and choose **Configure** to acces
 
 - **Add device** / **Lisää laite**: create one physical Asset from an eligible Home Assistant device or by manual entry, with a mandatory final review (see [Quick Add](#quick-add))
 - **Manage devices** / **Hallitse laitteita**: choose an existing Asset to manage
+- **Archived devices** / **Arkistoidut laitteet**: open an archived Asset (see [Archive and Restore](#archive-and-restore))
 
 ### Choosing an Asset
 
@@ -275,7 +294,7 @@ Assets are listed by display name followed by their permanent Asset ID, for exam
 
 ### The Asset hub
 
-The hub is the working menu for one Asset. Its header shows the selected Asset as `Name · DLxxxx`, and it always has these five rows in this order:
+The hub is the working menu for one active Asset. Its header shows the selected Asset as `Name · DLxxxx`, and it always has these seven rows in this order:
 
 | # | Finnish | English | Opens |
 |---|---|---|---|
@@ -283,9 +302,11 @@ The hub is the working menu for one Asset. Its header shows the selected Asset a
 | 2 | Asennus ja sijainti | Installation & location | a view of the installation status, Installation date, and location |
 | 3 | Elinkaari ja korvaaminen | Lifecycle & replacement | a view of the Lifecycle status and the Asset's replacement relationships |
 | 4 | Home Assistant -laitteet | Home Assistant devices | the primary and related Home Assistant devices |
-| 5 | Valitse toinen laite | Choose another device | the Asset list again |
+| 5 | Huolto | Maintenance | the Asset's Maintenance schedules, recording, and history (see [Maintenance](#maintenance)) |
+| 6 | Arkistoi tämä laite | Archive this device | the Archive confirmation (see [Archive and Restore](#archive-and-restore)) |
+| 7 | Valitse toinen laite | Choose another device | the Asset list again |
 
-Rows 1–4 each show a short summary under the row name, for example the installation status and location, or the primary Home Assistant device and the number of related devices. Summaries are built from the stored Asset data each time the hub is shown. Opening the hub, a view, or a summary never changes anything.
+Rows 1–5 each show a short summary under the row name, for example the installation status and location, or the primary Home Assistant device and the number of related devices. Summaries are built from the stored Asset data each time the hub is shown. Opening the hub, a view, or a summary never changes anything.
 
 ### Views and their actions
 
@@ -334,7 +355,7 @@ Voiding a replacement relationship needs both a reason and the confirmation on t
 
 ### Saving and reloading
 
-Each saved change reloads the integration so that entities reflect it. The flow waits for that reload to finish and then continues. If the integration does not load again, the flow stops with "Device Lifecycle is not currently loaded. Reload the integration and try again." The change itself has already been saved at that point.
+Archive, Restore, and every Maintenance change update the affected entities and Repairs directly and do not reload the integration. Every other saved change reloads the integration so that entities reflect it. The flow waits for that reload to finish and then continues. If the integration does not load again, the flow stops with "Device Lifecycle is not currently loaded. Reload the integration and try again." The change itself has already been saved at that point.
 
 Assets originally created through Purchase or Runtime reconciliation are managed through the same UI. Device Lifecycle does not introduce a separate manual-device model.
 
@@ -460,7 +481,9 @@ Existing relationships to historical or no-longer-configured Purchases are prese
 
 ## Storage and migration impact
 
-0.7.7 continues to use Store 3.1 and ConfigEntry version 4, with no schema migration. Store 3.1 contains `asset.lifecycle`, top-level `lifecycle_events`, and top-level `replacement_records`. It does not persist Asset Device IDs, Entity Registry IDs, exposure state, workflow drafts, or alternate identities.
+0.8.0 uses **Store 4.1** (`version` 4, `minor_version` 1) and ConfigEntry version 4. Store 4.1 has exactly seven top-level collections: `next_asset_number`, `purchases`, `assets`, `lifecycle_events`, `replacement_records`, `maintenance_schedules`, and `maintenance_events`. Every Asset gains `archived_at`, which is `null` for an active Asset. The migration from Store 3.1 runs once, on the first successful start of 0.8.0; see [Upgrading from 0.7.x to 0.8.0](#upgrading-from-07x-to-080).
+
+The Store does not persist Asset Device IDs, Entity Registry IDs, exposure state, workflow drafts, Maintenance due states, preparation state, or alternate identities; those are derived.
 
 ## Warranty
 
@@ -473,7 +496,7 @@ Existing Purchase workflows can set a warranty with these modes:
 - 2 years
 - Manual
 
-For 1- and 2-year warranties, the warranty end date is calculated from the Purchase date with calendar-year and leap-day handling. Quick Add can apply those modes only when a configured Purchase with a valid Purchase date is selected, or use a manual warranty date without a Purchase. It revalidates the Purchase date immediately before commit. There is no separate warranty editor in 0.7.7: the **Linked purchase** / **Ostoslinkitys** form changes only the Purchase link.
+For 1- and 2-year warranties, the warranty end date is calculated from the Purchase date with calendar-year and leap-day handling. Quick Add can apply those modes only when a configured Purchase with a valid Purchase date is selected, or use a manual warranty date without a Purchase. It revalidates the Purchase date immediately before commit. There is no separate warranty editor in 0.8.0: the **Linked purchase** / **Ostoslinkitys** form changes only the Purchase link.
 
 ## Runtime tracking
 
@@ -492,7 +515,89 @@ While active, Runtime checkpoints to Asset Store every five minutes. It also che
 
 Runtime configuration remains owned by its Runtime subentry, and the external primary relationship remains its configured target. In 0.6.0 only the entity's Device Registry placement changes to the owned Asset Device. Runtime unique ID, entity ID, subentry ID, total, source behavior, initialization, restore import, thresholds, hysteresis, units, precision, state class, checkpointing, and CAS behavior are unchanged.
 
+Since 0.8.0 the Runtime entity's Entity Registry identity is parent-owned instead: the Runtime configuration still decides whether Runtime is tracked and how, but removing it keeps the Runtime entity, its entity ID, and its history, and adding Runtime tracking again for the same device reuses that entity. The Runtime total continues from where it stopped; time while tracking was removed is not added.
+
+## Archive and Restore
+
+Archive takes an Asset out of active management without deleting anything. Use it for an item you no longer manage day to day but whose record and history you want to keep.
+
+- **Archive is not a Lifecycle status.** Lifecycle (Active, Retired, Disposed, Lost) describes the physical item. Archive only says whether Device Lifecycle keeps the record in current management. Archiving never changes Lifecycle, and recording Retired or Disposed never archives. The optional dashboard's "Archived" group shows Lifecycle Retired, Disposed, and Lost and is unrelated to Asset Archive.
+- **Archive is not deletion.** The Asset keeps its internal identity, its `DLxxxx` Asset ID, its Purchase link, Lifecycle and Replacement history, its Runtime total, and its Maintenance schedules and history. Its entities stay registered with the same entity IDs.
+- **Archive is reversible.** **Restore to active management** / **Palauta aktiivihallintaan** returns the same Asset with the same identity and history; nothing is recreated.
+
+**Archiving.** In the Asset hub, choose **Archive this device** / **Arkistoi tämä laite**. The confirmation first says what currently prevents archiving:
+
+- the Asset is installed: change its installation status to Not installed first
+- Runtime tracking is configured for it: delete that Runtime tracking configuration first; the accumulated Runtime total is kept
+- Runtime tracking is being set up or is still running for it
+
+Device Lifecycle never undeploys an Asset or removes Runtime tracking for you to make Archive possible. Runtime that has already stopped but is not saved yet is saved first. The final check is made again when you confirm, so a change made meanwhile is reported instead of being overridden.
+
+**While archived:**
+
+- the Asset no longer appears in current management lists, such as **Manage devices**, Replacement targets, and Quick Add choices
+- it is listed under **Archived devices** / **Arkistoidut laitteet**, whose view offers only its facts, **Restore to active management**, voiding an existing Replacement relationship, and its **Maintenance history** (correct or void recorded maintenance)
+- its Maintenance entities are unavailable, never shown as off or disabled
+- Repairs for its missing Home Assistant devices are not shown
+- if a Runtime tracking configuration still points to it, for example after restoring an older backup, that tracking is paused and reported in Repairs; nothing is deleted
+
+**Restoring.** Restore makes the same Asset active again. Runtime tracking stays off until you configure it again, Maintenance status is recalculated at once and may already be overdue, and Repairs for missing Home Assistant devices may appear again.
+
+## Maintenance
+
+Maintenance is managed per Asset: open the Asset hub and choose **Maintenance** / **Huolto**. The Maintenance view shows each schedule with its current status and offers **Add schedule**, **Open schedule**, **Record maintenance**, and **History**.
+
+### Schedules
+
+A schedule has a name and a **time interval** (days, months, or years), a **Runtime interval** in hours, or both. With both, maintenance is due when the first of them is reached. The intervals you give decide what the schedule follows; there is no separate type choice.
+
+- **Starting point.** When you create a schedule, you choose explicitly between **Not known** and **I know it**; nothing is preselected. Only with *I know it* are you asked for the date and/or the Runtime at which it was last done. Device Lifecycle never guesses a starting point from the Purchase, installation, today, or the current Runtime.
+- **The starting point locks** once maintenance is recorded for the schedule. The flow tells you before the first record is saved. Voiding that record later does not unlock it.
+- **Preparation reminder.** A schedule with a time interval can have a reminder a number of days before its due date, with an optional message.
+- **Intervals** lets you add a missing interval or remove one of two. Removing an interval whose starting-point value is locked needs a separate confirmation that names what is permanently removed; removing the time interval also removes the preparation reminder.
+- **Disable** keeps the schedule and its history but stops its due status (status *Disabled*). **Delete schedule** is offered only while no maintenance, voided records included, has ever been recorded for it.
+
+### Status and entities
+
+Each schedule adds these entities to the Asset's device:
+
+| Entity | State |
+|---|---|
+| Maintenance *schedule name* (`sensor`) | **OK**, **Unknown**, **Due**, **Overdue**, or **Disabled** |
+| Next maintenance *schedule name* (`sensor`, date) | the calendar due date, or unknown |
+| Maintenance preparation *schedule name* (`binary_sensor`, only with a reminder) | on during the reminder window, off otherwise, unknown when the due date is unknown |
+
+*Unknown* is a real answer, not an error: for example the starting point is not known, the Runtime history is contradictory, or a Runtime schedule has no known Runtime. A Runtime-only schedule has no calendar due date. Due status follows Home Assistant's local date and is recalculated at local midnight, after every Runtime save, and immediately after every change. There is no Runtime-remaining or forecast entity.
+
+### Recording and history
+
+- **Record maintenance** starts with no schedule selected. Choose the schedules this maintenance fulfils, or none for maintenance outside the schedules. **Mark done** in a schedule's view preselects only that schedule.
+- **Just now** saves today's date and the device's current Runtime: pending Runtime is saved first, and the values are shown before you confirm.
+- **Earlier date** records maintenance done before today. Its Runtime is entered by you or left unknown; the current Runtime is never copied into an earlier record.
+- If another record already exists on the same date for a schedule with a Runtime interval, a warning explains that the Runtime to count from becomes unknown for that date. You can still save.
+- **History** summarizes the latest records. **Correct a record** and **Void a record** first let you narrow the list by date and then reach every record of the Asset, not only the summarized ones. Correcting voids the original and saves a complete corrected record; the original stays in the history as *Corrected*. Voiding is final, and a voided record stays in the history. Records are never edited in place or deleted.
+
+For an archived Asset, only History with Correct and Void is available.
+
 ## Upgrade notes
+
+### Upgrading from 0.7.x to 0.8.0
+
+**Take a Home Assistant backup before upgrading.** No Home Assistant upgrade is required; 0.8.0 keeps the Home Assistant 2026.8.0 minimum.
+
+On its first successful start, 0.8.0 migrates the Device Lifecycle Store from 3.1 to 4.1:
+
+- before writing anything, it checks that the existing Store 3.1 file has exactly the expected shape; if not, setup fails and the file is left unchanged
+- every Asset gains `archived_at: null`, and the Maintenance collections start empty
+- nothing else changes: Assets, Asset IDs, Purchases, Lifecycle and Replacement history, Runtime totals, Asset Devices, entity IDs, and unique IDs stay as they were
+- the Store file is replaced atomically, and the written result is read back and verified
+
+**Downgrade.** There is no automatic downgrade from Store 4.1 to 3.1, and every 0.7.x release refuses a Store 4.1 file; Device Lifecycle then does not set up, and the file is left unchanged.
+
+- If 0.8.0 has not yet started successfully, the Store is still 3.1 and reinstalling 0.7.x is an ordinary code rollback.
+- Once 0.8.0 has written Store 4.1, returning to 0.7.x requires restoring the Home Assistant backup made before the upgrade, or restoring both the pre-upgrade `device_lifecycle.assets` Store file and the matching Entity Registry state. Hand-editing the Store file is not a supported downgrade.
+
+**Backups.** Device Lifecycle does not create an automatic `.bak` copy of its Store. A Home Assistant backup taken before the upgrade is the supported way back. The migration was validated on a real Test HA Store before release (see [0.8.0 Test HA release validation](#080-test-ha-release-validation--complete)); that does not make a backup unnecessary.
 
 ### Upgrading from 0.7.6 to 0.7.7
 
@@ -617,11 +722,13 @@ Runtime hours: 1284.53 h
 
 Existing Purchases remain editable, including Purchases with zero Assets. Removing a device from a Purchase removes the active Purchase projection while preserving the Asset identity and permanent Asset ID.
 
-Removing a Runtime tracking entry removes only that Runtime sensor and active configuration. The canonical Asset Runtime total remains available if tracking is recreated later. Other Purchases, Assets, Runtime configurations, and integrations are left untouched.
+Removing a Runtime tracking entry removes only that Runtime tracking configuration. The Runtime entity, its entity ID, its history, and the canonical Asset Runtime total remain, and adding tracking again for the same device reuses them. Other Purchases, Assets, Runtime configurations, and integrations are left untouched.
 
 Removing a Device Lifecycle Asset Device from Home Assistant does not delete or purge its canonical Asset. The projection can be recreated on reload.
 
-Device Lifecycle 0.7.7 does not provide a warranty editor, a searchable Asset list, a guided replacement wizard, preservation of values entered on a form when its location-clearing or Disposed confirmation is declined, Asset deletion/purge/merge, Runtime reset/manual editing, bulk Asset creation, automatic discovery or stale-device rematching, Purchase creation inside Quick Add, Maintenance, RMA cases, Documents, export/import, future replacement scheduling, automatic inheritance/transfer between replacement Assets, a lifecycle-history UI, or full replacement-history attributes. Lifecycle and replacement history remain canonical in Store 3.1 even though Home Assistant exposes only current state.
+Archiving an Asset deletes nothing; see [Archive and Restore](#archive-and-restore). Maintenance records are never deleted: they are corrected or voided, and both stay in the history.
+
+Device Lifecycle 0.8.0 does not provide a warranty editor, a searchable Asset list, a guided replacement wizard, preservation of values entered on a form when its location-clearing or Disposed confirmation is declined, permanent Asset deletion/purge/merge, Runtime reset/manual editing, bulk Asset creation, automatic discovery or stale-device rematching, Purchase creation inside Quick Add, Maintenance Runtime forecasts or a Runtime-remaining entity, Maintenance services, RMA cases, Documents, export/import, future replacement scheduling, automatic inheritance/transfer between replacement Assets, a lifecycle-history UI, or full replacement-history attributes. Lifecycle, Replacement, and Maintenance history remain canonical in Store 4.1 even though Home Assistant entities expose only current state.
 
 ## Documentation
 
@@ -629,6 +736,10 @@ Device Lifecycle 0.7.7 does not provide a warranty editor, a searchable Asset li
 - [Optional dashboard and import instructions](dashboard/README.md)
 - [Persistent Test HA lab](docs/test-ha-lab.md)
 - [Repairs v1 destructive Test HA validation](docs/repairs-v1-test-ha-validation.md)
+- [Asset Archive and Store 4.1 architecture](docs/asset-archive-store-v4.md) (frozen design, implemented in 0.8.0)
+- [Maintenance Store 4.x schema](docs/maintenance-store-v4-schema.md) (frozen design, implemented in 0.8.0)
+- [Store 4.1 implementation plan and gates](docs/store-4-1-implementation-plan.md)
+- [Maintenance implementation plan](docs/maintenance-implementation-plan.md) (historical plan of the Maintenance core)
 - [Release history](https://github.com/ristotoivanen/home-assistant-device-lifecycle/releases)
 - [Issue tracker](https://github.com/ristotoivanen/home-assistant-device-lifecycle/issues)
 
@@ -653,10 +764,17 @@ For reproducible problems, open a [GitHub issue](https://github.com/ristotoivane
 - **0.7.5 — Asset Management UX & safety**
 - **0.7.6 — Stale device references in Repairs**
 - **0.7.7 — Entity Registry placement hardening**
-- **0.8.x — Maintenance**
-- **0.9.x — Portability & Hardening**
+- **0.8.0 — Maintenance & Asset Archive**
+  - Maintenance schedules, history, and status/workflows
+  - reversible Asset archive and restore that keeps the Asset ID, internal identity, and history
+- **0.9.x — Portability, Data Safety & Hardening**
+  - export/import and recovery semantics
+  - controlled permanent Asset deletion (purge), with historical references for deleted Assets; Asset IDs are never reused
+  - compatibility and hardening work
 - **Future — Documents**
 - **1.0 — Stable**
+
+Asset Archive is implemented in 0.8.0; permanent deletion remains planned for 0.9.x. See [Asset archive and permanent deletion](ARCHITECTURE.md#asset-archive-and-permanent-deletion).
 
 ### Post-release validation
 
@@ -695,6 +813,18 @@ Not live-tested:
 - Finnish Repairs text rendering.
 
 ### Release validation
+
+#### 0.8.0 Test HA release validation — complete
+
+**Gate 5.4 PASS.** The release candidate `ff8652e` passed the Store 4.1 upgrade and smoke on the persistent Test HA lab (Home Assistant Core 2026.9.3, Home Assistant OS 18.3):
+
+- the real Store 3.1 (9 Assets, 4 Purchases) passed the read-only source-shape inspection and migrated to Store 4.1 with every Asset at `archived_at: null`, empty Maintenance collections, and all existing data unchanged apart from live Runtime accumulation
+- Archive was blocked for an installed Asset without undeploying it; another Asset was archived and restored with the same Asset ID and unchanged Lifecycle and Deployment
+- removing and re-adding Runtime tracking kept the same Runtime entity, unique ID, and total, with no duplicate entity
+- a Maintenance schedule went through create, Just now with the starting-point lock notice, correct, void, and disable, with the expected status and due date at each step, and everything persisted across a restart
+- no Repairs were pending at the end
+
+The full record is in [Persistent Test HA lab](docs/test-ha-lab.md#gate-54--store-41-upgrade-and-smoke).
 
 #### 0.7.7 Test HA release validation — complete
 

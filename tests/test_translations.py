@@ -19,6 +19,9 @@ from custom_components.device_lifecycle.const import (
     DEPLOYMENT_STATES,
     HA_RELATIONSHIP_ACTIONS,
 )
+from custom_components.device_lifecycle.runtime_conflicts import (
+    TRANSLATION_KEY as RUNTIME_CONFLICT_TRANSLATION_KEY,
+)
 from custom_components.device_lifecycle.stale_references import TRANSLATION_KEYS
 
 TRANSLATION_DIRECTORY = (
@@ -249,6 +252,22 @@ def test_every_emitted_options_error_has_translation(language: str) -> None:
     assert _emitted_options_errors() <= translated_errors
 
 
+# Maintenance menu rows that act or route and then show another step.
+MAINTENANCE_DISPATCH_ONLY = {
+    "maintenance_mark_done",
+    "maintenance_starting_point",
+    "maintenance_disable_schedule",
+    "maintenance_enable_schedule",
+    "maintenance_remove_calendar",
+    "maintenance_remove_runtime",
+    "maintenance_start_unknown",
+    "maintenance_start_back",
+    "maintenance_event_details",
+    "maintenance_correct_event",
+    "maintenance_void_event",
+}
+
+
 @pytest.mark.parametrize("language", LANGUAGES)
 def test_every_menu_action_and_step_has_translation(language: str) -> None:
     """Both menus and every dispatched action have localized labels and steps."""
@@ -257,6 +276,7 @@ def test_every_menu_action_and_step_has_translation(language: str) -> None:
     assert set(steps["init"]["menu_options"]) == {
         "quick_add",
         "manage_asset",
+        "archived_assets",
     }
     assert set(steps["quick_add"]["menu_options"]) == {
         "quick_add_from_ha",
@@ -267,8 +287,61 @@ def test_every_menu_action_and_step_has_translation(language: str) -> None:
         "asset_installation_menu",
         "asset_lifecycle_replacement_menu",
         "ha_relationship",
+        "maintenance_menu",
+        "confirm_archive_asset",
         "manage_asset",
     }
+    assert set(steps["archived_asset"]["menu_options"]) == {
+        "confirm_restore_asset",
+        "archived_void_replacement",
+        "maintenance_history",
+        "archived_assets",
+    }
+    # WP17: the Maintenance menus. An archived Asset reaches only History.
+    maintenance_menus = {
+        "maintenance_menu": {
+            "maintenance_add_schedule",
+            "maintenance_open_schedule",
+            "maintenance_record",
+            "maintenance_history",
+            "manage_asset_menu",
+        },
+        "maintenance_schedule": {
+            "maintenance_mark_done",
+            "maintenance_edit_schedule",
+            "maintenance_intervals",
+            "maintenance_starting_point",
+            "maintenance_disable_schedule",
+            "maintenance_enable_schedule",
+            "maintenance_delete_schedule",
+            "maintenance_menu",
+        },
+        "maintenance_intervals": {
+            "maintenance_add_calendar",
+            "maintenance_add_runtime",
+            "maintenance_remove_calendar",
+            "maintenance_remove_runtime",
+            "maintenance_schedule",
+        },
+        "maintenance_start_choice": {
+            "maintenance_start_unknown",
+            "maintenance_start_known",
+            "maintenance_start_back",
+        },
+        "maintenance_event_timing": {
+            "maintenance_event_just_now",
+            "maintenance_event_earlier",
+            "maintenance_event_details",
+        },
+        "maintenance_history": {
+            "maintenance_correct_event",
+            "maintenance_void_event",
+            "maintenance_menu",
+            "archived_asset",
+        },
+    }
+    for menu, options in maintenance_menus.items():
+        assert set(steps[menu]["menu_options"]) == options, menu
     section_menus = {
         "asset_details_warranty_menu": {
             "edit_asset_metadata",
@@ -304,8 +377,12 @@ def test_every_menu_action_and_step_has_translation(language: str) -> None:
         ),
         *steps["ha_relationship"]["menu_options"],
         *steps["asset_replacement"]["menu_options"],
+        *steps["archived_asset"]["menu_options"],
+        *(option for options in maintenance_menus.values() for option in options),
     }
     menu_actions.remove("quick_add_manual")
+    # Maintenance rows that act or route and then show another step.
+    menu_actions -= MAINTENANCE_DISPATCH_ONLY
     assert menu_actions <= set(steps)
 
     # Home Assistant renders a menu option's description from the step's own
@@ -353,13 +430,15 @@ def test_deployment_relationship_confirmation_and_results_exist(
 def test_options_ui_excludes_internal_and_out_of_scope_terminology(
     language: str,
 ) -> None:
-    """Ordinary UI does not expose internals, archive, or owned-device concepts."""
+    """Ordinary UI does not expose internals or owned-device concepts.
+
+    Since WP15 Archive and Restore are part of Asset management, so their
+    words are in scope; the internals behind them never are.
+    """
     options_text = " ".join(
         _string_values(_translation(language)["options"])
     ).casefold()
     forbidden = {
-        "archive",
-        "restore",
         "asset store",
         "asset uuid",
         "config subentry",
@@ -368,14 +447,88 @@ def test_options_ui_excludes_internal_and_out_of_scope_terminology(
         "provenance",
         "purchase_uuid",
         "storage schema",
+        "subentry",
         "uuid",
-        "arkistoi",
         "omistama laite",
-        "palauta arkistosta",
         "tallennusskeema",
     }
 
     assert not {term for term in forbidden if term in options_text}
+
+
+# The management Archive labels (WP15) and the dashboard's Lifecycle group.
+ARCHIVE_LABELS = {
+    "en": {
+        "action": "Archive this device",
+        "confirm": "Archive device",
+        "menu": "Archived devices",
+        "restore": "Restore to active management",
+        "restore_confirm": "Restore device",
+        "lifecycle_group": "Archived",
+    },
+    "fi": {
+        "action": "Arkistoi tämä laite",
+        "confirm": "Arkistoi laite",
+        "menu": "Arkistoidut laitteet",
+        "restore": "Palauta aktiivihallintaan",
+        "restore_confirm": "Palauta laite",
+        "lifecycle_group": "Arkistoidut",
+    },
+}
+
+
+@pytest.mark.parametrize("language", LANGUAGES)
+def test_archive_management_labels_stay_distinct_from_the_lifecycle_group(
+    language: str,
+) -> None:
+    """Archive is a management state, not the dashboard's Lifecycle group,
+    and it never reads as deletion."""
+    labels = ARCHIVE_LABELS[language]
+    steps = _translation(language)["options"]["step"]
+    assert steps["manage_asset_menu"]["menu_options"]["confirm_archive_asset"] == (
+        labels["action"]
+    )
+    assert steps["confirm_archive_asset"]["submit"] == labels["confirm"]
+    assert steps["confirm_archive_asset"]["title"] == labels["confirm"]
+    assert steps["init"]["menu_options"]["archived_assets"] == labels["menu"]
+    assert steps["archived_assets"]["title"] == labels["menu"]
+    assert steps["archived_asset"]["menu_options"]["confirm_restore_asset"] == (
+        labels["restore"]
+    )
+    assert steps["confirm_restore_asset"]["submit"] == labels["restore_confirm"]
+
+    management = {
+        labels["action"],
+        labels["confirm"],
+        labels["menu"],
+        labels["restore"],
+        labels["restore_confirm"],
+    }
+    assert labels["lifecycle_group"] not in management
+    dashboard = (
+        Path(__file__).parents[1]
+        / "dashboard"
+        / f"device-lifecycle-dashboard.{language}.yaml"
+    ).read_text(encoding="utf-8")
+    assert f"#### {labels['lifecycle_group']} ·" in dashboard
+    for label in management:
+        assert f"#### {label} ·" not in dashboard
+
+    archive_copy = " ".join(
+        _string_values(
+            {
+                key: steps[key]
+                for key in (
+                    "confirm_archive_asset",
+                    "archived_assets",
+                    "archived_asset",
+                )
+            }
+        )
+    ).casefold()
+    assert "delete device" not in archive_copy
+    assert "poista laite" not in archive_copy
+    assert "deleted" not in archive_copy or "not a deletion" in archive_copy
 
 
 def test_purchase_creation_copy_explicitly_allows_zero_devices() -> None:
@@ -458,6 +611,21 @@ def test_finalized_english_and_finnish_lifecycle_terms() -> None:
     }
 
 
+def test_runtime_conflict_issue_has_equivalent_translations() -> None:
+    """The Runtime conflict names the Asset only and deletes nothing."""
+    for language in LANGUAGES:
+        issue = _translation(language)["issues"][RUNTIME_CONFLICT_TRANSLATION_KEY]
+        assert set(issue) == {"title", "description"}
+        for text in issue.values():
+            assert set(re.findall(r"{(\w+)}", text)) == {"asset_id", "asset_name"}
+            assert "uuid" not in text.casefold()
+            assert "subentry" not in text.casefold()
+        assert (
+            "/config/integrations/integration/device_lifecycle"
+            in (issue["description"])
+        )
+
+
 def test_stale_reference_issues_have_equivalent_translations() -> None:
     """Both languages describe both issues with the same two placeholders.
 
@@ -467,7 +635,11 @@ def test_stale_reference_issues_have_equivalent_translations() -> None:
     english = _translation("en")["issues"]
     finnish = _translation("fi")["issues"]
 
-    assert set(english) == set(finnish) == set(TRANSLATION_KEYS.values())
+    assert (
+        set(english)
+        == set(finnish)
+        == set(TRANSLATION_KEYS.values()) | {RUNTIME_CONFLICT_TRANSLATION_KEY}
+    )
     for key in TRANSLATION_KEYS.values():
         for issue in (english[key], finnish[key]):
             assert set(issue) == {"title", "description"}

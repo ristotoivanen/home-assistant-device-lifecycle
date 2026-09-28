@@ -202,14 +202,20 @@ def _primary_device_id(asset: AssetData) -> str | None:
 def _runtime_subentries_by_asset(
     entry: ConfigEntry,
     assets_by_uuid: dict[str, AssetData],
+    quarantined: frozenset[str] = frozenset(),
 ) -> dict[str, str]:
-    """Resolve active Runtime ownership without using related relationships."""
+    """Resolve active Runtime ownership without using related relationships.
+
+    A quarantined Runtime subentry is no active tracking source and is left
+    out; the Asset's parent-owned Runtime entity is kept regardless.
+    """
     result: dict[str, str] = {}
     for subentry in sorted(
         (
             item
             for item in entry.subentries.values()
             if item.subentry_type == SUBENTRY_TYPE_RUNTIME
+            and item.subentry_id not in quarantined
         ),
         key=lambda item: item.subentry_id,
     ):
@@ -261,6 +267,7 @@ def build_exposure_migration_plan(
     device_registry: dr.DeviceRegistry,
     entity_registry: er.EntityRegistry,
     active_replacement_asset_uuids: set[str] | None = None,
+    quarantined_runtime_subentries: frozenset[str] = frozenset(),
 ) -> ExposureMigrationPlan:
     """Build and validate the complete 0.6 exposure plan without mutation."""
     assets_by_uuid = {asset["asset_uuid"]: asset for asset in assets}
@@ -293,7 +300,13 @@ def build_exposure_migration_plan(
             )
         )
 
-    runtime_subentries = _runtime_subentries_by_asset(entry, assets_by_uuid)
+    # Runtime subentries must still be consistent with the canonical Assets,
+    # but they no longer own the Runtime entity: since WP7 its Entity Registry
+    # identity is parent/Asset-owned so that removing Runtime tracking never
+    # deletes it. The subentry only decides whether a Runtime writer exists.
+    _runtime_subentries_by_asset(
+        entry, assets_by_uuid, quarantined_runtime_subentries
+    )
     unique_ids_by_kind: dict[ExposureEntityKind, dict[str, str]] = {
         "lifecycle": {
             lifecycle_unique_id(asset_uuid): asset_uuid for asset_uuid in assets_by_uuid
@@ -380,14 +393,6 @@ def build_exposure_migration_plan(
                 unique_id=unique_id,
             )
 
-            desired_subentry_id = (
-                runtime_subentries.get(asset_uuid) if kind == "runtime" else None
-            )
-            # A stale Runtime entity with no active Runtime subentry is left for
-            # the existing platform cleanup; there is no subentry to infer.
-            if kind == "runtime" and desired_subentry_id is None:
-                continue
-
             update_plans.append(
                 EntityRegistryUpdatePlan(
                     kind=kind,
@@ -397,7 +402,7 @@ def build_exposure_migration_plan(
                     original_device_id=registry_entry.device_id,
                     original_config_subentry_id=(registry_entry.config_subentry_id),
                     original_disabled_by=registry_entry.disabled_by,
-                    desired_config_subentry_id=desired_subentry_id,
+                    desired_config_subentry_id=None,
                     enable_integration_disabled=(
                         kind == "replacement"
                         and asset_uuid in active_replacement_asset_uuids
@@ -553,6 +558,7 @@ async def async_reconcile_exposure_registry(
             or manager.active_replacement_successor(asset["asset_uuid"])
             is not None
         },
+        quarantined_runtime_subentries=manager.runtime_quarantine,
     )
 
     created_device_ids: list[str] = []

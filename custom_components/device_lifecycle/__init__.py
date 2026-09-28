@@ -11,14 +11,18 @@ from homeassistant.core import HomeAssistant
 from .const import CONFIG_ENTRY_VERSION
 from .exposure import async_reconcile_exposure_registry
 from .migration import async_migrate_entity_registry
+from .runtime_conflicts import (
+    async_delete_runtime_conflict_issues,
+    async_sync_runtime_conflict_issues,
+)
 from .stale_references import (
     async_delete_stale_reference_issues,
     async_sync_stale_reference_issues,
     async_track_stale_reference_issues,
 )
-from .storage import AssetStoreManager
+from .storage import AssetStoreError, AssetStoreManager
 
-PLATFORMS = [Platform.SENSOR]
+PLATFORMS = [Platform.BINARY_SENSOR, Platform.SENSOR]
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -29,7 +33,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     manager = AssetStoreManager(hass)
     await manager.async_setup()
-    await manager.async_reconcile_entry(entry)
+
+    # A Runtime subentry that resolves to an archived Asset (a restored backup
+    # or an older configuration) is quarantined before anything can write
+    # Runtime: reconciliation, exposure, and the platform all skip it, and it
+    # is reported in Repairs. The rest of the entry loads normally.
+    quarantined = manager.apply_runtime_quarantine(entry)
+    await manager.async_reconcile_entry(entry, quarantined=quarantined)
 
     # 0.5.0 changes entity ownership from purchase/device-derived unique IDs to
     # immutable Asset UUIDs while preserving the existing entity_id and history.
@@ -45,6 +55,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # entry deletes them.
     async_sync_stale_reference_issues(hass, manager)
     entry.async_on_unload(async_track_stale_reference_issues(hass, manager))
+    # A Store commit (Archive and Restore among them) re-derives them at once,
+    # without a reload. A failing sync is logged by the manager and never
+    # affects the commit; the next sync or setup converges.
+    entry.async_on_unload(
+        manager.async_add_publish_listener(
+            lambda _changed: async_sync_stale_reference_issues(hass, manager)
+        )
+    )
+    async_sync_runtime_conflict_issues(hass, manager, quarantined)
 
     entry.runtime_data = manager
 
@@ -57,17 +76,51 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Unload Device Lifecycle."""
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    """Unload Device Lifecycle only after Runtime is durably checkpointed.
+
+    Entity removal cannot veto an unload that has already started, so every
+    Runtime writer is checkpointed and quiesced first. If that fails, nothing
+    is unloaded and the pending Runtime stays with its live writer.
+    """
+    manager: AssetStoreManager = entry.runtime_data
+    try:
+        await manager.async_prepare_runtime_unload()
+    except AssetStoreError as err:
+        _LOGGER.error(
+            "Device Lifecycle was not unloaded because Runtime could not be "
+            "durably checkpointed; pending Runtime is kept and the unload can "
+            "be retried: %s",
+            err,
+        )
+        return False
+
+    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if not unloaded:
+        _LOGGER.error(
+            "Device Lifecycle platforms failed to unload after Runtime was "
+            "checkpointed; Runtime tracking is stopped until the entry is "
+            "reloaded"
+        )
+    return unloaded
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Delete the stale-reference Repairs issues when the entry is removed."""
+    """Delete the owned Repairs issues when the entry is removed."""
     async_delete_stale_reference_issues(hass)
+    async_delete_runtime_conflict_issues(hass)
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload after a purchase or runtime subentry changes."""
+    """Reload after a purchase or runtime subentry changes.
+
+    A Runtime writer whose subentry is gone is retired first, so it stops
+    observing at once even if the reload's unload gate later refuses. A
+    retirement that cannot persist its Runtime yet keeps it pending and
+    never prevents the reload from being scheduled.
+    """
+    manager = getattr(entry, "runtime_data", None)
+    if isinstance(manager, AssetStoreManager):
+        await manager.async_retire_orphaned_runtime_writers(entry)
     hass.config_entries.async_schedule_reload(entry.entry_id)
 
 

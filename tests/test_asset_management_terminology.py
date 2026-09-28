@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 from homeassistant.core import HomeAssistant
@@ -328,7 +329,8 @@ def test_home_assistant_devices_are_always_named_in_full(
 
 @pytest.mark.parametrize("language", ["en", "fi"])
 def test_the_hub_rows_carry_the_frozen_names(language: str) -> None:
-    """The five hub rows are the frozen vocabulary, in order."""
+    """The hub rows are the frozen vocabulary, in order; Archive joined in
+    WP15 with its own management label."""
     rows = _translation(language)["options"]["step"]["manage_asset_menu"][
         "menu_options"
     ]
@@ -339,6 +341,8 @@ def test_the_hub_rows_carry_the_frozen_names(language: str) -> None:
             "asset_installation_menu": "Installation & location",
             "asset_lifecycle_replacement_menu": "Lifecycle & replacement",
             "ha_relationship": "Home Assistant devices",
+            "maintenance_menu": "Maintenance",
+            "confirm_archive_asset": "Archive this device",
             "manage_asset": "Choose another device",
         }
     else:
@@ -347,6 +351,8 @@ def test_the_hub_rows_carry_the_frozen_names(language: str) -> None:
             "asset_installation_menu": "Asennus ja sijainti",
             "asset_lifecycle_replacement_menu": "Elinkaari ja korvaaminen",
             "ha_relationship": "Home Assistant -laitteet",
+            "maintenance_menu": "Huolto",
+            "confirm_archive_asset": "Arkistoi tämä laite",
             "manage_asset": "Valitse toinen laite",
         }
 
@@ -513,6 +519,25 @@ def test_quick_add_shares_the_management_vocabulary(language: str) -> None:
         assert step_id in steps
 
 
+# WP16 adds the Maintenance entities; every released entity stays as it was.
+MAINTENANCE_ENTITY_KEYS = {
+    "sensor": {"maintenance_status", "maintenance_due_date"},
+    "binary_sensor": {"maintenance_preparation"},
+}
+
+
+def _released_entities(translation: dict[str, Any]) -> dict[str, Any]:
+    entities = {
+        platform: {
+            key: value
+            for key, value in keys.items()
+            if key not in MAINTENANCE_ENTITY_KEYS.get(platform, set())
+        }
+        for platform, keys in translation["entity"].items()
+    }
+    return {platform: keys for platform, keys in entities.items() if keys}
+
+
 def test_entity_translations_are_untouched_since_the_release_baseline() -> None:
     """Entity names and states belong to Home Assistant history, not to copy."""
     for language in ("en", "fi"):
@@ -530,7 +555,7 @@ def test_entity_translations_are_untouched_since_the_release_baseline() -> None:
         )
         current = _translation(language)
 
-        assert current["entity"] == baseline["entity"], language
+        assert _released_entities(current) == baseline["entity"], language
 
 
 def test_entity_translations_are_untouched_since_the_0_7_4_release() -> None:
@@ -549,4 +574,6 @@ def test_entity_translations_are_untouched_since_the_0_7_4_release() -> None:
             ).stdout
         )
 
-        assert _translation(language)["entity"] == released["entity"], language
+        assert _released_entities(_translation(language)) == released["entity"], (
+            language
+        )
