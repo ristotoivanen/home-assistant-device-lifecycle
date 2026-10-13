@@ -778,6 +778,10 @@ Asset Archive is implemented in 0.8.0; permanent deletion remains planned for 0.
 
 ### Post-release validation
 
+#### 0.8.0 post-release production validation — pass with findings
+
+**OVERALL RESULT: PASS WITH FINDINGS.** The 2026-10-13 production audit on Home Assistant 2026.10.1 found 0 Device Lifecycle defects and 4 notes. No 0.8.1 release is required based on this audit; **0.9 READINESS: READY**, with 0.8.0 accepted as the production baseline for 0.9 architecture work. The [full validation record](docs/0.8.0-post-release-validation.md) preserves the installed-file identity UNKNOWN and the production paths NOT TESTED; the earlier Test HA release validation remains separate evidence.
+
 #### 0.7.6 post-release validation — Repairs v1 in Test HA — complete
 
 **0.7.6 REPAIRS V1 DESTRUCTIVE TEST HA VALIDATION: COMPLETE.** Completed on 2026-09-26 in the dedicated persistent Test HA ("ha-ai-lab") with Home Assistant 2026.9.3 and the released Device Lifecycle 0.7.7 implementation; 0.7.7 did not change `stale_references.py`. This closes the 0.7.6 validation that had been deferred because production has no naturally occurring stale device reference and the scenario is destructive. It is a separate record: not a 0.7.7 release smoke and not a 0.8.x feature. The behavior checked is the released contract in [Home Assistant device relationships](#home-assistant-device-relationships) and [Stale external device references in Repairs](ARCHITECTURE.md#stale-external-device-references-in-repairs). Details are in [Repairs v1 destructive Test HA validation](docs/repairs-v1-test-ha-validation.md).
