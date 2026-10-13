@@ -397,8 +397,8 @@ def _device_snapshot(hass: HomeAssistant, entry: Any) -> tuple:
     return (
         device.id,
         device.identifiers,
-        device.config_entries,
-        device.config_entries_subentries,
+        device.config_entry_id,
+        device.config_subentry_id,
         device.name_by_user,
         device.name,
         device.disabled_by,
