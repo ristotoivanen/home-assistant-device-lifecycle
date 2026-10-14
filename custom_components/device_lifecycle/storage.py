@@ -353,13 +353,15 @@ class DeviceLifecycleStore(Store[AssetStoreData]):
         )
 
     async def _async_write_data(self, data: dict[str, Any]) -> None:
-        """Protect the actual executor Future, also if its save task is cancelled.
+        """Own write completion without HA cancelling its executor Future.
 
-        This Store always serializes in the executor. Keep HA's serializer and
-        atomic writer, but do not cancel their Future while a thread can write.
+        HA registers async_add_executor_job Futures for direct cancellation at
+        shutdown. A cancelled Future can finish while its thread still writes,
+        so shielding that Future cannot prove I/O has settled. Keep this Future
+        private to the drain, retaining HA's serializer and atomic writer.
         """
         await _async_wait_for_persistence(
-            self.hass.async_add_executor_job(self._write_data, data),
+            self.hass.loop.run_in_executor(None, self._write_data, data),
             "executor write",
         )
 
