@@ -777,7 +777,9 @@ def test_no_new_broad_exception_handler() -> None:
                     for name in names
                 ):
                     broad.append((path.name, function.name))
-                    if (path.name, function.name) == ("storage.py", "async_save"):
+                    if path.name == "storage.py" and function.name in {
+                        "async_save", "async_load_persisted_snapshot"
+                    }:
                         # This exception conversion must fail closed; it may
                         # neither swallow an error nor classify it as non-commit.
                         assert isinstance(node.type, ast.Name)
@@ -801,5 +803,6 @@ def test_no_new_broad_exception_handler() -> None:
         ("exposure.py", "_rollback_exposure_registry"),
         ("exposure.py", "async_reconcile_exposure_registry"),
         ("storage.py", "_publish"),
+        ("storage.py", "async_load_persisted_snapshot"),
         ("storage.py", "async_save"),
     ]
