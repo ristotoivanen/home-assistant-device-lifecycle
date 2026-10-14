@@ -324,13 +324,12 @@ async def test_definite_save_failure_publishes_nothing(
     assert _bytes(hass_storage[STORAGE_KEY]) == persisted
 
 
-async def test_mismatching_readback_is_a_definite_failure(
+async def test_mismatching_readback_becomes_definite_only_after_recovery(
     hass: HomeAssistant,
     hass_storage: dict[str, Any],
     asset_store_data: AssetStoreData,
 ) -> None:
-    """The write is known not to match; the resolver never turns it into
-    success."""
+    """A validated unchanged snapshot proves the request did not land."""
     manager = await _manager(hass, hass_storage, _base(asset_store_data))
     old_envelope = deepcopy(hass_storage[STORAGE_KEY])
     before = deepcopy(manager._data)
@@ -346,7 +345,7 @@ async def test_mismatching_readback_is_a_definite_failure(
         await manager.async_mutate_maintenance(_create())
 
     assert raised.value.ambiguous is False
-    load.assert_called_once()  # the readback in async_save only
+    assert load.call_count == 2  # failed verification, then validated recovery
     assert manager._data == before
     assert manager._persistence_uncertain is False
 

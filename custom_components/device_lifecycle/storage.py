@@ -330,13 +330,21 @@ class DeviceLifecycleStore(Store[AssetStoreData]):
 
     async def async_save(self, data: AssetStoreData) -> None:
         """Save and verify the exact Store envelope from the persisted file."""
-        await super().async_save(data)
+        try:
+            await super().async_save(data)
 
-        # Store defers writes once Home Assistant is stopping. Device Lifecycle
-        # must know whether a mutation reached disk before publishing it, so force
-        # a pending final write through the same Store write path now.
-        if self._data is not None:
-            await self._async_handle_write_data()
+            # Store defers writes once Home Assistant is stopping. Device Lifecycle
+            # must know whether a mutation reached disk before publishing it, so force
+            # a pending final write through the same Store write path now.
+            if self._data is not None:
+                await self._async_handle_write_data()
+        except Exception as err:
+            # An exception from the write path does not prove the atomic write
+            # failed: it may have reached disk before acknowledgement was lost.
+            raise AssetStorePersistenceError(
+                "Asset Core persistence write result is unknown",
+                ambiguous=True,
+            ) from err
 
         expected = {
             "version": self.version,
@@ -349,7 +357,7 @@ class DeviceLifecycleStore(Store[AssetStoreData]):
                 json_util.load_json,
                 self.path,
             )
-        except HomeAssistantError as err:
+        except Exception as err:
             raise AssetStorePersistenceError(
                 "Asset Core persistence could not be read back; the write "
                 "result is unknown",
@@ -359,7 +367,8 @@ class DeviceLifecycleStore(Store[AssetStoreData]):
         if persisted != expected:
             raise AssetStorePersistenceError(
                 "Asset Core persistence verification did not match the "
-                "requested snapshot"
+                "requested snapshot",
+                ambiguous=True,
             )
 
     async def async_load_persisted_snapshot(self) -> AssetStoreData | None:
@@ -1532,6 +1541,27 @@ class AssetStoreManager:
         self._persistence_uncertain = False
         self._publish(persisted)
 
+    async def _async_save_snapshot(self, data: AssetStoreData) -> None:
+        """Keep the mutation lock until a cancelled save has finished its I/O."""
+        save = asyncio.create_task(self._store.async_save(data))
+        try:
+            # wait() leaves the save task running if its waiter is cancelled.
+            await asyncio.wait({save})
+            save.result()
+        except asyncio.CancelledError:
+            # Cancelling an await cannot stop Home Assistant's executor write.
+            # Drain it under the caller's mutation lock, even if cancelled again,
+            # then require durable-state recovery before the next mutation.
+            self._persistence_uncertain = True
+            while not save.done():
+                try:
+                    await asyncio.wait({save})
+                except asyncio.CancelledError:
+                    continue
+            if not save.cancelled():
+                save.exception()
+            raise
+
     def async_add_publish_listener(
         self,
         listener: Callable[[frozenset[str]], None],
@@ -1613,7 +1643,7 @@ class AssetStoreManager:
             changed = data != self._data
             if changed:
                 try:
-                    await self._store.async_save(data)
+                    await self._async_save_snapshot(data)
                 except AssetStorePersistenceError as err:
                     self._persistence_uncertain = err.ambiguous
                     if not err.ambiguous or resolve_ambiguous is None:
@@ -3197,7 +3227,7 @@ class AssetStoreManager:
             result = self._quick_create_in_snapshot(data, request)
             _validate_store_data(data)
             try:
-                await self._store.async_save(data)
+                await self._async_save_snapshot(data)
             except AssetStorePersistenceError as err:
                 if not err.ambiguous:
                     raise
