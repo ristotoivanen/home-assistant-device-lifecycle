@@ -325,6 +325,18 @@ class AssetStorePersistenceError(AssetStoreError):
         self.ambiguous = ambiguous
 
 
+def _has_preserved_corrupt_store(path: str) -> bool:
+    """Recognize HA's durable corruption evidence before treating a Store as new."""
+    directory, filename = os.path.split(path)
+    try:
+        with os.scandir(directory) as entries:
+            return any(
+                entry.name.startswith(f"{filename}.corrupt.") for entry in entries
+            )
+    except FileNotFoundError:
+        return False
+
+
 class DeviceLifecycleStore(Store[AssetStoreData]):
     """Home Assistant Store with explicit migration and verified persistence."""
 
@@ -1597,7 +1609,15 @@ class AssetStoreManager:
         )
         loaded = await self._store.async_load()
         if loaded is None:
-            if storage_existed:
+            # HA renames invalid JSON to <key>.corrupt.<timestamp>. A later
+            # setup (also after restart) must not mistake that missing canonical
+            # path for a first install and restart permanent-ID allocation.
+            preserved_corruption = not storage_existed and (
+                await self.hass.async_add_executor_job(
+                    _has_preserved_corrupt_store, self._store.path
+                )
+            )
+            if storage_existed or preserved_corruption:
                 # Home Assistant's Store preserves a corrupt file under a renamed
                 # path and returns None. Starting from DL0001 again would violate
                 # the permanent-ID invariant, so fail setup and require recovery.
