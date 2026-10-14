@@ -2667,11 +2667,17 @@ class DeviceLifecycleOptionsFlow(OptionsFlow):
                     {CONF_DEVICE_ID: device_id},
                     errors={"base": validation_error},
                 )
-            if self._manager.asset_for_primary_device_id(device_id) is not None:
+            linked_asset = self._manager.asset_for_primary_device_id(device_id)
+            if (
+                linked_asset is not None
+                and linked_asset["asset_uuid"] != self._quick_asset_uuid
+            ):
                 return await self.async_step_quick_add_from_ha(
                     {CONF_DEVICE_ID: device_id},
                     errors={"base": "device_already_linked"},
                 )
+            # A cancelled confirmation may already be durable. The manager
+            # checks the complete command before replaying this flow's UUID.
         area_id = self._quick_details["ha_area_id"]
         if area_id is not None and (
             ar.async_get(self.hass).async_get_area(area_id) is None
