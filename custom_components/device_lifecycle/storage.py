@@ -1686,6 +1686,7 @@ class AssetStoreManager:
                 "Asset Core persistence disappeared during recovery"
             )
         _validate_store_data(persisted)
+        self._lifecycle.store_seen = True
         self._persistence_uncertain = False
         self._publish(persisted)
 
@@ -1700,15 +1701,24 @@ class AssetStoreManager:
             await _async_wait_for_persistence(
                 save, "save/verification", on_cancel=_mark_uncertain
             )
+        except AssetStorePersistenceError as err:
+            if err.ambiguous:
+                self._lifecycle.store_seen = True
+            raise
         except asyncio.CancelledError:
             # The helper has drained all I/O. A normal return from async_save
             # proves exact readback under the shared fence, so publish before
             # delivering the caller's cancellation. Other outcomes stay unknown.
+            self._lifecycle.store_seen = True
             self._persistence_uncertain = True
             if not save.cancelled() and save.exception() is None:
                 self._persistence_uncertain = False
                 self._publish(data)
             raise
+        else:
+            # Mutations can precede setup. Keep verified or uncertain outcomes
+            # in the shared fence so later setup cannot infer a fresh allocator.
+            self._lifecycle.store_seen = True
 
     def async_add_publish_listener(
         self,

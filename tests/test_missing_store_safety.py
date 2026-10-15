@@ -6,7 +6,7 @@ import asyncio
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from homeassistant.config_entries import ConfigEntryState
@@ -310,3 +310,92 @@ async def test_first_ambiguous_write_missing_file_stays_closed_until_backup(
     assert second.asset["asset_id"] == "DL0002"
     assert manager.asset(QUICK_UUID) == before["assets"][QUICK_UUID]
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.mark.parametrize("replacement", [False, True])
+@pytest.mark.parametrize("ambiguous", [False, True])
+async def test_pre_setup_write_evidence_survives_later_missing_store_setup(
+    hass: HomeAssistant, replacement: bool, ambiguous: bool
+) -> None:
+    """A manager can persist before setup; ownership absence cannot erase it."""
+    old = AssetStoreManager(hass)
+    assert old._lifecycle.owner is None
+    if ambiguous:
+        gate = lifecycle._Gate(hass)
+        load_json = json_util.load_json
+        reads = 0
+
+        def fail_first_readback(filename):
+            nonlocal reads
+            reads += 1
+            if reads == 1:
+                raise RuntimeError("injected lost pre-setup acknowledgement")
+            return load_json(filename)
+
+        with (
+            patch.object(ha_storage, "write_utf8_file_atomic", side_effect=gate.write),
+            patch.object(json_util, "load_json", side_effect=fail_first_readback),
+        ):
+            mutation = asyncio.create_task(old.async_quick_create_asset(_request()))
+            try:
+                await asyncio.wait_for(gate.started.wait(), 5)
+                mutation.cancel()
+                await lifecycle._blocked(mutation)
+            finally:
+                gate.release.set()
+                with pytest.raises(asyncio.CancelledError):
+                    await mutation
+        assert old._persistence_uncertain and old._data == _empty_store_data()
+    else:
+        acknowledged = await old.async_quick_create_asset(_request())
+        assert acknowledged.asset["asset_id"] == "DL0001"
+    assert old._lifecycle.owner is None
+    memory = deepcopy(old._data)
+    before = deepcopy(lifecycle._disk(old))
+    assert before["assets"][QUICK_UUID]["asset_id"] == "DL0001"
+    assert before["next_asset_number"] == 2
+    path = Path(old._store.path)
+    original = path.read_bytes()
+    path.unlink()
+
+    manager = AssetStoreManager(hass) if replacement else old
+    with pytest.raises(AssetStoreError, match="could not be loaded safely"):
+        await manager.async_setup()
+    assert not path.exists() and not manager._setup_ready
+    assert old._data == memory
+    await _reject(manager)
+    path.write_bytes(original)
+    await manager.async_setup()
+    assert manager._data == lifecycle._disk(manager) == before
+    second = await manager.async_quick_create_asset(_request(asset_uuid=SECOND_QUICK_UUID))
+    assert second.asset["asset_id"] == "DL0002"
+    assert manager.asset(QUICK_UUID) == before["assets"][QUICK_UUID]
+    assert manager._data["next_asset_number"] == 3
+    assert manager._data == lifecycle._disk(manager)
+    if replacement:
+        await _reject(old)
+
+
+async def test_proven_noncommit_before_setup_does_not_mark_a_store_as_existing(
+    hass: HomeAssistant,
+) -> None:
+    """A trusted explicit noncommit result provides the required positive proof."""
+    old = AssetStoreManager(hass)
+    with (
+        patch.object(
+            old._store,
+            "async_save",
+            new=AsyncMock(side_effect=AssetStorePersistenceError("proven noncommit")),
+        ),
+        pytest.raises(AssetStorePersistenceError) as error,
+    ):
+        await old.async_quick_create_asset(_request())
+    assert not error.value.ambiguous and not old._persistence_uncertain
+    assert old._data == _empty_store_data()
+    assert not Path(old._store.path).exists() and not old._lifecycle.store_seen
+    manager = AssetStoreManager(hass)
+    await manager.async_setup()
+    assert manager._data == _empty_store_data() and not manager._lifecycle.store_seen
+    result = await manager.async_quick_create_asset(_request())
+    assert result.asset["asset_id"] == "DL0001"
+    assert manager._data == lifecycle._disk(manager)
