@@ -58,6 +58,7 @@ from custom_components.device_lifecycle.stale_references import (
 )
 from custom_components.device_lifecycle.storage import (
     STORAGE_KEY,
+    AssetStoreError,
     AssetStoreManager,
     AssetStorePersistenceError,
     DeviceLifecycleStore,
@@ -723,14 +724,44 @@ async def test_snapshot_entity_edges(
 
 async def test_recovery_of_a_missing_file_with_an_empty_store_announces_nothing(
     hass: HomeAssistant,
+    asset_store_data: AssetStoreData,
 ) -> None:
+    """OD-BL03-01: absence cannot clear uncertainty or publish a first Asset."""
     manager = AssetStoreManager(hass)
     manager._store.async_save = AsyncMock()  # type: ignore[method-assign]
     calls = _recording(manager)
+    before = deepcopy(manager._data)
     manager._persistence_uncertain = True
-    with patch.object(
-        manager._store, "async_load_persisted_snapshot", AsyncMock(return_value=None)
+    with (
+        patch.object(
+            manager._store, "async_load_persisted_snapshot", AsyncMock(return_value=None)
+        ) as recover,
+        patch.object(storage, "uuid4") as allocate_uuid,
     ):
-        await manager.async_create_manual_asset(name="First")
+        for _ in range(2):
+            with pytest.raises(
+                AssetStoreError, match="Asset Core persistence disappeared during recovery"
+            ) as error:
+                await manager.async_create_manual_asset(name="Must remain blocked")
+            assert error.value.code == "asset_store_error"
+            assert manager._data == before
+            assert manager.asset_count == 0 and manager._data["next_asset_number"] == 1
+            assert manager._persistence_uncertain is True
+            assert calls == []
+        assert recover.await_count == 2
+        allocate_uuid.assert_not_called()
+    manager._store.async_save.assert_not_awaited()
+
+    # A complete authoritative snapshot is affirmative recovery evidence; None
+    # was not. This unit test supplies that contract directly, not a live restore.
+    restored = _data(asset_store_data)
+    with patch.object(
+        manager._store, "async_load_persisted_snapshot", AsyncMock(return_value=restored)
+    ):
+        created = await manager.async_create_manual_asset(name="Verified recovery")
     assert manager._persistence_uncertain is False
-    assert len(calls) == 1
+    assert created["asset_id"] == "DL0008"
+    assert manager.asset(ASSET_UUID) == restored["assets"][ASSET_UUID]
+    assert manager._data["next_asset_number"] == 9
+    assert calls == [frozenset(restored["assets"]), frozenset({created["asset_uuid"]})]
+    manager._store.async_save.assert_awaited_once()
