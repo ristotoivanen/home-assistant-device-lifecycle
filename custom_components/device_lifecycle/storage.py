@@ -166,6 +166,7 @@ class _StoreLifecycle:
 
     lock: asyncio.Lock
     owner: AssetStoreManager | None = None
+    store_seen: bool = False
 
 
 _STORE_LIFECYCLES: HassKey[dict[str, _StoreLifecycle]] = HassKey(
@@ -1593,6 +1594,14 @@ class AssetStoreManager:
                     "Asset Core manager is retired", code="entry_not_loaded"
                 )
             previous = self._lifecycle.owner
+            if previous is not None and (
+                previous._data != _empty_store_data() or previous._persistence_uncertain
+            ):
+                # A first-install mutation can create the file after setup's
+                # initial absence check. Remember its verified data, including
+                # when this same owner is defensively set up again. An ambiguous
+                # first save also cannot prove that this is a fresh installation.
+                self._lifecycle.store_seen = True
             if previous is not None and previous is not self:
                 previous._retired = True
             self._lifecycle.owner = self
@@ -1609,6 +1618,7 @@ class AssetStoreManager:
             os.path.exists,
             self._store.path,
         )
+        self._lifecycle.store_seen |= storage_existed
         loaded = await self._store.async_load()
         if loaded is None:
             # HA renames invalid JSON to <key>.corrupt.<timestamp>. A later
@@ -1619,7 +1629,8 @@ class AssetStoreManager:
                     _has_preserved_corrupt_store, self._store.path
                 )
             )
-            if storage_existed or preserved_corruption:
+            self._lifecycle.store_seen |= preserved_corruption
+            if self._lifecycle.store_seen:
                 # Home Assistant's Store preserves a corrupt file under a renamed
                 # path and returns None. Starting from DL0001 again would violate
                 # the permanent-ID invariant, so fail setup and require recovery.
@@ -1643,6 +1654,7 @@ class AssetStoreManager:
 
         data = cast(AssetStoreData, deepcopy(loaded))
         _validate_store_data(data)
+        self._lifecycle.store_seen = True
         self._data = data
         self._persistence_uncertain = False
         self._setup_ready = True
@@ -1670,12 +1682,9 @@ class AssetStoreManager:
             return
         persisted = await self._store.async_load_persisted_snapshot()
         if persisted is None:
-            if self._data != _empty_store_data():
-                raise AssetStoreError(
-                    "Asset Core persistence disappeared during recovery"
-                )
-            self._persistence_uncertain = False
-            return
+            raise AssetStoreError(
+                "Asset Core persistence disappeared during recovery"
+            )
         _validate_store_data(persisted)
         self._persistence_uncertain = False
         self._publish(persisted)
@@ -3373,13 +3382,10 @@ class AssetStoreManager:
                 self._persistence_uncertain = True
                 persisted = await self._store.async_load_persisted_snapshot()
                 if persisted is None:
-                    if self._data != _empty_store_data():
-                        raise AssetStorePersistenceError(
-                            "Asset Core persistence disappeared during recovery",
-                            ambiguous=True,
-                        )
-                    self._persistence_uncertain = False
-                    raise AssetStorePersistenceError("Quick Create was not persisted")
+                    raise AssetStorePersistenceError(
+                        "Asset Core persistence disappeared during recovery",
+                        ambiguous=True,
+                    ) from err
                 _validate_store_data(persisted)
                 self._persistence_uncertain = False
                 self._publish(persisted)
