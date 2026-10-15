@@ -889,7 +889,7 @@ def test_store_4_1_migration_is_reached_only_from_the_dispatch() -> None:
     "scope",
     [
         "DeviceLifecycleStore._async_migrate_func",
-        "AssetStoreManager.async_setup",
+        "AssetStoreManager._async_setup_locked",
         "AssetStoreManager._async_recover_uncertain_persistence",
         "AssetStoreManager._async_mutate_reporting",
         "AssetStoreManager.async_quick_create_asset",

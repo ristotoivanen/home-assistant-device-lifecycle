@@ -750,10 +750,12 @@ async def test_linking_asks_what_home_assistant_itself_will_accept(
 def test_no_new_broad_exception_handler() -> None:
     """A missing device is handled by name; nothing swallows every error.
 
-    The only broad handlers are the exposure rollback's, which must keep
+    Broad handlers are limited to exposure rollback, which must keep
     unwinding whatever failed and re-raise it, and the Store publish
     listener isolation, which runs only after a commit is canonical so that
     one failing refresh never affects the commit or the other listeners.
+    The persistence boundary also converts every write/readback exception
+    into an ambiguous failure, always re-raising with the original cause.
     """
     broad: list[tuple[str, str]] = []
     for path in sorted(INTEGRATION.glob("*.py")):
@@ -775,9 +777,32 @@ def test_no_new_broad_exception_handler() -> None:
                     for name in names
                 ):
                     broad.append((path.name, function.name))
+                    if path.name == "storage.py" and function.name in {
+                        "async_save", "async_load_persisted_snapshot"
+                    }:
+                        # This exception conversion must fail closed; it may
+                        # neither swallow an error nor classify it as non-commit.
+                        assert isinstance(node.type, ast.Name)
+                        assert node.type.id == "Exception"
+                        assert len(node.body) == 1
+                        raised = node.body[0]
+                        assert isinstance(raised, ast.Raise)
+                        assert isinstance(raised.exc, ast.Call)
+                        assert isinstance(raised.exc.func, ast.Name)
+                        assert raised.exc.func.id == "AssetStorePersistenceError"
+                        assert isinstance(raised.cause, ast.Name)
+                        assert raised.cause.id == node.name
+                        assert any(
+                            keyword.arg == "ambiguous"
+                            and isinstance(keyword.value, ast.Constant)
+                            and keyword.value.value is True
+                            for keyword in raised.exc.keywords
+                        )
 
     assert sorted(set(broad)) == [
         ("exposure.py", "_rollback_exposure_registry"),
         ("exposure.py", "async_reconcile_exposure_registry"),
         ("storage.py", "_publish"),
+        ("storage.py", "async_load_persisted_snapshot"),
+        ("storage.py", "async_save"),
     ]

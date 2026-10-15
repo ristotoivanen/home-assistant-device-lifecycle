@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from copy import deepcopy
 from decimal import Decimal
+from pathlib import Path
 from types import MethodType, SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
@@ -31,6 +32,7 @@ from pytest_homeassistant_custom_component.common import (
     mock_restore_cache_with_extra_data,
 )
 
+from custom_components.device_lifecycle import storage
 from custom_components.device_lifecycle.const import (
     CONF_ASSET_UUID,
     CONF_DEVICE_ID,
@@ -998,8 +1000,9 @@ async def test_store_1_1_and_1_2_migrate_to_detached_v2_1(
 
 async def test_real_store_writeerror_is_detected_and_not_published(
     hass: HomeAssistant,
+    asset_store_data: AssetStoreData,
 ) -> None:
-    """Catch HA Store's logged/swallowed atomic file WriteError by read-back."""
+    """OD-BL03-01: swallowed WriteError plus absence remains an unknown outcome."""
     manager = AssetStoreManager(hass)
     before = deepcopy(manager._data)
 
@@ -1016,16 +1019,47 @@ async def test_real_store_writeerror_is_detected_and_not_published(
             "homeassistant.helpers.storage.write_utf8_file_atomic",
             side_effect=_fail_write,
         ),
-        pytest.raises(AssetStorePersistenceError),
+        pytest.raises(AssetStorePersistenceError) as failed,
     ):
         await manager.async_create_manual_asset(name="Must not publish")
 
     assert manager._data == before
     assert manager.asset_count == 0
+    assert failed.value.code == "persistence_error" and failed.value.ambiguous
+    assert manager._persistence_uncertain is True
+    path = Path(manager._store.path)
+    assert not path.exists()
 
-    created = await manager.async_create_manual_asset(name="Verified retry")
-    assert created["asset_id"] == "DL0001"
-    assert manager.asset_count == 1
+    with (
+        patch.object(manager._store, "async_save", wraps=manager._store.async_save) as save,
+        patch.object(storage, "uuid4") as allocate_uuid,
+    ):
+        for _ in range(2):
+            with pytest.raises(
+                AssetStoreError, match="Asset Core persistence disappeared during recovery"
+            ) as error:
+                await manager.async_create_manual_asset(name="Must remain blocked")
+            assert error.value.code == "asset_store_error"
+            assert manager._data == before and manager.asset_count == 0
+            assert manager._data["next_asset_number"] == 1
+            assert manager._persistence_uncertain is True and not path.exists()
+        save.assert_not_awaited()
+        allocate_uuid.assert_not_called()
+
+    # Supply the complete canonical recovery contract independently of the
+    # swallowed error. Offline-prepared real backup files have separate coverage.
+    restored = deepcopy(asset_store_data)
+    restored["assets"][ASSET_UUID]["runtime"]["total_seconds"] = "1000"
+    with patch.object(
+        manager._store, "async_load_persisted_snapshot", AsyncMock(return_value=restored)
+    ):
+        created = await manager.async_create_manual_asset(name="Verified recovery")
+    assert created["asset_id"] == "DL0008"
+    assert manager.asset(ASSET_UUID) == restored["assets"][ASSET_UUID]
+    assert manager.asset_count == len(restored["assets"]) + 1
+    assert manager._data["next_asset_number"] == 9
+    assert manager._persistence_uncertain is False
+    assert storage.json_util.load_json(str(path))["data"] == manager._data
 
 
 async def test_v2_downgrade_is_rejected_without_rewrite(

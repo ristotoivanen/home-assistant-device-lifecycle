@@ -720,7 +720,9 @@ async def test_quick_create_known_persistence_failure_mutates_nothing(
     """Known failure preserves every canonical collection and the DL allocator."""
     manager = _manager(hass)
     before = deepcopy(manager._data)
-    manager._store.async_save = AsyncMock(side_effect=OSError("write failed"))
+    manager._store.async_save = AsyncMock(
+        side_effect=AssetStorePersistenceError("known not committed")
+    )
 
     with pytest.raises(AssetStorePersistenceError) as raised:
         await manager.async_quick_create_asset(_request())

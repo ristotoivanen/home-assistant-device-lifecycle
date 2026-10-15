@@ -157,6 +157,62 @@ RuntimeCheckpointCallback = Callable[[], Awaitable[Any]]
 
 _LOGGER = logging.getLogger(__name__)
 
+PERSISTENCE_WARNING_SECONDS = 10.0
+
+
+@dataclass(slots=True)
+class _StoreLifecycle:
+    """One persistence fence per HA instance and Store key, across reloads."""
+
+    lock: asyncio.Lock
+    owner: AssetStoreManager | None = None
+    store_seen: bool = False
+
+
+_STORE_LIFECYCLES: HassKey[dict[str, _StoreLifecycle]] = HassKey(
+    f"{DOMAIN}_store_lifecycles"
+)
+
+
+async def _async_wait_for_persistence(
+    pending: asyncio.Future[Any],
+    operation: str,
+    *,
+    on_cancel: Callable[[], None] | None = None,
+) -> Any:
+    """Drain owned I/O despite repeated cancellation, with one stall warning.
+
+    wait() never cancels its argument. In particular an executor Future must
+    remain live until its thread finishes: cancelling that Future would report
+    completion while the thread could still overwrite the Store.
+    """
+    warning = asyncio.get_running_loop().call_later(
+        PERSISTENCE_WARNING_SECONDS,
+        _LOGGER.warning,
+        "Device Lifecycle Store %s is still pending after %.0f seconds; "
+        "persistence remains fenced until I/O settles, delaying mutations "
+        "and reload",
+        operation,
+        PERSISTENCE_WARNING_SECONDS,
+    )
+    cancellation: asyncio.CancelledError | None = None
+    try:
+        while not pending.done():
+            try:
+                await asyncio.wait({pending})
+            except asyncio.CancelledError as err:
+                cancellation = err
+                if on_cancel is not None:
+                    on_cancel()
+        if cancellation is not None:
+            if not pending.cancelled():
+                pending.exception()
+            raise cancellation
+        return pending.result()
+    finally:
+        warning.cancel()
+
+
 # Runtime binding reservations, per ConfigEntry ID and Asset UUID: one token
 # per Runtime subentry flow that is about to create a subentry for the Asset.
 # In memory only and kept in hass.data, not on a manager, so a reload between
@@ -270,6 +326,18 @@ class AssetStorePersistenceError(AssetStoreError):
         self.ambiguous = ambiguous
 
 
+def _has_preserved_corrupt_store(path: str) -> bool:
+    """Recognize HA's durable corruption evidence before treating a Store as new."""
+    directory, filename = os.path.split(path)
+    try:
+        with os.scandir(directory) as entries:
+            return any(
+                entry.name.startswith(f"{filename}.corrupt.") for entry in entries
+            )
+    except FileNotFoundError:
+        return False
+
+
 class DeviceLifecycleStore(Store[AssetStoreData]):
     """Home Assistant Store with explicit migration and verified persistence."""
 
@@ -283,6 +351,19 @@ class DeviceLifecycleStore(Store[AssetStoreData]):
             atomic_writes=True,
             minor_version=STORAGE_MINOR_VERSION,
             serialize_in_event_loop=False,
+        )
+
+    async def _async_write_data(self, data: dict[str, Any]) -> None:
+        """Own write completion without HA cancelling its executor Future.
+
+        HA registers async_add_executor_job Futures for direct cancellation at
+        shutdown. A cancelled Future can finish while its thread still writes,
+        so shielding that Future cannot prove I/O has settled. Keep this Future
+        private to the drain, retaining HA's serializer and atomic writer.
+        """
+        await _async_wait_for_persistence(
+            self.hass.loop.run_in_executor(None, self._write_data, data),
+            "executor write",
         )
 
     async def _async_migrate_func(
@@ -330,13 +411,21 @@ class DeviceLifecycleStore(Store[AssetStoreData]):
 
     async def async_save(self, data: AssetStoreData) -> None:
         """Save and verify the exact Store envelope from the persisted file."""
-        await super().async_save(data)
+        try:
+            await super().async_save(data)
 
-        # Store defers writes once Home Assistant is stopping. Device Lifecycle
-        # must know whether a mutation reached disk before publishing it, so force
-        # a pending final write through the same Store write path now.
-        if self._data is not None:
-            await self._async_handle_write_data()
+            # Store defers writes once Home Assistant is stopping. Device Lifecycle
+            # must know whether a mutation reached disk before publishing it, so force
+            # a pending final write through the same Store write path now.
+            if self._data is not None:
+                await self._async_handle_write_data()
+        except Exception as err:
+            # An exception from the write path does not prove the atomic write
+            # failed: it may have reached disk before acknowledgement was lost.
+            raise AssetStorePersistenceError(
+                "Asset Core persistence write result is unknown",
+                ambiguous=True,
+            ) from err
 
         expected = {
             "version": self.version,
@@ -349,7 +438,7 @@ class DeviceLifecycleStore(Store[AssetStoreData]):
                 json_util.load_json,
                 self.path,
             )
-        except HomeAssistantError as err:
+        except Exception as err:
             raise AssetStorePersistenceError(
                 "Asset Core persistence could not be read back; the write "
                 "result is unknown",
@@ -359,7 +448,8 @@ class DeviceLifecycleStore(Store[AssetStoreData]):
         if persisted != expected:
             raise AssetStorePersistenceError(
                 "Asset Core persistence verification did not match the "
-                "requested snapshot"
+                "requested snapshot",
+                ambiguous=True,
             )
 
     async def async_load_persisted_snapshot(self) -> AssetStoreData | None:
@@ -369,17 +459,24 @@ class DeviceLifecycleStore(Store[AssetStoreData]):
                 json_util.load_json,
                 self.path,
             )
-        except HomeAssistantError as err:
+        except Exception as err:
             raise AssetStorePersistenceError(
                 "Asset Core persistence could not be read for recovery",
                 ambiguous=True,
             ) from err
 
-        if persisted == {} and not await self.hass.async_add_executor_job(
-            os.path.exists,
-            self.path,
-        ):
-            return None
+        if persisted == {}:
+            try:
+                exists = await self.hass.async_add_executor_job(
+                    os.path.exists, self.path
+                )
+            except Exception as err:
+                raise AssetStorePersistenceError(
+                    "Asset Core persistence existence could not be checked for recovery",
+                    ambiguous=True,
+                ) from err
+            if not exists:
+                return None
 
         if not isinstance(persisted, dict):
             raise AssetStoreError("Asset Core Store envelope is invalid")
@@ -1467,7 +1564,13 @@ class AssetStoreManager:
         self.hass = hass
         self._store = DeviceLifecycleStore(hass)
         self._data: AssetStoreData = _empty_store_data()
-        self._mutation_lock = asyncio.Lock()
+        lifecycles = hass.data.setdefault(_STORE_LIFECYCLES, {})
+        self._lifecycle = lifecycles.setdefault(
+            STORAGE_KEY, _StoreLifecycle(asyncio.Lock())
+        )
+        self._mutation_lock = self._lifecycle.lock
+        self._retired = False
+        self._setup_ready = True
         self._persistence_uncertain = False
         # In-memory only, for this manager's lifetime: the active Runtime
         # writer per Asset, and Assets whose writer was removed while Runtime
@@ -1485,13 +1588,49 @@ class AssetStoreManager:
 
     async def async_setup(self) -> None:
         """Load and validate persistent Asset Core data."""
+        async with self._mutation_lock:
+            if self._retired:
+                raise AssetStoreError(
+                    "Asset Core manager is retired", code="entry_not_loaded"
+                )
+            previous = self._lifecycle.owner
+            if previous is not None and (
+                previous._data != _empty_store_data() or previous._persistence_uncertain
+            ):
+                # A first-install mutation can create the file after setup's
+                # initial absence check. Remember its verified data, including
+                # when this same owner is defensively set up again. An ambiguous
+                # first save also cannot prove that this is a fresh installation.
+                self._lifecycle.store_seen = True
+            if previous is not None and previous is not self:
+                previous._retired = True
+            self._lifecycle.owner = self
+            self._setup_ready = False
+            # HA async_load can itself migrate and save. Drain the whole load,
+            # including those writes, before cancellation releases this fence.
+            await _async_wait_for_persistence(
+                asyncio.create_task(self._async_setup_locked()), "setup/migration"
+            )
+
+    async def _async_setup_locked(self) -> None:
+        """Load, migrate and validate while this manager owns the Store fence."""
         storage_existed = await self.hass.async_add_executor_job(
             os.path.exists,
             self._store.path,
         )
+        self._lifecycle.store_seen |= storage_existed
         loaded = await self._store.async_load()
         if loaded is None:
-            if storage_existed:
+            # HA renames invalid JSON to <key>.corrupt.<timestamp>. A later
+            # setup (also after restart) must not mistake that missing canonical
+            # path for a first install and restart permanent-ID allocation.
+            preserved_corruption = not storage_existed and (
+                await self.hass.async_add_executor_job(
+                    _has_preserved_corrupt_store, self._store.path
+                )
+            )
+            self._lifecycle.store_seen |= preserved_corruption
+            if self._lifecycle.store_seen:
                 # Home Assistant's Store preserves a corrupt file under a renamed
                 # path and returns None. Starting from DL0001 again would violate
                 # the permanent-ID invariant, so fail setup and require recovery.
@@ -1500,6 +1639,7 @@ class AssetStoreManager:
                     "restore the preserved storage file from backup"
                 )
             self._data = _empty_store_data()
+            self._setup_ready = True
             return
 
         if not isinstance(loaded, dict):
@@ -1514,23 +1654,71 @@ class AssetStoreManager:
 
         data = cast(AssetStoreData, deepcopy(loaded))
         _validate_store_data(data)
+        self._lifecycle.store_seen = True
         self._data = data
+        self._persistence_uncertain = False
+        self._setup_ready = True
+
+    async def async_retire(self) -> None:
+        """Drain all writes and reject future mutations after successful unload.
+
+        Runtime preparation and platform removal must finish before this call;
+        neither runs while this lock is held. A failed unload never retires.
+        """
+        async with self._mutation_lock:
+            self._retired = True
 
     async def _async_recover_uncertain_persistence(self) -> None:
         """Recover the direct persisted snapshot before another mutation."""
+        if self._retired or not self._setup_ready:
+            raise AssetStoreError(
+                "Asset Core manager is not active", code="entry_not_loaded"
+            )
+        if self._lifecycle.owner is not None and self._lifecycle.owner is not self:
+            raise AssetStoreError(
+                "Asset Core manager was replaced", code="entry_not_loaded"
+            )
         if not self._persistence_uncertain:
             return
         persisted = await self._store.async_load_persisted_snapshot()
         if persisted is None:
-            if self._data != _empty_store_data():
-                raise AssetStoreError(
-                    "Asset Core persistence disappeared during recovery"
-                )
-            self._persistence_uncertain = False
-            return
+            raise AssetStoreError(
+                "Asset Core persistence disappeared during recovery"
+            )
         _validate_store_data(persisted)
+        self._lifecycle.store_seen = True
         self._persistence_uncertain = False
         self._publish(persisted)
+
+    async def _async_save_snapshot(self, data: AssetStoreData) -> None:
+        """Keep the mutation lock until a cancelled save has finished its I/O."""
+        save = asyncio.create_task(self._store.async_save(data))
+
+        def _mark_uncertain() -> None:
+            self._persistence_uncertain = True
+
+        try:
+            await _async_wait_for_persistence(
+                save, "save/verification", on_cancel=_mark_uncertain
+            )
+        except AssetStorePersistenceError as err:
+            if err.ambiguous:
+                self._lifecycle.store_seen = True
+            raise
+        except asyncio.CancelledError:
+            # The helper has drained all I/O. A normal return from async_save
+            # proves exact readback under the shared fence, so publish before
+            # delivering the caller's cancellation. Other outcomes stay unknown.
+            self._lifecycle.store_seen = True
+            self._persistence_uncertain = True
+            if not save.cancelled() and save.exception() is None:
+                self._persistence_uncertain = False
+                self._publish(data)
+            raise
+        else:
+            # Mutations can precede setup. Keep verified or uncertain outcomes
+            # in the shared fence so later setup cannot infer a fresh allocator.
+            self._lifecycle.store_seen = True
 
     def async_add_publish_listener(
         self,
@@ -1613,7 +1801,7 @@ class AssetStoreManager:
             changed = data != self._data
             if changed:
                 try:
-                    await self._store.async_save(data)
+                    await self._async_save_snapshot(data)
                 except AssetStorePersistenceError as err:
                     self._persistence_uncertain = err.ambiguous
                     if not err.ambiguous or resolve_ambiguous is None:
@@ -3197,26 +3385,18 @@ class AssetStoreManager:
             result = self._quick_create_in_snapshot(data, request)
             _validate_store_data(data)
             try:
-                await self._store.async_save(data)
+                await self._async_save_snapshot(data)
             except AssetStorePersistenceError as err:
                 if not err.ambiguous:
                     raise
                 self._persistence_uncertain = True
-                try:
-                    persisted = await self._store.async_load_persisted_snapshot()
-                    if persisted is None:
-                        if self._data != _empty_store_data():
-                            raise AssetStorePersistenceError(
-                                "Asset Core persistence disappeared during recovery",
-                                ambiguous=True,
-                            )
-                        self._persistence_uncertain = False
-                        raise AssetStorePersistenceError(
-                            "Quick Create was not persisted"
-                        )
-                    _validate_store_data(persisted)
-                except AssetStorePersistenceError:
-                    raise
+                persisted = await self._store.async_load_persisted_snapshot()
+                if persisted is None:
+                    raise AssetStorePersistenceError(
+                        "Asset Core persistence disappeared during recovery",
+                        ambiguous=True,
+                    ) from err
+                _validate_store_data(persisted)
                 self._persistence_uncertain = False
                 self._publish(persisted)
                 if request.asset_uuid not in persisted["assets"]:
@@ -3224,11 +3404,6 @@ class AssetStoreManager:
                         "Quick Create was not persisted"
                     )
                 return deepcopy(self._quick_replay_result(persisted, request))
-            except OSError as err:
-                raise AssetStorePersistenceError(
-                    "Quick Create could not be persisted"
-                ) from err
-
             self._publish(data)
             return deepcopy(result)
 

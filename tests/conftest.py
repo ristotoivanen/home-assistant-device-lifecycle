@@ -13,6 +13,7 @@ import pytest
 from homeassistant.config_entries import ConfigEntries, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers.storage import Store
 
 from custom_components.device_lifecycle.const import (
     CONF_ASSET_UUID,
@@ -45,7 +46,10 @@ from custom_components.device_lifecycle.const import (
     WARRANTY_TWO_YEARS,
 )
 from custom_components.device_lifecycle.models import AssetStoreData
-from custom_components.device_lifecycle.storage import AssetStoreManager
+from custom_components.device_lifecycle.storage import (
+    AssetStoreManager,
+    DeviceLifecycleStore,
+)
 
 pytest_plugins = "pytest_homeassistant_custom_component"
 
@@ -90,6 +94,22 @@ def loaded_entry(hass: HomeAssistant, **fields: Any) -> SimpleNamespace:
 @pytest.fixture(autouse=True)
 def _enable_custom_integrations(enable_custom_integrations: None) -> None:
     """Enable loading integrations from custom_components."""
+
+
+@pytest.fixture(autouse=True)
+def _mock_asset_store_writer(hass_storage: dict[str, Any]) -> Iterator[None]:
+    """Keep the HA plugin's in-memory Store transport for existing unit tests.
+
+    Device Lifecycle now owns the executor Future in its writer override.
+    HA's plugin patches only the base Store method, so explicitly route the
+    unit-test override to that mocked transport. Real-file persistence tests
+    restore the production writer in their own, later fixture or on the Store
+    instance; their executor barriers continue to exercise actual file I/O.
+    """
+    with patch.object(
+        DeviceLifecycleStore, "_async_write_data", Store._async_write_data
+    ):
+        yield
 
 
 @pytest.fixture(autouse=True)

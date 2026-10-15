@@ -350,7 +350,7 @@ async def test_mismatching_readback_publishes_nothing_and_retry_succeeds(
         pytest.raises(AssetStorePersistenceError) as raised,
     ):
         await manager.async_setup()
-    assert raised.value.ambiguous is False
+    assert raised.value.ambiguous is True
     assert manager._data == _empty_store_data()
     if not write_landed:
         hass_storage[STORAGE_KEY] = deepcopy(original)

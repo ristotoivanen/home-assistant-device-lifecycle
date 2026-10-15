@@ -95,7 +95,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         return False
 
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    if not unloaded:
+    if unloaded:
+        # Runtime and entity callbacks can commit during preparation/removal.
+        # Only now drain the shared Store fence and retire this manager, before
+        # HA can report successful unload and construct its replacement.
+        await manager.async_retire()
+    else:
         _LOGGER.error(
             "Device Lifecycle platforms failed to unload after Runtime was "
             "checkpointed; Runtime tracking is stopped until the entry is "
