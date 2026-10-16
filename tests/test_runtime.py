@@ -67,7 +67,7 @@ from custom_components.device_lifecycle.storage import (
     _validate_store_data,
 )
 
-from .conftest import ASSET_UUID, DEVICE_ID, SOURCE_ENTITY_ID
+from .conftest import ASSET_UUID, DEVICE_ID, SOURCE_ENTITY_ID, authorized_runtime_source
 
 _ORIGINAL_ASYNC_WRITE_DATA = Store._async_write_data
 
@@ -223,6 +223,7 @@ def _sensor(
         CONF_RUNTIME_MODE: mode,
         CONF_SOURCE_ENTITY_ID: SOURCE_ENTITY_ID,
         CONF_RUNTIME_DATA_VERSION: RUNTIME_DATA_VERSION,
+        "source_identity": authorized_runtime_source(hass),
     }
     if mode == RUNTIME_MODE_POWER:
         data[CONF_POWER_THRESHOLD] = threshold
@@ -818,8 +819,8 @@ async def test_restart_downtime_not_counted_and_active_starts_new_interval(
     asset_store_data["assets"][ASSET_UUID]["runtime"]["total_seconds"] = "3600"
     manager = _manager(hass, asset_store_data)
     clock = _Clock(10_000)
-    hass.states.async_set(SOURCE_ENTITY_ID, STATE_ON)
     sensor = _sensor(hass, manager, clock)
+    hass.states.async_set(SOURCE_ENTITY_ID, STATE_ON)
 
     with (
         patch(

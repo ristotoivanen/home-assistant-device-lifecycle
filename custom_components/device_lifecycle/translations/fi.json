@@ -105,7 +105,7 @@
         },
         "runtime_source": {
           "title": "Määritä käyntiajan lähde",
-          "description": "Lähdelista suodatetaan valitun seurantatavan mukaan. Tehoseurannassa näytetään vain varsinaiset tehosensorit ja päällä-tilassa järkevät on/off-entiteetit.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
+          "description": "Valitse entiteettirekisteriin kuuluva lähde. Seurannan lisääminen hyväksyy lähteen nykyisen rekisteri-identiteetin. Aiempi käyntiaika säilyy. Ilman entiteettirekisterimerkintää lähdettä ei voida hyväksyä pysyvästi.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
           "submit": "Lisää käyttötuntiseuranta",
           "data": {
             "source_entity_id": "Lähde-entiteetti",
@@ -131,17 +131,19 @@
         },
         "reconfigure_source": {
           "title": "Määritä käyntiajan lähde",
-          "description": "Lähdelista suodatetaan valitun seurantatavan mukaan. Tehoraja ja hystereesi näytetään vain tehotilassa.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
+          "description": "Valitse rekisteröity lähde. Vahvista nykyinen identiteetti, kun lähde on vanha, vaihdettu, nimetty uudelleen tai seuranta on keskeytetty. Aiempi käyntiaika säilyy ja seuranta alkaa uudesta havaintorajasta. Epävarmaa kulunutta aikaa ei lasketa. Puuttuvan lähteen asetuksia voi muokata, mutta seuranta pysyy keskeytettynä.\n\nSulje ikkuna tallentamatta painamalla vasemman yläkulman X-painiketta.",
           "submit": "Tallenna muutokset",
           "data": {
             "source_entity_id": "Lähde-entiteetti",
             "power_threshold": "Tehoraja",
-            "power_hysteresis": "Hystereesi"
+            "power_hysteresis": "Hystereesi",
+            "confirm_source": "Vahvista valitun lähteen identiteetti"
           },
           "data_description": {
             "source_entity_id": "Valitse vain kyseiseen seurantatapaan sopiva lähde. Device Lifecyclen omat entiteetit on poistettu listasta.",
             "power_threshold": "Käynti alkaa, kun lähteen teho watteihin muunnettuna ylittää tämän rajan.",
-            "power_hysteresis": "Esim. raja 10 W ja hystereesi 2 W: käynti pysähtyy vasta alle 8 W. Vanhoille seurannoille oletus on 0 W, joten päivitys ei muuta niiden käyttäytymistä itsestään."
+            "power_hysteresis": "Esim. raja 10 W ja hystereesi 2 W: käynti pysähtyy vasta alle 8 W. Vanhoille seurannoille oletus on 0 W, joten päivitys ei muuta niiden käyttäytymistä itsestään.",
+            "confirm_source": "Hyväksyn valitun rekisteröidyn lähteen tulevan käyntiajan mittaukseen. Aiempi käyntiaika säilyy."
           }
         }
       },
@@ -158,7 +160,11 @@
         "power_hysteresis_too_large": "Hystereesi ei voi olla tehorajaa suurempi.",
         "invalid_runtime_mode": "Käyttötuntiseurannan tapa ei ole kelvollinen.",
         "service_device_not_allowed": "Valittu kohde on Home Assistant -palvelu eikä seurattava fyysinen laite.",
-        "runtime_asset_archived": "Laite on arkistoitu, joten sille ei voi määrittää käyttötuntiseurantaa."
+        "runtime_asset_archived": "Laite on arkistoitu, joten sille ei voi määrittää käyttötuntiseurantaa.",
+        "source_registry_required": "Valitse Home Assistantin entiteettirekisteriin kuuluva lähde. Pelkkää tilatietoa ei voida hyväksyä pysyvästi.",
+        "source_confirmation_required": "Vahvista valitun lähteen identiteetti, jotta käyntiajan seuranta voi jatkua. Aiempi käyntiaika säilyy.",
+        "runtime_pending_retry": "Käyntiaikaa ei voitu tallentaa. Korjaa tallennusvirhe ja yritä lomaketta uudelleen. Lähteen hyväksyntä ja kelvollinen odottava käyntiaika säilyvät.",
+        "source_changed_during_save": "Valitun lähteen identiteetti muuttui tallennuksen aikana. Tarkista nykyinen lähde ja hyväksy se lähettämällä lomake uudelleen."
       },
       "abort": {
         "reconfigure_successful": "Käyttötuntiseuranta päivitettiin.",

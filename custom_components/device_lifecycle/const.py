@@ -86,6 +86,8 @@ CONF_UNDEPLOY_PREDECESSOR = "undeploy_predecessor"
 CONF_RUNTIME_MODE = "runtime_mode"
 CONF_RUNTIME_DATA_VERSION = "runtime_data_version"
 CONF_SOURCE_ENTITY_ID = "source_entity_id"
+CONF_SOURCE_IDENTITY = "source_identity"
+CONF_CONFIRM_SOURCE = "confirm_source"
 CONF_POWER_THRESHOLD = "power_threshold"
 CONF_POWER_HYSTERESIS = "power_hysteresis"
 
