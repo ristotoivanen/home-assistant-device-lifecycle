@@ -44,7 +44,12 @@ from custom_components.device_lifecycle.storage import (
     RuntimeArchiveEligibility,
 )
 
-from .conftest import ASSET_UUID, capture_reloads, loaded_entry
+from .conftest import (
+    ASSET_UUID,
+    authorized_runtime_source,
+    capture_reloads,
+    loaded_entry,
+)
 from .test_archive_manager import _data, _entry, _runtime_subentry
 from .test_exposure_options_reload import _verified_store_readback
 from .test_runtime import _Clock, _manager, _sensor
@@ -268,6 +273,7 @@ async def _installation(
     asset["runtime"]["total_seconds"] = "1000"
     if archived:
         asset["archived_at"] = "2026-09-26T12:34:56.123456+00:00"
+    authorized_runtime_source(hass, SWITCH)
     hass.states.async_set(SWITCH, "off")
     subentries = []
     if runtime is not None:
@@ -575,6 +581,7 @@ async def test_a_refused_reservation_never_creates_the_subentry(
     code: str,
     expected: tuple[str, str],
 ) -> None:
+    authorized_runtime_source(hass, SWITCH)
     manager = _manager(hass, _data(asset_store_data))
     entry = loaded_entry(hass, runtime_data=manager)
     flow = RuntimeSubentryFlow()

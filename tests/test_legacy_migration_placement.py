@@ -249,14 +249,20 @@ async def test_repeated_reloads_move_no_entity(
     assert _placements(hass) == before
     # The migration log line now means a unique ID actually moved.
     assert "Migrated Device Lifecycle entity" not in caplog.text
+    pause_warning = (
+        f"Runtime source sensor.workshop_power for Asset {ASSET_UUID} is paused "
+        "(legacy_confirmation_required). Reconfigure Runtime and explicitly confirm "
+        "a registered source; history and proven pending Runtime are preserved, "
+        "uncertain elapsed time is excluded"
+    )
     if device_state == "removed":
         per_setup = [
             STALE_WARNING.format(source="a Purchase configuration"),
             STALE_WARNING.format(source="a Runtime configuration"),
         ]
-        assert _warnings(caplog) == per_setup * 2
+        assert _warnings(caplog) == [*per_setup, pause_warning] * 2
     else:
-        assert _warnings(caplog) == []
+        assert _warnings(caplog) == [pause_warning] * 2
 
 
 # --- B: G3 relinked Purchase ------------------------------------------------------

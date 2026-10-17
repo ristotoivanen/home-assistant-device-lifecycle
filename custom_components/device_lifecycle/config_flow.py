@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections import Counter
 from collections.abc import Callable, Coroutine, Mapping
+from copy import deepcopy
 from datetime import date
 from decimal import Decimal
 from math import isfinite
@@ -32,6 +34,7 @@ from homeassistant.util import dt as dt_util
 from homeassistant.util.unit_conversion import PowerConverter
 
 from .canonical import CanonicalValueError, decimal_from_input, format_decimal
+from .runtime_source import authorize_source, source_status, watch_source_selection
 from .const import (
     CONF_ASSET_NAME,
     CONF_ASSET_UUID,
@@ -98,6 +101,8 @@ from .const import (
     CONF_SELLER,
     CONF_SERIAL_NUMBER,
     CONF_SOURCE_ENTITY_ID,
+    CONF_SOURCE_IDENTITY,
+    CONF_CONFIRM_SOURCE,
     CONF_SW_VERSION,
     CONF_SUCCESSOR_ASSET_UUID,
     CONF_UNDEPLOY_PREDECESSOR,
@@ -525,6 +530,8 @@ def _is_valid_runtime_source(
         return False
 
     entity_registry = er.async_get(hass)
+    if entity_registry.async_get(entity_id) is None:
+        return False
     if _entity_platform(entity_registry, entity_id) == DOMAIN:
         return False
 
@@ -566,6 +573,7 @@ def _runtime_source_schema(
     defaults: dict[str, Any] | None = None,
     *,
     retained_legacy_source: str | None = None,
+    include_confirmation: bool = False,
 ) -> vol.Schema:
     """Build the second runtime step with only relevant source settings.
 
@@ -635,6 +643,9 @@ def _runtime_source_schema(
             )
         )
 
+    if include_confirmation:
+        # Never preselect consent from saved data or an earlier validation error.
+        fields[vol.Optional(CONF_CONFIRM_SOURCE, default=False)] = selector.BooleanSelector()
     return vol.Schema(fields)
 
 
@@ -1097,6 +1108,9 @@ def _runtime_source_error(
     """Return a localized flow error key for an unsuitable runtime source."""
     if hass.states.get(source_entity_id) is None:
         return "source_missing"
+
+    if er.async_get(hass).async_get(source_entity_id) is None:
+        return "source_registry_required"
 
     if _is_valid_runtime_source(hass, source_entity_id, runtime_mode):
         return None
@@ -7355,31 +7369,53 @@ class RuntimeSubentryFlow(ConfigSubentryFlow):
                     manager = self._loaded_manager(entry)
                     if manager is None:
                         return self.async_abort(reason="entry_not_loaded")
+                    # Consent is to the row selected at submission, before any
+                    # reservation wait; a later occupant cannot inherit it.
+                    row = er.async_get(self.hass).async_get(source_entity_id)
+                    assert row is not None
+                    clean[CONF_SOURCE_IDENTITY] = authorize_source(row)
                     release: Callable[[], None] | None = None
-                    if (target := manager.runtime_binding_target(clean)) is not None:
-                        self._release_runtime_binding()
+                    with watch_source_selection(self.hass, source_entity_id) as selection_changed:
+                        if (target := manager.runtime_binding_target(clean)) is not None:
+                            self._release_runtime_binding()
+                            try:
+                                release = await manager.async_reserve_runtime_binding(
+                                    entry, target[0]
+                                )
+                            except AssetStoreError as err:
+                                if err.code == "entry_not_loaded":
+                                    return self.async_abort(reason="entry_not_loaded")
+                                errors["base"] = (
+                                    "runtime_asset_archived"
+                                    if err.code == "runtime_asset_archived"
+                                    else "device_missing"
+                                )
+                        # Process prior nested registry notifications before
+                        # deciding whether the submitted consent still applies.
                         try:
-                            release = await manager.async_reserve_runtime_binding(
-                                entry, target[0]
-                            )
-                        except AssetStoreError as err:
-                            if err.code == "entry_not_loaded":
-                                return self.async_abort(reason="entry_not_loaded")
-                            errors["base"] = (
-                                "runtime_asset_archived"
-                                if err.code == "runtime_asset_archived"
-                                else "device_missing"
-                            )
+                            await asyncio.sleep(0)
+                        except asyncio.CancelledError:
+                            if release is not None:
+                                release()
+                            raise
                     if not errors:
-                        # No await from the reservation until the create result
-                        # is returned: Home Assistant adds the subentry before it
-                        # removes this flow, which releases the reservation.
+                        # Hold the reservation through creation: Home Assistant
+                        # adds the subentry before removing this flow, whose
+                        # async_remove callback releases the reservation.
                         self._runtime_binding_release = release
-                        registry = dr.async_get(self.hass)
-                        return self.async_create_entry(
-                            title=_runtime_title(registry, device_id),
-                            data=clean,
-                        )
+                        # Revalidate the submitted identity after the Store wait.
+                        if error := _runtime_source_error(self.hass, source_entity_id, runtime_mode):
+                            self._release_runtime_binding()
+                            errors["base"] = error
+                        elif selection_changed() or source_status(self.hass, clean) != "authorized":
+                            self._release_runtime_binding()
+                            errors["base"] = "source_changed_during_save"
+                        else:
+                            registry = dr.async_get(self.hass)
+                            return self.async_create_entry(
+                                title=_runtime_title(registry, device_id),
+                                data=clean,
+                            )
 
         return self.async_show_form(
             step_id="runtime_source",
@@ -7493,17 +7529,71 @@ class RuntimeSubentryFlow(ConfigSubentryFlow):
                     errors["base"] = error
                 else:
                     clean = cast(dict[str, Any], clean)
+                    previous_identity = deepcopy(subentry.data.get(CONF_SOURCE_IDENTITY))
+                    confirmed = user_input.get(CONF_CONFIRM_SOURCE) is True
+                    clean.pop(CONF_CONFIRM_SOURCE, None)
+                    needs_authorization = (
+                        source_entity_id != persisted_source
+                        or source_status(self.hass, subentry.data) != "authorized"
+                    )
+                    if retained and not confirmed:
+                        # Editing thresholds of a missing legacy source cannot
+                        # authorize it. Preserve its paused/unverified contract.
+                        if CONF_SOURCE_IDENTITY in subentry.data:
+                            clean[CONF_SOURCE_IDENTITY] = subentry.data[CONF_SOURCE_IDENTITY]
+                    elif needs_authorization and not confirmed:
+                        errors["base"] = "source_confirmation_required"
+                    elif confirmed:
+                        if error := _runtime_source_error(self.hass, source_entity_id, runtime_mode):
+                            errors["base"] = error
+                        else:
+                            row = er.async_get(self.hass).async_get(source_entity_id)
+                            assert row is not None
+                            clean[CONF_SOURCE_IDENTITY] = authorize_source(row)
+                    else:
+                        clean[CONF_SOURCE_IDENTITY] = subentry.data[CONF_SOURCE_IDENTITY]
                     if CONF_RUNTIME_DATA_VERSION in subentry.data:
                         clean[CONF_RUNTIME_DATA_VERSION] = subentry.data[
                             CONF_RUNTIME_DATA_VERSION
                         ]
-                    registry = dr.async_get(self.hass)
-                    return self.async_update_and_abort(
-                        entry,
-                        subentry,
-                        title=_runtime_title(registry, device_id),
-                        data=clean,
-                    )
+                    # Do not update authorization and then discover during HA's
+                    # reload that the old writer still owns undurable Runtime.
+                    # Flush through the Runtime lock before any configuration
+                    # change; a failure leaves both approval and retry state intact.
+                    title = _runtime_title(dr.async_get(self.hass), device_id)
+                    if not errors and (
+                        clean != dict(subentry.data) or title != subentry.title
+                    ):
+                        manager = self._loaded_manager(entry)
+                        if manager is None:
+                            return self.async_abort(reason="entry_not_loaded")
+                        target = manager.runtime_binding_target(subentry.data)
+                        with watch_source_selection(self.hass, source_entity_id) as selection_changed:
+                            if target is not None:
+                                try:
+                                    await manager.async_checkpoint_runtime(target[0])
+                                except (AssetStoreError, OSError):
+                                    errors["base"] = "runtime_pending_retry"
+                            await asyncio.sleep(0)
+                        if (
+                            not errors and (
+                                selection_changed()
+                                or self.hass.config_entries.async_get_entry(entry.entry_id) is not entry
+                                or entry.subentries.get(subentry.subentry_id) is not subentry
+                                or subentry.data.get(CONF_SOURCE_IDENTITY) != previous_identity
+                                or confirmed and source_status(self.hass, clean) != "authorized"
+                            )
+                        ):
+                            # Neither a settings edit nor pre-gap confirmation
+                            # may overwrite a newer revocation/authorization.
+                            errors["base"] = "source_confirmation_required"
+                    if not errors:
+                        return self.async_update_and_abort(
+                            entry,
+                            subentry,
+                            title=title,
+                            data=clean,
+                        )
 
         defaults = (
             user_input
@@ -7518,6 +7608,7 @@ class RuntimeSubentryFlow(ConfigSubentryFlow):
                 runtime_mode,
                 defaults,
                 retained_legacy_source=retained_legacy_source,
+                include_confirmation=True,
             ),
             errors=errors,
         )

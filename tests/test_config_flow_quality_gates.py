@@ -70,6 +70,7 @@ from custom_components.device_lifecycle.const import (
 )
 from custom_components.device_lifecycle.storage import AssetStoreError
 
+from .conftest import authorized_runtime_source
 from .conftest import (
     ASSET_UUID,
     DEVICE_ID,
@@ -131,8 +132,11 @@ def test_runtime_source_classification_checks_registry_class_units_and_ownership
     entity_registry: er.EntityRegistry,
 ) -> None:
     """Runtime sources must exist, be external, and match mode-specific semantics."""
+    authorized_runtime_source(hass, "switch.machine")
     hass.states.async_set("switch.machine", "on")
+    authorized_runtime_source(hass, "light.machine")
     hass.states.async_set("light.machine", "on")
+    authorized_runtime_source(hass, "sensor.power")
     hass.states.async_set(
         "sensor.power",
         "12",
@@ -153,6 +157,7 @@ def test_runtime_source_classification_checks_registry_class_units_and_ownership
     entity_registry.async_get_or_create(
         "switch", DOMAIN, "owned", suggested_object_id="owned"
     )
+    authorized_runtime_source(hass, "switch.owned")
     hass.states.async_set("switch.owned", "on")
 
     registry_state = hass.states.get(registry_power.entity_id)
@@ -163,6 +168,7 @@ def test_runtime_source_classification_checks_registry_class_units_and_ownership
     assert _state_device_class(
         entity_registry, hass.states.get("switch.machine")
     ) is None
+    authorized_runtime_source(hass, "sensor.no_unit")
     hass.states.async_set("sensor.no_unit", "1")
     no_unit = hass.states.get("sensor.no_unit")
     assert no_unit is not None
@@ -200,6 +206,7 @@ def test_runtime_source_errors_are_stable(
 ) -> None:
     """Each runtime source failure maps to an independently translatable key."""
     if entity_id != "switch.missing":
+        authorized_runtime_source(hass, entity_id)
         hass.states.async_set(entity_id, "1")
     assert _runtime_source_error(hass, entity_id, mode) == expected
 
@@ -209,6 +216,7 @@ def test_runtime_source_schema_retains_missing_persisted_source_as_default(
 ) -> None:
     """0.7.2 WP4 / 072-06: reconfigure keeps an already-saved but missing
     source selectable and default; create never receives that allowance."""
+    authorized_runtime_source(hass, "switch.machine")
     hass.states.async_set("switch.machine", "on")
 
     reconfigure = _runtime_source_schema(
@@ -246,6 +254,7 @@ def test_runtime_source_schema_does_not_duplicate_a_currently_valid_source(
     hass: HomeAssistant,
 ) -> None:
     """A retained source already in the live candidate list is not duplicated."""
+    authorized_runtime_source(hass, "switch.machine")
     hass.states.async_set("switch.machine", "on")
 
     schema = _runtime_source_schema(
@@ -300,6 +309,7 @@ def test_retained_legacy_runtime_source_matches_only_the_exact_persisted_combo(
     # Once the entity is restored (has a live state again), it is no longer
     # "missing" and naturally falls back to the normal candidate list instead
     # of the retention exception.
+    authorized_runtime_source(hass, "sensor.removed_power_meter")
     hass.states.async_set(
         "sensor.removed_power_meter",
         "5",
@@ -410,6 +420,7 @@ def test_service_device_runtime_title_and_flow_error_mapping(
         name="Named Device",
     )
     assert _runtime_title(device_registry, device.id) == "Named Device"
+    authorized_runtime_source(hass, "switch.valid")
     hass.states.async_set("switch.valid", "on")
     assert _runtime_source_error(hass, "switch.valid", RUNTIME_MODE_ON) is None
 

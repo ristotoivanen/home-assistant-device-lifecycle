@@ -13,6 +13,7 @@ import pytest
 from homeassistant.config_entries import ConfigEntries, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.storage import Store
 
 from custom_components.device_lifecycle.const import (
@@ -60,6 +61,31 @@ PURCHASE_SUBENTRY_ID = "purchase-subentry-id"
 RUNTIME_SUBENTRY_ID = "runtime-subentry-id"
 SOURCE_ENTITY_ID = "sensor.workshop_power"
 STORE_V1_2_SECOND_ASSET_UUID = "33333333-3333-4333-8333-333333333333"
+
+
+def authorized_runtime_source(
+    hass: HomeAssistant, entity_id: str = SOURCE_ENTITY_ID,
+) -> dict[str, Any]:
+    """Explicit test authorization of a real registry row; never an autouse grant."""
+    registry = er.async_get(hass)
+    row = registry.async_get(entity_id)
+    if row is None:
+        domain, object_id = entity_id.split(".", 1)
+        row = registry.async_get_or_create(
+            domain, "test_runtime_source", entity_id, suggested_object_id=object_id,
+        )
+        assert row.entity_id == entity_id
+    return {
+        "version": 1,
+        "authorization_id": "11111111111141118111111111111111",
+        "registry_id": row.id,
+        "domain": row.domain,
+        "platform": row.platform,
+        "unique_id": row.unique_id,
+        "config_entry_id": row.config_entry_id,
+        "config_subentry_id": row.config_subentry_id,
+        "device_id": row.device_id,
+    }
 
 
 def device_registry_entries(registry: dr.DeviceRegistry) -> list[dr.DeviceEntry]:

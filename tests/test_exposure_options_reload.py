@@ -81,7 +81,7 @@ from custom_components.device_lifecycle.storage import (
     AssetStoreError,
 )
 
-from .conftest import ASSET_UUID, SOURCE_ENTITY_ID
+from .conftest import ASSET_UUID, SOURCE_ENTITY_ID, authorized_runtime_source
 from .test_quick_add_options_flow import _details
 
 # This module proves the real OptionsFlow -> ConfigEntry reload -> exposure
@@ -989,6 +989,7 @@ async def _setup_runtime_entry(
     )
     if source_state is not None:
         entity_id, attributes = source_state
+        binding = authorized_runtime_source(hass, entity_id)
         hass.states.async_set(entity_id, "12", attributes)
 
     data = deepcopy(asset_store_data)
@@ -997,6 +998,8 @@ async def _setup_runtime_entry(
     ]
     runtime_data = deepcopy(runtime_subentry_data)
     runtime_data[CONF_DEVICE_ID] = device.id
+    if source_state is not None:
+        runtime_data["source_identity"] = binding
     runtime_data.setdefault(CONF_RUNTIME_DATA_VERSION, RUNTIME_DATA_VERSION)
     subentries_data = (
         {
@@ -1229,6 +1232,7 @@ async def test_runtime_reconfigure_replaces_missing_source_with_valid_source(
         device_registry,
         source_state=None,
     )
+    authorized_runtime_source(hass, replacement)
     hass.states.async_set(
         replacement,
         "9",
@@ -1246,7 +1250,7 @@ async def test_runtime_reconfigure_replaces_missing_source_with_valid_source(
             entry,
             subentry_id,
             runtime_mode=RUNTIME_MODE_POWER,
-            source_input=_power_source_input(runtime_subentry_data, replacement),
+            source_input={**_power_source_input(runtime_subentry_data, replacement), "confirm_source": True},
         )
         await hass.async_block_till_done()
         schedule_reload.assert_called_once_with(entry.entry_id)
@@ -1539,6 +1543,7 @@ async def test_runtime_create_reload_persists_correct_data_title_and_entity(
     data["assets"][ASSET_UUID]["ha_device_refs"] = [
         {"device_id": device.id, "role": "primary"}
     ]
+    authorized_runtime_source(hass)
     hass.states.async_set(
         SOURCE_ENTITY_ID,
         "12",

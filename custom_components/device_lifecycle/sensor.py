@@ -20,11 +20,11 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
-    EntityCategory,
     EVENT_HOMEASSISTANT_STOP,
     STATE_ON,
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
+    EntityCategory,
     UnitOfPower,
     UnitOfTime,
 )
@@ -95,6 +95,7 @@ from .models import (
     MaintenanceScheduleData,
     PurchaseData,
 )
+from .runtime_source import source_invalidator, source_status
 from .storage import AssetStoreError, AssetStoreManager, RuntimeWriterDurability
 
 RUNTIME_REFRESH_INTERVAL = timedelta(minutes=5)
@@ -477,6 +478,9 @@ async def async_setup_entry(
                                     device_entry=asset_devices[asset_uuid],
                                     unique_id=unique_id,
                                     manager=manager,
+                                    source_invalidated=source_invalidator(
+                                        hass, entry, subentry
+                                    ),
                                 )
                             )
 
@@ -1270,6 +1274,7 @@ class DeviceRuntimeHoursSensor(_AssetSnapshotEntity):
         unique_id: str,
         manager: AssetStoreManager,
         monotonic: Callable[[], float] = time.monotonic,
+        source_invalidated: Callable[[str], None] | None = None,
     ) -> None:
         """Initialize a canonical Runtime projection."""
         total = asset["runtime"]["total_seconds"]
@@ -1302,6 +1307,10 @@ class DeviceRuntimeHoursSensor(_AssetSnapshotEntity):
         self._active_since: float | None = None
         self._runtime_lock = asyncio.Lock()
         self._removing = False
+        self._source_status: str | None = None
+        self._source_registry_entry: er.RegistryEntry | None = None
+        self._source_invalidated = source_invalidated
+        self._unsub_registry: Callable[[], None] | None = None
         self._unsub_source: Callable[[], None] | None = None
         self._unsub_interval: Callable[[], None] | None = None
         self._unsub_shutdown: Callable[[], None] | None = None
@@ -1318,11 +1327,12 @@ class DeviceRuntimeHoursSensor(_AssetSnapshotEntity):
     @property
     def native_value(self) -> Decimal:
         """Return committed, pending, and currently active Runtime in hours."""
+        authorized = self._validate_source()
         total_seconds = self._committed_seconds + sum(
             (item.delta for item in self._pending),
             start=Decimal(0),
         )
-        if self._active_since is not None:
+        if authorized and self._active_since is not None:
             elapsed = self._monotonic() - self._active_since
             if elapsed > 0:
                 total_seconds += Decimal(str(elapsed))
@@ -1332,13 +1342,32 @@ class DeviceRuntimeHoursSensor(_AssetSnapshotEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return Runtime tracking metadata and stable Asset identity."""
         source_state = self.hass.states.get(self._source_entity_id)
+        authorized = self._validate_source()
         attrs: dict[str, Any] = {
             "asset_id": self._asset_id,
             "asset_uuid": self._asset_uuid,
             "lahde_entiteetti": self._source_entity_id,
             "lahde_saatavilla": self._source_available(source_state),
             "seurantatapa": self._runtime_mode,
-            "aktiivinen": self._active_since is not None,
+            "aktiivinen": authorized and self._active_since is not None,
+            "runtime_source_status": (
+                "registry_update_pending"
+                if self._source_status == "authorized" and not authorized
+                else self._source_status
+            ),
+            "runtime_source_state": (
+                "missing"
+                if source_state is None
+                else source_state.state
+                if source_state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE)
+                else "available"
+            ),
+            "runtime_source_recovery": (
+                "Reconfigure Runtime, select a registered source and confirm its identity. "
+                "History is preserved; uncertain elapsed time is excluded."
+                if self._source_status != "authorized"
+                else None
+            ),
         }
 
         if self._runtime_mode == RUNTIME_MODE_POWER:
@@ -1366,7 +1395,9 @@ class DeviceRuntimeHoursSensor(_AssetSnapshotEntity):
         )
 
         current_state = self.hass.states.get(self._source_entity_id)
-        if self._is_active(current_state, currently_active=False):
+        if self._validate_source() and self._is_active(
+            current_state, currently_active=False
+        ):
             self._active_since = self._monotonic()
 
         # These are intentionally not async_on_remove callbacks: Home Assistant
@@ -1376,6 +1407,10 @@ class DeviceRuntimeHoursSensor(_AssetSnapshotEntity):
             self.hass,
             [self._source_entity_id],
             self._handle_source_change,
+        )
+        self._unsub_registry = self.hass.bus.async_listen(
+            er.EVENT_ENTITY_REGISTRY_UPDATED,
+            self._handle_registry_change,
         )
         self._unsub_interval = async_track_time_interval(
             self.hass,
@@ -1400,7 +1435,11 @@ class DeviceRuntimeHoursSensor(_AssetSnapshotEntity):
         """
         self._removing = True
         try:
+            # HA may eagerly enter this coroutine from an event handler whose
+            # nested registry events are still queued. Drain them before sealing.
+            await asyncio.sleep(0)
             async with self._runtime_lock:
+                self._validate_processed_source()
                 self._seal_active(self._monotonic(), continue_active=False)
                 await self._async_flush_pending()
                 self.async_write_ha_state()
@@ -1418,13 +1457,22 @@ class DeviceRuntimeHoursSensor(_AssetSnapshotEntity):
         if self._removing:
             return
 
+        # Invalidate before waiting for the Runtime lock: a queued callback
+        # must never seal the uncertain tail of an earlier registry change.
+        self._validate_source()
+
         old_state = event.data["old_state"]
         new_state = event.data["new_state"]
 
+        await asyncio.sleep(0)
         async with self._runtime_lock:
             # Re-check inside the lock: a callback queued behind a successful
             # unload preparation must not create Runtime after it.
             if self._removing:
+                return
+            if not self._validate_processed_source():
+                await self._async_flush_pending()
+                self.async_write_ha_state()
                 return
             currently_active = self._active_since is not None
             new_active = self._is_active(
@@ -1455,11 +1503,13 @@ class DeviceRuntimeHoursSensor(_AssetSnapshotEntity):
         """
         if self._removing and not self._pending:
             return
+        await asyncio.sleep(0)
         async with self._runtime_lock:
             if self._removing:
                 await self._async_flush_pending()
                 self.async_write_ha_state()
                 return
+            self._validate_processed_source()
             if self._active_since is not None:
                 self._seal_active(self._monotonic(), continue_active=True)
             await self._async_flush_pending()
@@ -1474,6 +1524,7 @@ class DeviceRuntimeHoursSensor(_AssetSnapshotEntity):
         order. Unlike the best-effort background checkpoints, any delta that
         cannot be committed stays pending and the request raises.
         """
+        await asyncio.sleep(0)
         async with self._runtime_lock:
             if self._removing:
                 # A quiesced or removed writer no longer observes Runtime, so
@@ -1483,6 +1534,7 @@ class DeviceRuntimeHoursSensor(_AssetSnapshotEntity):
                     "unload",
                     code="runtime_writer_quiesced",
                 )
+            self._validate_processed_source()
             if self._active_since is not None:
                 self._seal_active(self._monotonic(), continue_active=True)
             try:
@@ -1503,7 +1555,9 @@ class DeviceRuntimeHoursSensor(_AssetSnapshotEntity):
         already quiesced seals nothing, but its pending deltas must still be
         committed strictly before the unload may proceed.
         """
+        await asyncio.sleep(0)
         async with self._runtime_lock:
+            self._validate_processed_source()
             if self._removing:
                 try:
                     await self._async_flush_pending(strict=True)
@@ -1552,7 +1606,9 @@ class DeviceRuntimeHoursSensor(_AssetSnapshotEntity):
         by the periodic interval, ``async_finalize_runtime``, or the unload
         gate; none of them adds time observed after this point.
         """
+        await asyncio.sleep(0)
         async with self._runtime_lock:
+            self._validate_processed_source()
             if not self._removing:
                 self._seal_active(self._monotonic(), continue_active=False)
                 self._removing = True
@@ -1566,14 +1622,16 @@ class DeviceRuntimeHoursSensor(_AssetSnapshotEntity):
 
     async def _handle_shutdown(self, _event: Event) -> None:
         """Attempt a final checkpoint during normal Home Assistant shutdown."""
+        await asyncio.sleep(0)
         async with self._runtime_lock:
+            self._validate_processed_source()
             self._seal_active(self._monotonic(), continue_active=False)
             await self._async_flush_pending()
             self.async_write_ha_state()
 
     def _seal_active(self, now: float, *, continue_active: bool) -> None:
         """Move observable active time to an ordered retryable pending delta."""
-        if self._active_since is None:
+        if not self._validate_source() or self._active_since is None:
             return
 
         elapsed = now - self._active_since
@@ -1642,6 +1700,7 @@ class DeviceRuntimeHoursSensor(_AssetSnapshotEntity):
         """Remove Runtime listeners after the final checkpoint attempt."""
         for attribute in (
             "_unsub_source",
+            "_unsub_registry",
             "_unsub_interval",
             "_unsub_shutdown",
             "_unsub_checkpoint",
@@ -1650,6 +1709,87 @@ class DeviceRuntimeHoursSensor(_AssetSnapshotEntity):
             if unsubscribe is not None:
                 unsubscribe()
                 setattr(self, attribute, None)
+
+    def _validate_processed_source(self) -> bool:
+        """Validate after the event barrier, under the Runtime lock.
+
+        Prior registry notifications have now run. If none revoked identity,
+        presentation-only revisions can retain the valid unsealed interval.
+        This must not depend on a separate refresh task winning this lock.
+        """
+        if (
+            self._source_status in (None, "authorized")
+            and source_status(self.hass, self._data) == "authorized"
+        ):
+            self._source_registry_entry = er.async_get(self.hass).async_get(
+                self._source_entity_id
+            )
+        return self._validate_source()
+
+    def _validate_source(self) -> bool:
+        """Latch a discontinuity before projecting or sealing elapsed time."""
+        if self._source_status not in (None, "authorized"):
+            return False
+        status = source_status(self.hass, self._data)
+        if status == "authorized":
+            row = er.async_get(self.hass).async_get(self._source_entity_id)
+            if self._source_registry_entry is None:
+                self._source_registry_entry = row
+            # Equality after an ABA is insufficient while its registry events
+            # are queued. An immutable row revision change makes this tail
+            # ineligible until those events have been processed. Presentation
+            # changes can then retain their interval; identity changes latch.
+            if row is not self._source_registry_entry:
+                return False
+            self._source_status = status
+            return True
+        self._invalidate_source(status)
+        return False
+
+    def _invalidate_source(self, status: str) -> None:
+        """Drop only the unproven tail; never discard sealed pending Runtime."""
+        if self._source_status not in (None, "authorized"):
+            return
+        self._source_status = status
+        self._active_since = None
+        _LOGGER.warning(
+            "Runtime source %s for Asset %s is paused (%s). Reconfigure Runtime "
+            "and explicitly confirm a registered source; history and proven "
+            "pending Runtime are preserved, uncertain elapsed time is excluded",
+            self._source_entity_id,
+            self._asset_uuid,
+            status,
+        )
+        if self._source_invalidated is not None:
+            self._source_invalidated(status)
+
+    @callback
+    def _handle_registry_change(self, event: Event) -> None:
+        """Observe identity discontinuity even if a row returns before dispatch."""
+        changes = event.data.get("changes", {})
+        if (
+            event.data.get("entity_id") != self._source_entity_id
+            and changes.get("entity_id") != self._source_entity_id
+        ):
+            return
+        identity_changes = {
+            "entity_id", "unique_id", "platform", "config_entry_id",
+            "config_subentry_id", "device_id",
+        }
+        if event.data["action"] == "remove" or identity_changes.intersection(changes):
+            self._invalidate_source("registry_identity_changed")
+        else:
+            self._validate_source()
+        if not self._removing:
+            self.hass.async_create_task(self._async_refresh_source_authorization())
+
+    async def _async_refresh_source_authorization(self) -> None:
+        """Retry valid pending writes and expose the paused state."""
+        await asyncio.sleep(0)
+        async with self._runtime_lock:
+            self._validate_processed_source()
+            await self._async_flush_pending()
+            self.async_write_ha_state()
 
     def _source_available(self, state: State | None) -> bool:
         """Return whether a source state is usable."""
