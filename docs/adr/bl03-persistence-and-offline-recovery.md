@@ -97,7 +97,7 @@ Implementation verification, three-version suite results and independent review 
 
 ## Decision provenance and investigation evidence
 
-Approved source: `/Users/ristotoivanen/.codex/attachments/16b36b18-bd3a-47b4-a48d-e30b4df63eae/Liitetty text.txt`, SHA-256 `89143331332d5f483dddb87f597d459ef7de912a87e8cbc9f4c6e2daa858fb39`. The exact request is preserved in the local review bundle as `owner-decisions-2026-10-15/adr-authoring/OWNER-REQUEST.txt`. Starting candidate: `c98fc70ac3b1dedd60cd01bc06bbc310bcee1a8c`.
+Approved source: the owner request received on 2026-10-15 as a local chat attachment named `Liitetty text.txt`, SHA-256 `89143331332d5f483dddb87f597d459ef7de912a87e8cbc9f4c6e2daa858fb39`. The exact request is preserved in the local review bundle as `owner-decisions-2026-10-15/adr-authoring/OWNER-REQUEST.txt`, with the same SHA-256. Starting candidate: `c98fc70ac3b1dedd60cd01bc06bbc310bcee1a8c`.
 
 The preserved bundle is named `overnight-review-2026-10-14/` and lives outside the repository. The following paths are relative to that bundle; they are evidence artifact names, not portable repository links:
 
@@ -114,3 +114,9 @@ Repository-reviewable implementation and regression references:
 - [Original BL-03 fault cases](../../tests/test_persistence_safety.py), [lifecycle cases](../../tests/test_persistence_lifecycle.py), [setup/corruption cases](../../tests/test_setup_ownership_safety.py), [shutdown executor cases](../../tests/test_executor_shutdown_safety.py), and [known/missing Store cases](../../tests/test_missing_store_safety.py).
 - [Quick Add replay cases](../../tests/test_quick_add_replay_safety.py) and [Quick Create positive noncommit/readback controls](../../tests/test_quick_add_storage.py).
 - The two authorized historical expectation updates are in [publish refresh tests](../../tests/test_publish_refresh.py) (`test_recovery_of_a_missing_file_with_an_empty_store_announces_nothing`) and [Runtime tests](../../tests/test_runtime.py) (`test_real_store_writeerror_is_detected_and_not_published`). Their names identify the preserved original cases; see the follow-up evidence for exact changes and results.
+
+## Provenance reference correction — 2026-10-18
+
+The approved-source reference above originally named an absolute path on the owner's workstation. Repository documents must not publish user-local paths, so the reference now names the original attachment and its bundle-relative preserved copy. On 2026-10-18 the preserved `OWNER-REQUEST.txt` was verified to have the same SHA-256 as recorded above. The decisions, their date, the checksum and the starting candidate are unchanged.
+
+Limits: the earlier wording remains in Git history from commit `86f4338fd5bc1ec32eb3284f3af1dfcc3ec49fe2` onward and in any existing clones, forks or caches; history is not rewritten. The attachment and the bundle are owner-held and not published in this repository. The checksum establishes the byte identity of the preserved request, not its authorship; the approval rests on the owner decision recorded in this ADR.
