@@ -406,19 +406,27 @@ async def test_removal_racing_a_checkpoint_counts_once_and_leaves_no_writer(
     sensor._active_since = 0.0
     clock.value = 7
     original_save = manager._store.async_save
+    saving = asyncio.Event()
+    release = asyncio.Event()
 
     async def _yielding_save(data: AssetStoreData) -> None:
-        await asyncio.sleep(0)
+        saving.set()
+        await release.wait()
         await original_save(data)
 
     manager._store.async_save = AsyncMock(side_effect=_yielding_save)
 
-    results = await asyncio.gather(
-        manager.async_checkpoint_runtime(ASSET_UUID),
-        sensor.async_will_remove_from_hass(),
-        manager.async_checkpoint_runtime(ASSET_UUID),
-        return_exceptions=True,
-    )
+    checkpoint = asyncio.create_task(manager.async_checkpoint_runtime(ASSET_UUID))
+    try:
+        # Establish ownership explicitly: new checkpoints first yield so nested
+        # registry events drain. Gather order alone no longer proves this lock.
+        await asyncio.wait_for(saving.wait(), 5)
+        removal = asyncio.create_task(sensor.async_will_remove_from_hass())
+        later = asyncio.create_task(manager.async_checkpoint_runtime(ASSET_UUID))
+        await asyncio.sleep(0)
+    finally:
+        release.set()
+    results = await asyncio.gather(checkpoint, removal, later, return_exceptions=True)
 
     assert results[0] == Decimal(1007)
     # A request queued behind the removal is refused, not answered with a

@@ -7,7 +7,9 @@ from unittest.mock import Mock, patch
 
 import pytest
 import voluptuous as vol
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.device_lifecycle.config_flow import (
     PurchaseSubentryFlow,
@@ -39,6 +41,7 @@ from custom_components.device_lifecycle.const import (
     CONF_SOURCE_ENTITY_ID,
     CONF_WARRANTY_TYPE,
     CONF_WARRANTY_UNTIL,
+    DOMAIN,
     RUNTIME_DATA_VERSION,
     RUNTIME_MODE_POWER,
     SUBENTRY_TYPE_PURCHASE,
@@ -54,6 +57,7 @@ from .conftest import (
     PURCHASE_UUID,
     RUNTIME_SUBENTRY_ID,
     SOURCE_ENTITY_ID,
+    authorized_runtime_source,
     loaded_entry,
 )
 
@@ -153,6 +157,7 @@ async def test_new_runtime_flow_adds_provenance_marker(
     hass: HomeAssistant,
 ) -> None:
     """Every newly created 0.5.7 Runtime declares safe-zero provenance."""
+    authorized_runtime_source(hass)
     flow = RuntimeSubentryFlow()
     flow.hass = hass
     flow._get_entry = lambda: loaded_entry(hass)  # type: ignore[method-assign]
@@ -191,16 +196,27 @@ async def test_runtime_reconfigure_preserves_provenance_marker(
     hass: HomeAssistant,
 ) -> None:
     """Reconfiguration retains Asset target and Runtime provenance."""
+    authorized_runtime_source(hass)
     flow = RuntimeSubentryFlow()
     flow.hass = hass
-    subentry = SimpleNamespace(
-        data={
-            CONF_DEVICE_ID: DEVICE_ID,
-            CONF_ASSET_UUID: ASSET_UUID,
-            CONF_RUNTIME_DATA_VERSION: RUNTIME_DATA_VERSION,
-        }
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={},
+        state=ConfigEntryState.LOADED,
+        subentries_data=({
+            "data": {
+                CONF_DEVICE_ID: DEVICE_ID,
+                CONF_ASSET_UUID: ASSET_UUID,
+                CONF_RUNTIME_DATA_VERSION: RUNTIME_DATA_VERSION,
+            },
+            "subentry_type": SUBENTRY_TYPE_RUNTIME,
+            "title": "Runtime",
+            "unique_id": None,
+        },),
     )
-    entry = loaded_entry(hass)
+    entry.add_to_hass(hass)
+    entry.runtime_data = loaded_entry(hass).runtime_data
+    subentry = next(iter(entry.subentries.values()))
     flow._set_runtime_context(
         device_id=DEVICE_ID,
         runtime_mode=RUNTIME_MODE_POWER,
@@ -225,6 +241,7 @@ async def test_runtime_reconfigure_preserves_provenance_marker(
             {
                 CONF_SOURCE_ENTITY_ID: SOURCE_ENTITY_ID,
                 CONF_POWER_THRESHOLD: 12.0,
+                "confirm_source": True,
                 CONF_POWER_HYSTERESIS: 1.0,
             }
         )

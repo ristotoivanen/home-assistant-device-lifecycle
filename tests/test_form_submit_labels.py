@@ -50,7 +50,7 @@ from custom_components.device_lifecycle.const import (
 )
 from custom_components.device_lifecycle.models import AssetStoreData
 
-from .conftest import SOURCE_ENTITY_ID, capture_reloads
+from .conftest import SOURCE_ENTITY_ID, authorized_runtime_source, capture_reloads
 from .test_exposure_options_reload import (
     _power_source_input,
     _readback_bridge_through_teardown,  # noqa: F401 - autouse fixture
@@ -355,6 +355,7 @@ async def _runtime_installation(
         identifiers={("hue", "label-compressor")},
         name="Compressor",
     )
+    authorized_runtime_source(hass, "input_boolean.compressor_running")
     hass.states.async_set("input_boolean.compressor_running", "off")
     return entry, runtime_subentry_id, untracked
 

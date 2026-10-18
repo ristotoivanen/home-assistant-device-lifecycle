@@ -15,6 +15,7 @@ from .runtime_conflicts import (
     async_delete_runtime_conflict_issues,
     async_sync_runtime_conflict_issues,
 )
+from .runtime_source import consume_invalidation_update
 from .stale_references import (
     async_delete_stale_reference_issues,
     async_sync_stale_reference_issues,
@@ -123,6 +124,8 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
     retirement that cannot persist its Runtime yet keeps it pending and
     never prevents the reload from being scheduled.
     """
+    if consume_invalidation_update(hass, entry):
+        return
     manager = getattr(entry, "runtime_data", None)
     if isinstance(manager, AssetStoreManager):
         await manager.async_retire_orphaned_runtime_writers(entry)

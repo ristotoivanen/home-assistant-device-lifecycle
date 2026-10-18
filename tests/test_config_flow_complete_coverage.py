@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import area_registry as ar
@@ -12,6 +13,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import selector
 import pytest
 import voluptuous as vol
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.device_lifecycle.config_flow import (
     NO_PURCHASE_SELECTION,
@@ -42,6 +44,7 @@ from custom_components.device_lifecycle.const import (
     CONF_WARRANTY_UNTIL,
     DEPLOYMENT_STATE_DEPLOYED,
     DEPLOYMENT_STATE_NOT_DEPLOYED,
+    DOMAIN,
     HA_RELATIONSHIP_ACTION_UNLINK,
     RUNTIME_MODE_ON,
     RUNTIME_MODE_POWER,
@@ -52,6 +55,7 @@ from custom_components.device_lifecycle.const import (
 )
 from custom_components.device_lifecycle.storage import AssetStoreError
 
+from .conftest import authorized_runtime_source
 from .conftest import (
     ASSET_UUID,
     DEVICE_ID,
@@ -480,6 +484,7 @@ async def test_runtime_create_walks_valid_two_step_flow_and_ignores_malformed_pe
         )
     assert source_form["step_id"] == "runtime_source"
 
+    authorized_runtime_source(hass, "switch.runtime_create")
     hass.states.async_set("switch.runtime_create", "on")
     created = {"type": "create_entry"}
     with patch.object(
@@ -539,17 +544,24 @@ async def test_legacy_runtime_reconfigure_source_errors_retry_then_succeed(
     hass: HomeAssistant,
 ) -> None:
     """Legacy Runtime edits preserve target identity and omit a fabricated marker."""
-    subentry = SimpleNamespace(
-        subentry_id="legacy-runtime",
-        subentry_type=SUBENTRY_TYPE_RUNTIME,
-        data={
-            CONF_DEVICE_ID: DEVICE_ID,
-            CONF_ASSET_UUID: ASSET_UUID,
-            CONF_RUNTIME_MODE: RUNTIME_MODE_ON,
-            CONF_SOURCE_ENTITY_ID: "switch.old_source",
-        },
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={},
+        state=ConfigEntryState.LOADED,
+        subentries_data=(_subentry_data(
+            SUBENTRY_TYPE_RUNTIME,
+            {
+                CONF_DEVICE_ID: DEVICE_ID,
+                CONF_ASSET_UUID: ASSET_UUID,
+                CONF_RUNTIME_MODE: RUNTIME_MODE_ON,
+                CONF_SOURCE_ENTITY_ID: "switch.old_source",
+            },
+            "Legacy Runtime",
+        ),),
     )
-    entry = loaded_entry(hass, subentries={subentry.subentry_id: subentry})
+    entry.add_to_hass(hass)
+    entry.runtime_data = loaded_entry(hass).runtime_data
+    subentry = next(iter(entry.subentries.values()))
     flow = RuntimeSubentryFlow()
     flow.hass = hass
     with patch.object(flow, "_get_entry", return_value=entry), patch.object(
@@ -571,6 +583,7 @@ async def test_legacy_runtime_reconfigure_source_errors_retry_then_succeed(
                 {CONF_SOURCE_ENTITY_ID: "sensor.power"}
             )
 
+        authorized_runtime_source(hass, "sensor.power")
         updated = {"type": "abort", "reason": "reconfigure_successful"}
         with patch(
             "custom_components.device_lifecycle.config_flow._runtime_source_error",
@@ -583,6 +596,7 @@ async def test_legacy_runtime_reconfigure_source_errors_retry_then_succeed(
             result = await flow.async_step_reconfigure_source(
                 {
                     CONF_SOURCE_ENTITY_ID: "sensor.power",
+                    "confirm_source": True,
                     CONF_POWER_THRESHOLD: 10,
                     CONF_POWER_HYSTERESIS: 2,
                 }

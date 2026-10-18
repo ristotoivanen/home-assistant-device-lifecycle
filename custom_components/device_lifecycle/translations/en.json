@@ -105,7 +105,7 @@
         },
         "runtime_source": {
           "title": "Configure runtime source",
-          "description": "The source list is filtered for the selected tracking method. Power mode shows only actual power sensors; on-state mode shows sensible on/off entities.\n\nClose the window without saving by using the X button in the upper-left corner.",
+          "description": "Select a registered source. Adding tracking authorizes its current registry identity. Historical Runtime is preserved. Sources without an Entity Registry entry cannot provide durable source authorization.\n\nClose the window without saving by using the X button in the upper-left corner.",
           "submit": "Add runtime tracking",
           "data": {
             "source_entity_id": "Source entity",
@@ -131,17 +131,19 @@
         },
         "reconfigure_source": {
           "title": "Configure runtime source",
-          "description": "The source list is filtered for the selected tracking method. Power threshold and hysteresis are shown only in power mode.\n\nClose the window without saving by using the X button in the upper-left corner.",
+          "description": "Select a registered source. Confirm its current identity to authorize a legacy, replaced, renamed or paused source. This preserves historical Runtime and starts a new observation boundary; uncertain elapsed time is excluded. An unchanged missing source may be edited but remains paused.\n\nClose the window without saving by using the X button in the upper-left corner.",
           "submit": "Save changes",
           "data": {
             "source_entity_id": "Source entity",
             "power_threshold": "Power threshold",
-            "power_hysteresis": "Hysteresis"
+            "power_hysteresis": "Hysteresis",
+            "confirm_source": "Confirm the selected source identity"
           },
           "data_description": {
             "source_entity_id": "Select a source suitable for the chosen mode. Device Lifecycle's own entities are excluded.",
             "power_threshold": "Runtime starts when the source power, normalized to watts, rises above this threshold.",
-            "power_hysteresis": "Example: 10 W threshold and 2 W hysteresis stops only below 8 W. Existing trackers default to 0 W hysteresis, preserving old behavior."
+            "power_hysteresis": "Example: 10 W threshold and 2 W hysteresis stops only below 8 W. Existing trackers default to 0 W hysteresis, preserving old behavior.",
+            "confirm_source": "I authorize the currently selected registered source to supply future Runtime. Existing Runtime is kept."
           }
         }
       },
@@ -158,7 +160,11 @@
         "power_hysteresis_too_large": "The hysteresis cannot be greater than the power threshold.",
         "invalid_runtime_mode": "The runtime tracking method is invalid.",
         "service_device_not_allowed": "The selected item is a Home Assistant service rather than a trackable physical device.",
-        "runtime_asset_archived": "The device is archived, so Runtime tracking cannot be configured for it."
+        "runtime_asset_archived": "The device is archived, so Runtime tracking cannot be configured for it.",
+        "source_registry_required": "Select a source registered in the Home Assistant Entity Registry. State-only sources cannot be durably authorized.",
+        "source_confirmation_required": "Explicitly confirm the selected source identity to resume Runtime. Existing Runtime is preserved.",
+        "runtime_pending_retry": "Runtime could not be persisted. Fix the storage error and retry this form; source authorization and valid pending Runtime are preserved.",
+        "source_changed_during_save": "The selected source identity changed while saving. Review the current source and submit again to authorize it."
       },
       "abort": {
         "reconfigure_successful": "Runtime tracking updated.",
